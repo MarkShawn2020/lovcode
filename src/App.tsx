@@ -64,7 +64,7 @@ const FEATURES: FeatureConfig[] = [
   { type: "mcp", label: "MCPs", icon: "🔌", description: "MCP servers", available: true, group: "config" },
   { type: "skills", label: "Skills", icon: "🎯", description: "Reusable skill templates", available: true, group: "config" },
   { type: "hooks", label: "Hooks", icon: "🪝", description: "Automation triggers", available: true, group: "config" },
-  { type: "sub-agents", label: "Sub-agents", icon: "🤖", description: "AI agents with models", available: true, group: "config" },
+  { type: "sub-agents", label: "Sub-Agents", icon: "🤖", description: "AI agents with models", available: true, group: "config" },
   { type: "output-styles", label: "Output Styles", icon: "🎨", description: "Response formatting styles", available: true, group: "config" },
   // Marketplace
   { type: "marketplace", label: "Marketplace", icon: "🛒", description: "Browse and install templates", available: true, group: "marketplace" },
@@ -276,9 +276,36 @@ function App() {
         </div>
 
         <div className="flex-1 overflow-y-auto py-3 min-w-52">
+          {/* Home */}
+          <div className="px-2 mb-2">
+            <button
+              onClick={() => setView({ type: "home" })}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                view.type === "home"
+                  ? "bg-primary/10 text-primary"
+                  : "text-ink hover:bg-card-alt"
+              }`}
+            >
+              <span className="text-lg">🏠</span>
+              <span className="text-sm">Home</span>
+            </button>
+          </div>
+
           {/* History Group */}
           <div className="px-2 mb-2">
             {FEATURES.filter(f => f.group === "history").map((feature) => (
+              <FeatureButton
+                key={feature.type}
+                feature={feature}
+                active={currentFeature === feature.type}
+                onClick={() => handleFeatureClick(feature.type)}
+              />
+            ))}
+          </div>
+
+          {/* Marketplace Group */}
+          <div className="px-2 mb-2">
+            {FEATURES.filter(f => f.group === "marketplace").map((feature) => (
               <FeatureButton
                 key={feature.type}
                 feature={feature}
@@ -292,18 +319,6 @@ function App() {
           <div className="px-2 py-2 border-t border-border">
             <p className="text-xs text-muted uppercase tracking-wide px-3 py-2">Configuration</p>
             {FEATURES.filter(f => f.group === "config").map((feature) => (
-              <FeatureButton
-                key={feature.type}
-                feature={feature}
-                active={currentFeature === feature.type}
-                onClick={() => handleFeatureClick(feature.type)}
-              />
-            ))}
-          </div>
-
-          {/* Marketplace Group */}
-          <div className="px-2 py-2 border-t border-border">
-            {FEATURES.filter(f => f.group === "marketplace").map((feature) => (
               <FeatureButton
                 key={feature.type}
                 feature={feature}
@@ -590,7 +605,7 @@ function Home({ onFeatureClick }: { onFeatureClick: (feature: FeatureType) => vo
 }
 
 // ============================================================================
-// Sub-agents Feature
+// Sub-Agents Feature
 // ============================================================================
 
 function SubAgentsView({
@@ -616,7 +631,7 @@ function SubAgentsView({
 
   return (
     <ConfigPage>
-      <PageHeader title="Sub-agents" subtitle={`${agents.length} sub-agents in ~/.claude/commands`} />
+      <PageHeader title="Sub-Agents" subtitle={`${agents.length} sub-agents in ~/.claude/commands`} />
       <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
       {filtered.length > 0 && (
@@ -652,7 +667,7 @@ function SubAgentDetailView({ agent, onBack }: { agent: LocalAgent; onBack: () =
       <DetailHeader
         title={agent.name}
         description={agent.description}
-        backLabel="Sub-agents"
+        backLabel="Sub-Agents"
         onBack={onBack}
         path={agent.path}
         onOpenPath={(p) => invoke("open_in_editor", { path: p })}
@@ -1089,7 +1104,7 @@ const TEMPLATE_CATEGORIES: { key: TemplateCategory; label: string; icon: string 
   { key: "mcps", label: "MCPs", icon: "🔌" },
   { key: "skills", label: "Skills", icon: "🎯" },
   { key: "hooks", label: "Hooks", icon: "🪝" },
-  { key: "agents", label: "Sub-agents", icon: "🤖" },
+  { key: "agents", label: "Sub-Agents", icon: "🤖" },
   { key: "output-styles", label: "Output Styles", icon: "🎨" },
 ];
 
