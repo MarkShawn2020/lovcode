@@ -80,6 +80,36 @@ fn get_claude_dir() -> PathBuf {
     dirs::home_dir().unwrap().join(".claude")
 }
 
+/// Decode project ID to actual filesystem path.
+/// Claude Code encodes paths: `/` -> `-`, `-` -> `--`
+/// But some old projects weren't encoded correctly, so we verify against filesystem.
+fn decode_project_path(id: &str) -> String {
+    // Standard decode: `--` -> `-`, then `-` -> `/`
+    let standard = id.replace("--", "\x00").replace("-", "/").replace("\x00", "-");
+
+    // Check if path exists
+    if PathBuf::from(&standard).exists() {
+        return standard;
+    }
+
+    // Try alternative: maybe `-` in project name wasn't escaped
+    // Find the projects portion and try keeping some `-` as is
+    if let Some(projects_idx) = standard.find("/projects/") {
+        let (prefix, rest) = standard.split_at(projects_idx + "/projects/".len());
+        // Try: the next segment might have `-` that should stay as `-`
+        if let Some(slash_idx) = rest.find('/') {
+            // Join first segment with `-` instead of `/`
+            let candidate = format!("{}{}-{}", prefix, &rest[..slash_idx], &rest[slash_idx + 1..]);
+            if PathBuf::from(&candidate).exists() {
+                return candidate;
+            }
+        }
+    }
+
+    // Fallback to standard decode
+    standard
+}
+
 #[tauri::command]
 fn list_projects() -> Result<Vec<Project>, String> {
     let projects_dir = get_claude_dir().join("projects");
@@ -96,7 +126,7 @@ fn list_projects() -> Result<Vec<Project>, String> {
 
         if path.is_dir() {
             let id = path.file_name().unwrap().to_string_lossy().to_string();
-            let display_path = id.replace("-", "/").replace("//", "-");
+            let display_path = decode_project_path(&id);
 
             let mut session_count = 0;
             let mut last_active: u64 = 0;
@@ -672,7 +702,7 @@ fn get_context_files() -> Result<Vec<ContextFile>, String> {
                 let project_path = entry.path();
                 if project_path.is_dir() {
                     let project_id = project_path.file_name().unwrap().to_string_lossy().to_string();
-                    let display_path = project_id.replace("-", "/").replace("//", "-");
+                    let display_path = decode_project_path(&project_id);
 
                     // Convert project_id back to real path and check for CLAUDE.md
                     let real_project_path = PathBuf::from(&display_path);
