@@ -1,8 +1,22 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import Markdown from "react-markdown";
 import { Switch } from "./components/ui/switch";
-import { ContextFileItem } from "./components/ContextFileItem";
+import { ContextFileItem, ConfigFileItem } from "./components/ContextFileItem";
 import { invoke } from "@tauri-apps/api/core";
+import {
+  LoadingState,
+  EmptyState,
+  SearchInput,
+  PageHeader,
+  DetailHeader,
+  ItemCard,
+  DetailCard,
+  ContentCard,
+  ConfigPage,
+  useSearch,
+  MarketplaceSection,
+  type MarketplaceItem,
+} from "./components/config";
 
 // ============================================================================
 // Hooks
@@ -115,9 +129,9 @@ interface McpServer {
 }
 
 interface ClaudeSettings {
-  raw: unknown;
-  permissions: unknown | null;
-  hooks: unknown | null;
+  raw: Record<string, unknown> | null;
+  permissions: Record<string, unknown> | null;
+  hooks: Record<string, unknown[]> | null;
   mcp_servers: McpServer[];
 }
 
@@ -181,6 +195,12 @@ type View =
 function App() {
   const [view, setView] = useState<View>({ type: "home" });
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState("lovcode:sidebarCollapsed", false);
+  const [catalog, setCatalog] = useState<TemplatesCatalog | null>(null);
+
+  // Load marketplace catalog once for unified search
+  useEffect(() => {
+    invoke<TemplatesCatalog>("get_templates_catalog").then(setCatalog).catch(() => {});
+  }, []);
 
   const currentFeature: FeatureType | null =
     view.type === "chat-projects" || view.type === "chat-sessions" || view.type === "chat-messages"
@@ -294,6 +314,11 @@ function App() {
         {view.type === "commands" && (
           <CommandsView
             onSelect={(cmd) => setView({ type: "command-detail", command: cmd })}
+            marketplaceItems={catalog?.commands || []}
+            onMarketplaceSelect={(item) => {
+              const template = catalog?.commands.find(c => c.path === item.path);
+              if (template) setView({ type: "template-detail", template, category: "commands" });
+            }}
           />
         )}
 
@@ -305,12 +330,23 @@ function App() {
         )}
 
         {view.type === "mcp" && (
-          <McpView />
+          <McpView
+            marketplaceItems={catalog?.mcps || []}
+            onMarketplaceSelect={(item) => {
+              const template = catalog?.mcps.find(c => c.path === item.path);
+              if (template) setView({ type: "template-detail", template, category: "mcps" });
+            }}
+          />
         )}
 
         {view.type === "skills" && (
           <SkillsView
             onSelect={(skill) => setView({ type: "skill-detail", skill })}
+            marketplaceItems={catalog?.skills || []}
+            onMarketplaceSelect={(item) => {
+              const template = catalog?.skills.find(c => c.path === item.path);
+              if (template) setView({ type: "template-detail", template, category: "skills" });
+            }}
           />
         )}
 
@@ -322,12 +358,23 @@ function App() {
         )}
 
         {view.type === "hooks" && (
-          <HooksView />
+          <HooksView
+            marketplaceItems={catalog?.hooks || []}
+            onMarketplaceSelect={(item) => {
+              const template = catalog?.hooks.find(c => c.path === item.path);
+              if (template) setView({ type: "template-detail", template, category: "hooks" });
+            }}
+          />
         )}
 
         {view.type === "sub-agents" && (
           <SubAgentsView
             onSelect={(agent) => setView({ type: "sub-agent-detail", agent })}
+            marketplaceItems={catalog?.agents || []}
+            onMarketplaceSelect={(item) => {
+              const template = catalog?.agents.find(c => c.path === item.path);
+              if (template) setView({ type: "template-detail", template, category: "agents" });
+            }}
           />
         )}
 
@@ -343,7 +390,13 @@ function App() {
         )}
 
         {view.type === "settings" && (
-          <SettingsView />
+          <SettingsView
+            marketplaceItems={catalog?.settings || []}
+            onMarketplaceSelect={(item) => {
+              const template = catalog?.settings.find(c => c.path === item.path);
+              if (template) setView({ type: "template-detail", template, category: "settings" });
+            }}
+          />
         )}
 
         {view.type === "marketplace" && (
@@ -564,10 +617,18 @@ function Home({ onFeatureClick }: { onFeatureClick: (feature: FeatureType) => vo
 // Sub-agents Feature
 // ============================================================================
 
-function SubAgentsView({ onSelect }: { onSelect: (agent: LocalAgent) => void }) {
+function SubAgentsView({
+  onSelect,
+  marketplaceItems,
+  onMarketplaceSelect,
+}: {
+  onSelect: (agent: LocalAgent) => void;
+  marketplaceItems: MarketplaceItem[];
+  onMarketplaceSelect: (item: MarketplaceItem) => void;
+}) {
   const [agents, setAgents] = useState<LocalAgent[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const { search, setSearch, filtered } = useSearch(agents, ["name", "description", "model"]);
 
   useEffect(() => {
     invoke<LocalAgent[]>("list_local_agents")
@@ -575,116 +636,65 @@ function SubAgentsView({ onSelect }: { onSelect: (agent: LocalAgent) => void }) 
       .finally(() => setLoading(false));
   }, []);
 
-  const filteredAgents = agents.filter(agent =>
-    agent.name.toLowerCase().includes(search.toLowerCase()) ||
-    agent.description?.toLowerCase().includes(search.toLowerCase()) ||
-    agent.model?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted">Loading sub-agents...</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState message="Loading sub-agents..." />;
 
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-3xl font-semibold text-ink">Sub-agents</h1>
-        <p className="text-muted mt-1">{agents.length} sub-agents in ~/.claude/commands</p>
-      </header>
+    <ConfigPage>
+      <PageHeader title="Sub-agents" subtitle={`${agents.length} sub-agents in ~/.claude/commands`} />
+      <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
-      {agents.length > 0 && (
-        <input
-          type="text"
-          placeholder="Search sub-agents..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-md mb-6 px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted focus:outline-none focus:border-primary"
-        />
-      )}
-
-      {agents.length === 0 ? (
-        <div className="text-center py-12">
-          <span className="text-4xl mb-4 block">🤖</span>
-          <p className="text-muted">No sub-agents found</p>
-          <p className="text-sm text-muted mt-1">Sub-agents are commands with a model field in frontmatter</p>
-        </div>
-      ) : (
+      {filtered.length > 0 && (
         <div className="space-y-2">
-          {filteredAgents.map((agent) => (
-            <button
+          {filtered.map((agent) => (
+            <ItemCard
               key={agent.name}
+              name={agent.name}
+              description={agent.description}
+              badge={agent.model}
               onClick={() => onSelect(agent)}
-              className="w-full text-left bg-card rounded-xl p-4 border border-border hover:border-primary transition-colors"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <p className="font-mono font-medium text-primary">{agent.name}</p>
-                  {agent.description && (
-                    <p className="text-sm text-muted mt-1 line-clamp-2">{agent.description}</p>
-                  )}
-                </div>
-                {agent.model && (
-                  <span className="text-xs bg-accent/20 text-accent px-2 py-1 rounded shrink-0">
-                    {agent.model}
-                  </span>
-                )}
-              </div>
-            </button>
+            />
           ))}
         </div>
       )}
-    </div>
+
+      {filtered.length === 0 && !search && (
+        <EmptyState icon="🤖" message="No sub-agents found" hint="Sub-agents are commands with a model field in frontmatter" />
+      )}
+
+      {filtered.length === 0 && search && (
+        <p className="text-muted text-sm">No local sub-agents match "{search}"</p>
+      )}
+
+      <MarketplaceSection items={marketplaceItems} search={search} onSelect={onMarketplaceSelect} />
+    </ConfigPage>
   );
 }
 
 function SubAgentDetailView({ agent, onBack }: { agent: LocalAgent; onBack: () => void }) {
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <button
-          onClick={onBack}
-          className="text-muted hover:text-ink mb-2 flex items-center gap-1 text-sm"
-        >
-          <span>←</span> Sub-agents
-        </button>
-        <h1 className="font-mono text-2xl font-semibold text-primary">{agent.name}</h1>
-        {agent.description && (
-          <p className="text-muted mt-2">{agent.description}</p>
-        )}
-      </header>
-
+    <ConfigPage>
+      <DetailHeader
+        title={agent.name}
+        description={agent.description}
+        backLabel="Sub-agents"
+        onBack={onBack}
+        path={agent.path}
+        onOpenPath={(p) => invoke("open_in_editor", { path: p })}
+      />
       <div className="space-y-4">
         {agent.model && (
-          <div className="bg-card rounded-xl p-4 border border-border">
-            <p className="text-xs text-muted uppercase tracking-wide mb-1">Model</p>
+          <DetailCard label="Model">
             <p className="font-mono text-accent">{agent.model}</p>
-          </div>
+          </DetailCard>
         )}
-
         {agent.tools && (
-          <div className="bg-card rounded-xl p-4 border border-border">
-            <p className="text-xs text-muted uppercase tracking-wide mb-1">Tools</p>
+          <DetailCard label="Tools">
             <p className="font-mono text-sm text-ink">{agent.tools}</p>
-          </div>
+          </DetailCard>
         )}
-
-        <div className="bg-card rounded-xl p-4 border border-border">
-          <p className="text-xs text-muted uppercase tracking-wide mb-2">Content</p>
-          <div className="prose prose-sm max-w-none text-ink">
-            <Markdown>{agent.content}</Markdown>
-          </div>
-        </div>
-
-        <div className="bg-card-alt rounded-xl p-4">
-          <p className="text-xs text-muted uppercase tracking-wide mb-1">Path</p>
-          <p className="font-mono text-xs text-muted break-all">{agent.path}</p>
-        </div>
+        <ContentCard label="Content" content={agent.content} />
       </div>
-    </div>
+    </ConfigPage>
   );
 }
 
@@ -694,18 +704,10 @@ function SubAgentDetailView({ agent, onBack }: { agent: LocalAgent; onBack: () =
 
 function OutputStylesView() {
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-3xl font-semibold text-ink">Output Styles</h1>
-        <p className="text-muted mt-1">Response formatting styles</p>
-      </header>
-
-      <div className="text-center py-12">
-        <span className="text-4xl mb-4 block">🎨</span>
-        <p className="text-muted">Coming soon</p>
-        <p className="text-sm text-muted mt-1">Output styles will be available in a future update</p>
-      </div>
-    </div>
+    <ConfigPage>
+      <PageHeader title="Output Styles" subtitle="Response formatting styles" />
+      <EmptyState icon="🎨" message="Coming soon" hint="Output styles will be available in a future update" />
+    </ConfigPage>
   );
 }
 
@@ -713,10 +715,18 @@ function OutputStylesView() {
 // Commands Feature
 // ============================================================================
 
-function CommandsView({ onSelect }: { onSelect: (cmd: LocalCommand) => void }) {
+function CommandsView({
+  onSelect,
+  marketplaceItems,
+  onMarketplaceSelect,
+}: {
+  onSelect: (cmd: LocalCommand) => void;
+  marketplaceItems: MarketplaceItem[];
+  onMarketplaceSelect: (item: MarketplaceItem) => void;
+}) {
   const [commands, setCommands] = useState<LocalCommand[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const { search, setSearch, filtered } = useSearch(commands, ["name", "description"]);
 
   useEffect(() => {
     invoke<LocalCommand[]>("list_local_commands")
@@ -724,105 +734,68 @@ function CommandsView({ onSelect }: { onSelect: (cmd: LocalCommand) => void }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const filteredCommands = commands.filter(cmd =>
-    cmd.name.toLowerCase().includes(search.toLowerCase()) ||
-    cmd.description?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted">Loading commands...</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState message="Loading commands..." />;
 
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-3xl font-semibold text-ink">Commands</h1>
-        <p className="text-muted mt-1">{commands.length} slash commands in ~/.claude/commands</p>
-      </header>
+    <ConfigPage>
+      <PageHeader title="Commands" subtitle={`${commands.length} slash commands in ~/.claude/commands`} />
+      <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
-      <input
-        type="text"
-        placeholder="Search commands..."
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="w-full max-w-md mb-6 px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted focus:outline-none focus:border-primary"
-      />
+      {/* Local results */}
+      {filtered.length > 0 && (
+        <div className="space-y-2">
+          {filtered.map((cmd) => (
+            <ItemCard
+              key={cmd.name}
+              name={cmd.name}
+              description={cmd.description}
+              badge={cmd.argument_hint}
+              badgeVariant="muted"
+              onClick={() => onSelect(cmd)}
+            />
+          ))}
+        </div>
+      )}
 
-      <div className="space-y-2">
-        {filteredCommands.map((cmd) => (
-          <button
-            key={cmd.name}
-            onClick={() => onSelect(cmd)}
-            className="w-full text-left bg-card rounded-xl p-4 border border-border hover:border-primary transition-colors"
-          >
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex-1 min-w-0">
-                <p className="font-mono font-medium text-primary">{cmd.name}</p>
-                {cmd.description && (
-                  <p className="text-sm text-muted mt-1 line-clamp-2">{cmd.description}</p>
-                )}
-              </div>
-              {cmd.argument_hint && (
-                <span className="text-xs bg-card-alt px-2 py-1 rounded text-muted shrink-0">
-                  {cmd.argument_hint}
-                </span>
-              )}
-            </div>
-          </button>
-        ))}
-      </div>
-    </div>
+      {filtered.length === 0 && !search && (
+        <EmptyState icon="⚡" message="No commands found" hint="Create commands in ~/.claude/commands/" />
+      )}
+
+      {filtered.length === 0 && search && (
+        <p className="text-muted text-sm">No local commands match "{search}"</p>
+      )}
+
+      {/* Marketplace results */}
+      <MarketplaceSection items={marketplaceItems} search={search} onSelect={onMarketplaceSelect} />
+    </ConfigPage>
   );
 }
 
 function CommandDetailView({ command, onBack }: { command: LocalCommand; onBack: () => void }) {
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <button
-          onClick={onBack}
-          className="text-muted hover:text-ink mb-2 flex items-center gap-1 text-sm"
-        >
-          <span>←</span> Commands
-        </button>
-        <h1 className="font-mono text-2xl font-semibold text-primary">{command.name}</h1>
-        {command.description && (
-          <p className="text-muted mt-2">{command.description}</p>
-        )}
-      </header>
-
+    <ConfigPage>
+      <DetailHeader
+        title={command.name}
+        description={command.description}
+        backLabel="Commands"
+        onBack={onBack}
+        path={command.path}
+        onOpenPath={(p) => invoke("open_in_editor", { path: p })}
+      />
       <div className="space-y-4">
         {command.argument_hint && (
-          <div className="bg-card rounded-xl p-4 border border-border">
-            <p className="text-xs text-muted uppercase tracking-wide mb-1">Arguments</p>
+          <DetailCard label="Arguments">
             <p className="font-mono text-ink">{command.argument_hint}</p>
-          </div>
+          </DetailCard>
         )}
-
         {command.allowed_tools && (
-          <div className="bg-card rounded-xl p-4 border border-border">
-            <p className="text-xs text-muted uppercase tracking-wide mb-1">Allowed Tools</p>
+          <DetailCard label="Allowed Tools">
             <p className="font-mono text-sm text-ink">{command.allowed_tools}</p>
-          </div>
+          </DetailCard>
         )}
-
-        <div className="bg-card rounded-xl p-4 border border-border">
-          <p className="text-xs text-muted uppercase tracking-wide mb-2">Content</p>
-          <div className="prose prose-sm max-w-none text-ink">
-            <Markdown>{command.content}</Markdown>
-          </div>
-        </div>
-
-        <div className="bg-card-alt rounded-xl p-4">
-          <p className="text-xs text-muted uppercase tracking-wide mb-1">Path</p>
-          <p className="font-mono text-xs text-muted break-all">{command.path}</p>
-        </div>
+        <ContentCard label="Content" content={command.content} />
       </div>
-    </div>
+    </ConfigPage>
   );
 }
 
@@ -830,9 +803,16 @@ function CommandDetailView({ command, onBack }: { command: LocalCommand; onBack:
 // MCP Feature
 // ============================================================================
 
-function McpView() {
+function McpView({
+  marketplaceItems,
+  onMarketplaceSelect,
+}: {
+  marketplaceItems: MarketplaceItem[];
+  onMarketplaceSelect: (item: MarketplaceItem) => void;
+}) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     invoke<ClaudeSettings>("get_settings")
@@ -840,60 +820,39 @@ function McpView() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted">Loading MCP servers...</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState message="Loading MCP servers..." />;
+
+  const filtered = servers.filter(
+    (s) =>
+      s.name.toLowerCase().includes(search.toLowerCase()) ||
+      s.description?.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-3xl font-semibold text-ink">MCP Servers</h1>
-        <p className="text-muted mt-1">{servers.length} configured servers</p>
-      </header>
+    <ConfigPage>
+      <PageHeader title="MCP Servers" subtitle={`${servers.length} configured servers`} />
+      <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
-      {servers.length === 0 ? (
-        <div className="text-center py-12">
-          <span className="text-4xl mb-4 block">🔌</span>
-          <p className="text-muted">No MCP servers configured</p>
-          <p className="text-sm text-muted mt-2">
-            Add servers to mcpServers in ~/.claude/settings.json
-          </p>
-        </div>
-      ) : (
+      {filtered.length > 0 && (
         <div className="space-y-3">
-          {servers.map((server) => (
-            <div
-              key={server.name}
-              className="bg-card rounded-xl p-4 border border-border"
-            >
+          {filtered.map((server) => (
+            <div key={server.name} className="bg-card rounded-xl p-4 border border-border">
               <div className="flex items-start justify-between gap-4 mb-3">
                 <div>
                   <p className="font-medium text-ink">{server.name}</p>
-                  {server.description && (
-                    <p className="text-sm text-muted mt-1">{server.description}</p>
-                  )}
+                  {server.description && <p className="text-sm text-muted mt-1">{server.description}</p>}
                 </div>
               </div>
-
               <div className="bg-card-alt rounded-lg p-3 font-mono text-xs">
                 <p className="text-muted">
                   <span className="text-ink">{server.command}</span>
-                  {server.args.length > 0 && (
-                    <span className="text-muted"> {server.args.join(" ")}</span>
-                  )}
+                  {server.args.length > 0 && <span className="text-muted"> {server.args.join(" ")}</span>}
                 </p>
               </div>
-
               {Object.keys(server.env).length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">
                   {Object.keys(server.env).map((key) => (
-                    <span key={key} className="text-xs bg-primary/10 text-primary px-2 py-1 rounded">
-                      {key}
-                    </span>
+                    <span key={key} className="text-xs bg-primary/10 text-primary px-2 py-1 rounded">{key}</span>
                   ))}
                 </div>
               )}
@@ -901,7 +860,17 @@ function McpView() {
           ))}
         </div>
       )}
-    </div>
+
+      {filtered.length === 0 && !search && (
+        <EmptyState icon="🔌" message="No MCP servers configured" hint="Add servers to mcpServers in ~/.claude/settings.json" />
+      )}
+
+      {filtered.length === 0 && search && (
+        <p className="text-muted text-sm">No local MCP servers match "{search}"</p>
+      )}
+
+      <MarketplaceSection items={marketplaceItems} search={search} onSelect={onMarketplaceSelect} />
+    </ConfigPage>
   );
 }
 
@@ -909,10 +878,18 @@ function McpView() {
 // Skills Feature
 // ============================================================================
 
-function SkillsView({ onSelect }: { onSelect: (skill: LocalSkill) => void }) {
+function SkillsView({
+  onSelect,
+  marketplaceItems,
+  onMarketplaceSelect,
+}: {
+  onSelect: (skill: LocalSkill) => void;
+  marketplaceItems: MarketplaceItem[];
+  onMarketplaceSelect: (item: MarketplaceItem) => void;
+}) {
   const [skills, setSkills] = useState<LocalSkill[]>([]);
   const [loading, setLoading] = useState(true);
-  const [search, setSearch] = useState("");
+  const { search, setSearch, filtered } = useSearch(skills, ["name", "description"]);
 
   useEffect(() => {
     invoke<LocalSkill[]>("list_local_skills")
@@ -920,96 +897,49 @@ function SkillsView({ onSelect }: { onSelect: (skill: LocalSkill) => void }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const filteredSkills = skills.filter(skill =>
-    skill.name.toLowerCase().includes(search.toLowerCase()) ||
-    skill.description?.toLowerCase().includes(search.toLowerCase())
-  );
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted">Loading skills...</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState message="Loading skills..." />;
 
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-3xl font-semibold text-ink">Skills</h1>
-        <p className="text-muted mt-1">{skills.length} skills in ~/.claude/skills</p>
-      </header>
+    <ConfigPage>
+      <PageHeader title="Skills" subtitle={`${skills.length} skills in ~/.claude/skills`} />
+      <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
-      {skills.length > 0 && (
-        <input
-          type="text"
-          placeholder="Search skills..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-md mb-6 px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted focus:outline-none focus:border-primary"
-        />
-      )}
-
-      {skills.length === 0 ? (
-        <div className="text-center py-12">
-          <span className="text-4xl mb-4 block">🎯</span>
-          <p className="text-muted">No skills found</p>
-          <p className="text-sm text-muted mt-1">Skills are stored as SKILL.md in ~/.claude/skills/</p>
-        </div>
-      ) : (
+      {filtered.length > 0 && (
         <div className="space-y-2">
-          {filteredSkills.map((skill) => (
-            <button
-              key={skill.name}
-              onClick={() => onSelect(skill)}
-              className="w-full text-left bg-card rounded-xl p-4 border border-border hover:border-primary transition-colors"
-            >
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1 min-w-0">
-                  <p className="font-mono font-medium text-primary">{skill.name}</p>
-                  {skill.description && (
-                    <p className="text-sm text-muted mt-1 line-clamp-2">{skill.description}</p>
-                  )}
-                </div>
-              </div>
-            </button>
+          {filtered.map((skill) => (
+            <ItemCard key={skill.name} name={skill.name} description={skill.description} onClick={() => onSelect(skill)} />
           ))}
         </div>
       )}
-    </div>
+
+      {filtered.length === 0 && !search && (
+        <EmptyState icon="🎯" message="No skills found" hint="Skills are stored as SKILL.md in ~/.claude/skills/" />
+      )}
+
+      {filtered.length === 0 && search && (
+        <p className="text-muted text-sm">No local skills match "{search}"</p>
+      )}
+
+      <MarketplaceSection items={marketplaceItems} search={search} onSelect={onMarketplaceSelect} />
+    </ConfigPage>
   );
 }
 
 function SkillDetailView({ skill, onBack }: { skill: LocalSkill; onBack: () => void }) {
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <button
-          onClick={onBack}
-          className="text-muted hover:text-ink mb-2 flex items-center gap-1 text-sm"
-        >
-          <span>←</span> Skills
-        </button>
-        <h1 className="font-mono text-2xl font-semibold text-primary">{skill.name}</h1>
-        {skill.description && (
-          <p className="text-muted mt-2">{skill.description}</p>
-        )}
-      </header>
-
+    <ConfigPage>
+      <DetailHeader
+        title={skill.name}
+        description={skill.description}
+        backLabel="Skills"
+        onBack={onBack}
+        path={skill.path}
+        onOpenPath={(p) => invoke("open_in_editor", { path: p })}
+      />
       <div className="space-y-4">
-        <div className="bg-card rounded-xl p-4 border border-border">
-          <p className="text-xs text-muted uppercase tracking-wide mb-2">Content</p>
-          <div className="prose prose-sm max-w-none text-ink">
-            <Markdown>{skill.content}</Markdown>
-          </div>
-        </div>
-
-        <div className="bg-card-alt rounded-xl p-4">
-          <p className="text-xs text-muted uppercase tracking-wide mb-1">Path</p>
-          <p className="font-mono text-xs text-muted break-all">{skill.path}</p>
-        </div>
+        <ContentCard label="Content" content={skill.content} />
       </div>
-    </div>
+    </ConfigPage>
   );
 }
 
@@ -1017,9 +947,16 @@ function SkillDetailView({ skill, onBack }: { skill: LocalSkill; onBack: () => v
 // Hooks Feature
 // ============================================================================
 
-function HooksView() {
+function HooksView({
+  marketplaceItems,
+  onMarketplaceSelect,
+}: {
+  marketplaceItems: MarketplaceItem[];
+  onMarketplaceSelect: (item: MarketplaceItem) => void;
+}) {
   const [settings, setSettings] = useState<ClaudeSettings | null>(null);
   const [loading, setLoading] = useState(true);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     invoke<ClaudeSettings>("get_settings")
@@ -1027,43 +964,27 @@ function HooksView() {
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted">Loading hooks...</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState message="Loading hooks..." />;
 
   const hooks = settings?.hooks as Record<string, unknown[]> | null;
   const hookEntries = hooks ? Object.entries(hooks) : [];
+  const filtered = hookEntries.filter(([eventType]) =>
+    eventType.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-3xl font-semibold text-ink">Hooks</h1>
-        <p className="text-muted mt-1">Automation triggers in ~/.claude/settings.json</p>
-      </header>
+    <ConfigPage>
+      <PageHeader title="Hooks" subtitle="Automation triggers in ~/.claude/settings.json" />
+      <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
-      {hookEntries.length === 0 ? (
-        <div className="text-center py-12">
-          <span className="text-4xl mb-4 block">🪝</span>
-          <p className="text-muted">No hooks configured</p>
-          <p className="text-sm text-muted mt-2">
-            Add hooks to ~/.claude/settings.json
-          </p>
-        </div>
-      ) : (
+      {filtered.length > 0 && (
         <div className="space-y-4">
-          {hookEntries.map(([eventType, handlers]) => (
+          {filtered.map(([eventType, handlers]) => (
             <div key={eventType} className="bg-card rounded-xl p-4 border border-border">
               <p className="text-sm font-medium text-primary mb-3">{eventType}</p>
               <div className="space-y-2">
                 {Array.isArray(handlers) && handlers.map((handler, i) => (
-                  <pre
-                    key={i}
-                    className="bg-card-alt rounded-lg p-3 text-xs font-mono text-ink overflow-x-auto"
-                  >
+                  <pre key={i} className="bg-card-alt rounded-lg p-3 text-xs font-mono text-ink overflow-x-auto">
                     {JSON.stringify(handler, null, 2)}
                   </pre>
                 ))}
@@ -1072,7 +993,17 @@ function HooksView() {
           ))}
         </div>
       )}
-    </div>
+
+      {filtered.length === 0 && !search && (
+        <EmptyState icon="🪝" message="No hooks configured" hint="Add hooks to ~/.claude/settings.json" />
+      )}
+
+      {filtered.length === 0 && search && (
+        <p className="text-muted text-sm">No local hooks match "{search}"</p>
+      )}
+
+      <MarketplaceSection items={marketplaceItems} search={search} onSelect={onMarketplaceSelect} />
+    </ConfigPage>
   );
 }
 
@@ -1080,12 +1011,18 @@ function HooksView() {
 // Settings Feature
 // ============================================================================
 
-function SettingsView() {
+function SettingsView({
+  marketplaceItems,
+  onMarketplaceSelect,
+}: {
+  marketplaceItems: MarketplaceItem[];
+  onMarketplaceSelect: (item: MarketplaceItem) => void;
+}) {
   const [settings, setSettings] = useState<ClaudeSettings | null>(null);
   const [contextFiles, setContextFiles] = useState<ContextFile[]>([]);
   const [settingsPath, setSettingsPath] = useState<string>("");
   const [loading, setLoading] = useState(true);
-  const [copied, setCopied] = useState(false);
+  const [search, setSearch] = useState("");
 
   useEffect(() => {
     Promise.all([
@@ -1101,104 +1038,67 @@ function SettingsView() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleCopy = () => {
-    if (settings?.raw) {
-      navigator.clipboard.writeText(JSON.stringify(settings.raw, null, 2));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }
-  };
-
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted">Loading settings...</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState message="Loading settings..." />;
 
   const hasContent = settings?.raw || contextFiles.length > 0;
 
-  if (!hasContent) {
-    return (
-      <div className="px-6 py-8">
-        <header className="mb-6">
-          <h1 className="font-serif text-3xl font-semibold text-ink">Settings</h1>
-          <p className="text-muted mt-1">User configuration (~/.claude)</p>
-        </header>
-        <div className="text-center py-12">
-          <span className="text-4xl mb-4 block">⚙️</span>
-          <p className="text-muted">No configuration found</p>
-          <p className="text-sm text-muted mt-2">
-            Create ~/.claude/settings.json or CLAUDE.md
-          </p>
-        </div>
-      </div>
-    );
-  }
+  // Filter context files by search
+  const filteredContextFiles = contextFiles.filter(
+    (f) => f.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  // Check if settings JSON contains search term
+  const settingsMatchSearch = !search || JSON.stringify(settings?.raw || {}).toLowerCase().includes(search.toLowerCase());
 
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-3xl font-semibold text-ink">Settings</h1>
-        <p className="text-muted mt-1">User configuration (~/.claude)</p>
-      </header>
+    <ConfigPage>
+      <PageHeader title="Settings" subtitle="User configuration (~/.claude)" />
+      <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
-      <div className="space-y-4">
-        {/* Context Section */}
-        <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <div className="px-4 py-2 border-b border-border">
-            <span className="text-sm font-medium text-ink">📄 Context ({contextFiles.length})</span>
-          </div>
-          <div className="p-3 space-y-1">
-            {contextFiles.length > 0 ? (
-              contextFiles.map((file) => (
-                <ContextFileItem key={file.path} file={file} />
-              ))
-            ) : (
-              <p className="text-sm text-muted text-center py-4">No context files</p>
-            )}
-          </div>
-        </div>
+      {!hasContent && !search && (
+        <EmptyState icon="⚙️" message="No configuration found" hint="Create ~/.claude/settings.json or CLAUDE.md" />
+      )}
 
-        {/* Configuration Section */}
-        <div className="bg-card rounded-xl border border-border overflow-hidden">
-          <div className="px-4 py-2 border-b border-border flex items-center justify-between">
-            <span className="text-sm font-medium text-ink">⚙️ Configuration</span>
-            {settings?.raw && (
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCopy}
-                  className="text-xs text-muted hover:text-primary px-2 py-1 rounded hover:bg-card-alt"
-                  title="Copy to clipboard"
-                >
-                  {copied ? "✓ Copied" : "📋 Copy"}
-                </button>
-                <button
-                  onClick={() => invoke("open_in_editor", { path: settingsPath })}
-                  className="text-xs text-muted hover:text-primary px-2 py-1 rounded hover:bg-card-alt"
-                  title="Open in editor"
-                >
-                  ✏️ Edit
-                </button>
+      {(filteredContextFiles.length > 0 || (settingsMatchSearch && settings?.raw)) && (
+        <div className="space-y-4">
+          {/* Context Section */}
+          {filteredContextFiles.length > 0 && (
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
+              <div className="px-4 py-2 border-b border-border">
+                <span className="text-sm font-medium text-ink">📄 Context ({filteredContextFiles.length})</span>
               </div>
-            )}
-          </div>
-          <div className="p-3">
-            {settings?.raw ? (
-              <>
-                <span className="font-mono text-xs text-muted block mb-2">{settingsPath}</span>
-                <pre className="bg-card-alt rounded-lg p-3 text-xs font-mono text-ink overflow-x-auto max-h-96">
-                  {JSON.stringify(settings.raw, null, 2)}
-                </pre>
-              </>
-            ) : (
-              <p className="text-sm text-muted text-center py-4">No settings.json found</p>
-            )}
-          </div>
+              <div className="p-3 space-y-1">
+                {filteredContextFiles.map((file) => (
+                  <ContextFileItem key={file.path} file={file} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Configuration Section */}
+          {settingsMatchSearch && settings?.raw && (
+            <div className="bg-card rounded-xl border border-border overflow-hidden">
+              <div className="px-4 py-2 border-b border-border">
+                <span className="text-sm font-medium text-ink">⚙️ Configuration</span>
+              </div>
+              <div className="p-3">
+                <ConfigFileItem
+                  name="settings.json"
+                  path={settingsPath}
+                  content={settings.raw}
+                />
+              </div>
+            </div>
+          )}
         </div>
-      </div>
-    </div>
+      )}
+
+      {search && filteredContextFiles.length === 0 && !settingsMatchSearch && (
+        <p className="text-muted text-sm">No local settings match "{search}"</p>
+      )}
+
+      <MarketplaceSection items={marketplaceItems} search={search} onSelect={onMarketplaceSelect} />
+    </ConfigPage>
   );
 }
 
@@ -1237,13 +1137,7 @@ function MarketplaceView({
       .finally(() => setLoading(false));
   }, []);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-muted">Loading templates catalog...</p>
-      </div>
-    );
-  }
+  if (loading) return <LoadingState message="Loading templates catalog..." />;
 
   if (error) {
     return (
@@ -1263,16 +1157,11 @@ function MarketplaceView({
     c.description?.toLowerCase().includes(search.toLowerCase()) ||
     c.category.toLowerCase().includes(search.toLowerCase())
   );
-
-  // Sort by downloads (popular first)
   const sorted = [...filtered].sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
 
   return (
-    <div className="px-6 py-8">
-      <header className="mb-6">
-        <h1 className="font-serif text-3xl font-semibold text-ink">Marketplace</h1>
-        <p className="text-muted mt-1">Browse and install Claude Code templates</p>
-      </header>
+    <ConfigPage>
+      <PageHeader title="Marketplace" subtitle="Browse and install Claude Code templates" />
 
       {/* Category Tabs */}
       <div className="flex flex-wrap gap-2 mb-6">
@@ -1296,13 +1185,10 @@ function MarketplaceView({
         })}
       </div>
 
-      {/* Search */}
-      <input
-        type="text"
+      <SearchInput
         placeholder={`Search ${TEMPLATE_CATEGORIES.find(c => c.key === activeCategory)?.label.toLowerCase()}...`}
         value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className="w-full max-w-md mb-6 px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted focus:outline-none focus:border-primary"
+        onChange={setSearch}
       />
 
       {/* Grid */}
@@ -1316,25 +1202,17 @@ function MarketplaceView({
             <div className="flex items-start justify-between gap-2 mb-2">
               <p className="font-medium text-ink truncate">{template.name}</p>
               {template.downloads != null && (
-                <span className="text-xs text-muted shrink-0">
-                  ↓{template.downloads}
-                </span>
+                <span className="text-xs text-muted shrink-0">↓{template.downloads}</span>
               )}
             </div>
-            {template.description && (
-              <p className="text-sm text-muted line-clamp-2">{template.description}</p>
-            )}
+            {template.description && <p className="text-sm text-muted line-clamp-2">{template.description}</p>}
             <p className="text-xs text-muted/60 mt-2">{template.category}</p>
           </button>
         ))}
       </div>
 
-      {sorted.length === 0 && (
-        <div className="text-center py-12">
-          <p className="text-muted">No templates found</p>
-        </div>
-      )}
-    </div>
+      {sorted.length === 0 && <EmptyState icon="📦" message="No templates found" />}
+    </ConfigPage>
   );
 }
 
@@ -1389,7 +1267,7 @@ function TemplateDetailView({
   const categoryInfo = TEMPLATE_CATEGORIES.find(c => c.key === category);
 
   return (
-    <div className="px-6 py-8">
+    <ConfigPage>
       <header className="mb-6">
         <button
           onClick={onBack}
@@ -1400,10 +1278,9 @@ function TemplateDetailView({
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold text-ink">{template.name}</h1>
-            {template.description && (
-              <p className="text-muted mt-2">{template.description}</p>
-            )}
-            <div className="flex items-center gap-3 mt-3 text-sm text-muted">
+            {template.description && <p className="text-muted mt-2">{template.description}</p>}
+            <p className="font-mono text-xs text-muted mt-2">{template.path}</p>
+            <div className="flex items-center gap-3 mt-2 text-sm text-muted">
               <span>{categoryInfo?.icon} {categoryInfo?.label}</span>
               <span>•</span>
               <span>{template.category}</span>
@@ -1415,7 +1292,6 @@ function TemplateDetailView({
               )}
             </div>
           </div>
-
           <button
             onClick={handleInstall}
             disabled={installing || installed}
@@ -1430,36 +1306,25 @@ function TemplateDetailView({
             {installed ? "✓ Installed" : installing ? "Installing..." : "Install"}
           </button>
         </div>
-
         {error && (
-          <div className="mt-4 p-3 bg-red-500/10 text-red-600 rounded-lg text-sm">
-            {error}
-          </div>
+          <div className="mt-4 p-3 bg-red-500/10 text-red-600 rounded-lg text-sm">{error}</div>
         )}
       </header>
 
-      <div className="space-y-4">
-        {template.content && (
-          <div className="bg-card rounded-xl p-4 border border-border">
-            <p className="text-xs text-muted uppercase tracking-wide mb-3">Content Preview</p>
-            <div className="prose prose-sm max-w-none text-ink">
-              {category === "mcps" || category === "hooks" || category === "settings" ? (
-                <pre className="bg-card-alt rounded-lg p-3 text-xs font-mono overflow-x-auto">
-                  {template.content}
-                </pre>
-              ) : (
-                <Markdown>{template.content}</Markdown>
-              )}
-            </div>
+      {template.content && (
+        <DetailCard label="Content Preview">
+          <div className="prose prose-sm max-w-none text-ink">
+            {category === "mcps" || category === "hooks" || category === "settings" ? (
+              <pre className="bg-card-alt rounded-lg p-3 text-xs font-mono overflow-x-auto">
+                {template.content}
+              </pre>
+            ) : (
+              <Markdown>{template.content}</Markdown>
+            )}
           </div>
-        )}
-
-        <div className="bg-card-alt rounded-xl p-4">
-          <p className="text-xs text-muted uppercase tracking-wide mb-1">Path</p>
-          <p className="font-mono text-xs text-muted break-all">{template.path}</p>
-        </div>
-      </div>
-    </div>
+        </DetailCard>
+      )}
+    </ConfigPage>
   );
 }
 

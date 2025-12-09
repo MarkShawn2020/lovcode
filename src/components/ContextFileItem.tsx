@@ -1,17 +1,79 @@
 import { invoke } from "@tauri-apps/api/core";
 import Markdown from "react-markdown";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, useCollapsible } from "./ui/collapsible";
+import { ExternalLink, Copy, Check } from "lucide-react";
+import { useState, ReactNode } from "react";
+
+function ChevronIcon() {
+  const { open } = useCollapsible();
+  return <span className="text-xs text-muted">{open ? "▼" : "▶"}</span>;
+}
+
+// ============================================================================
+// CollapsibleItem - Base component for collapsible file items
+// ============================================================================
+
+interface CollapsibleItemProps {
+  name: string;
+  path: string;
+  content: string;
+  variant?: "card" | "card-alt";
+  renderContent?: (content: string) => ReactNode;
+}
+
+export function CollapsibleItem({ name, path, content, variant = "card-alt", renderContent }: CollapsibleItemProps) {
+  const [copied, setCopied] = useState(false);
+  const bgClass = variant === "card" ? "bg-card border border-border" : "bg-card-alt";
+  const hoverClass = variant === "card" ? "hover:bg-card-alt/50" : "hover:bg-card-alt/80";
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <Collapsible className={`${bgClass} rounded-lg overflow-hidden`}>
+      <CollapsibleTrigger className={`flex items-center gap-2 px-3 py-1.5 w-full ${hoverClass}`}>
+        <ChevronIcon />
+        <span className="text-sm text-ink shrink-0">{name}</span>
+        <span className="flex-1 font-mono text-xs text-muted truncate text-left">{path}</span>
+        <button
+          onClick={handleCopy}
+          className="text-muted hover:text-primary shrink-0"
+          title="Copy content"
+        >
+          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); invoke("open_in_editor", { path }); }}
+          className="text-muted hover:text-primary shrink-0"
+          title={path}
+        >
+          <ExternalLink className="w-3.5 h-3.5" />
+        </button>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="px-3 pb-2 border-t border-border/50 pt-2">
+        {renderContent ? renderContent(content) : (
+          <div className="prose prose-sm max-w-none text-ink">
+            <Markdown>{content}</Markdown>
+          </div>
+        )}
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+// ============================================================================
+// ContextFileItem - For context files (CLAUDE.md etc)
+// ============================================================================
 
 interface ContextFile {
   name: string;
   path: string;
   scope: string;
   content: string;
-}
-
-function ChevronIcon() {
-  const { open } = useCollapsible();
-  return <span className="text-xs text-muted">{open ? "▼" : "▶"}</span>;
 }
 
 interface ContextFileItemProps {
@@ -21,29 +83,41 @@ interface ContextFileItemProps {
 }
 
 export function ContextFileItem({ file, showIcon = false, variant = "card-alt" }: ContextFileItemProps) {
-  const bgClass = variant === "card" ? "bg-card border border-border" : "bg-card-alt";
-  const hoverClass = variant === "card" ? "hover:bg-card-alt/50" : "hover:bg-card-alt/80";
-
+  const icon = showIcon ? (file.scope === "command" ? "⚡ " : "📄 ") : "";
   return (
-    <Collapsible className={`${bgClass} rounded-lg overflow-hidden`}>
-      <CollapsibleTrigger className={`flex items-center gap-2 px-3 py-1.5 w-full ${hoverClass}`}>
-        <ChevronIcon />
-        <span className="text-sm text-ink shrink-0">
-          {showIcon && (file.scope === "command" ? "⚡ " : "📄 ")}
-          {file.name}
-        </span>
-        <span className="flex-1 font-mono text-xs text-muted truncate text-left">{file.path}</span>
-        <button
-          onClick={(e) => { e.stopPropagation(); invoke("open_in_editor", { path: file.path }); }}
-          className="text-xs text-muted hover:text-primary shrink-0"
-          title="Open in editor"
-        >
-          ✏️
-        </button>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="px-3 pb-2 prose prose-sm max-w-none text-ink border-t border-border/50 pt-2">
-        <Markdown>{file.content}</Markdown>
-      </CollapsibleContent>
-    </Collapsible>
+    <CollapsibleItem
+      name={`${icon}${file.name}`}
+      path={file.path}
+      content={file.content}
+      variant={variant}
+    />
+  );
+}
+
+// ============================================================================
+// ConfigFileItem - For settings.json
+// ============================================================================
+
+interface ConfigFileItemProps {
+  name: string;
+  path: string;
+  content: Record<string, unknown>;
+  variant?: "card" | "card-alt";
+}
+
+export function ConfigFileItem({ name, path, content, variant = "card-alt" }: ConfigFileItemProps) {
+  const jsonString = JSON.stringify(content, null, 2);
+  return (
+    <CollapsibleItem
+      name={name}
+      path={path}
+      content={jsonString}
+      variant={variant}
+      renderContent={(c) => (
+        <pre className="bg-card-alt rounded-lg p-3 text-xs font-mono text-ink overflow-x-auto max-h-96">
+          {c}
+        </pre>
+      )}
+    />
   );
 }
