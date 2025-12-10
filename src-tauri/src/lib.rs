@@ -3,6 +3,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use tauri::{Emitter, Manager};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Project {
@@ -924,10 +925,69 @@ fn get_settings_path() -> String {
     get_claude_dir().join("settings.json").to_string_lossy().to_string()
 }
 
+#[tauri::command]
+fn get_home_dir() -> String {
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder, PredefinedMenuItem};
+
+            let settings = MenuItemBuilder::with_id("settings", "Settings...")
+                .accelerator("CmdOrCtrl+,")
+                .build(app)?;
+
+            let app_menu = SubmenuBuilder::new(app, "Lovcode")
+                .item(&PredefinedMenuItem::about(app, Some("About Lovcode"), None)?)
+                .separator()
+                .item(&settings)
+                .separator()
+                .item(&PredefinedMenuItem::hide(app, Some("Hide Lovcode"))?)
+                .item(&PredefinedMenuItem::hide_others(app, Some("Hide Others"))?)
+                .item(&PredefinedMenuItem::show_all(app, Some("Show All"))?)
+                .separator()
+                .item(&PredefinedMenuItem::quit(app, Some("Quit Lovcode"))?)
+                .build()?;
+
+            let edit_menu = SubmenuBuilder::new(app, "Edit")
+                .item(&PredefinedMenuItem::undo(app, None)?)
+                .item(&PredefinedMenuItem::redo(app, None)?)
+                .separator()
+                .item(&PredefinedMenuItem::cut(app, None)?)
+                .item(&PredefinedMenuItem::copy(app, None)?)
+                .item(&PredefinedMenuItem::paste(app, None)?)
+                .item(&PredefinedMenuItem::select_all(app, None)?)
+                .build()?;
+
+            let window_menu = SubmenuBuilder::new(app, "Window")
+                .item(&PredefinedMenuItem::minimize(app, None)?)
+                .item(&PredefinedMenuItem::maximize(app, None)?)
+                .item(&PredefinedMenuItem::close_window(app, None)?)
+                .build()?;
+
+            let menu = MenuBuilder::new(app)
+                .item(&app_menu)
+                .item(&edit_menu)
+                .item(&window_menu)
+                .build()?;
+
+            app.set_menu(menu)?;
+
+            Ok(())
+        })
+        .on_menu_event(|app, event| {
+            if event.id().as_ref() == "settings" {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.emit("menu-settings", ());
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             list_projects,
             list_sessions,
@@ -944,7 +1004,8 @@ pub fn run() {
             install_hook_template,
             install_setting_template,
             open_in_editor,
-            get_settings_path
+            get_settings_path,
+            get_home_dir
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

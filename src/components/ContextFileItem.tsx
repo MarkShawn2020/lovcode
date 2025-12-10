@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, useCollapsible } from "./ui/collapsible";
 import { ExternalLink, Copy, Check } from "lucide-react";
 import { useState, ReactNode } from "react";
+import { useAppConfig } from "../App";
 
 function ChevronIcon() {
   const { open } = useCollapsible();
@@ -22,6 +23,7 @@ interface CollapsibleItemProps {
 }
 
 export function CollapsibleItem({ name, path, content, variant = "card-alt", renderContent }: CollapsibleItemProps) {
+  const { formatPath } = useAppConfig();
   const [copied, setCopied] = useState(false);
   const bgClass = variant === "card" ? "bg-card border border-border" : "bg-card-alt";
   const hoverClass = variant === "card" ? "hover:bg-card-alt/50" : "hover:bg-card-alt/80";
@@ -38,7 +40,7 @@ export function CollapsibleItem({ name, path, content, variant = "card-alt", ren
       <CollapsibleTrigger className={`flex items-center gap-2 px-3 py-1.5 w-full ${hoverClass}`}>
         <ChevronIcon />
         <span className="text-sm text-ink shrink-0">{name}</span>
-        <span className="flex-1 font-mono text-xs text-muted truncate text-left">{path}</span>
+        <span className="flex-1 font-mono text-xs text-muted truncate text-left">{formatPath(path)}</span>
         <button
           onClick={handleCopy}
           className="text-muted hover:text-primary shrink-0"
@@ -49,7 +51,7 @@ export function CollapsibleItem({ name, path, content, variant = "card-alt", ren
         <button
           onClick={(e) => { e.stopPropagation(); invoke("open_in_editor", { path }); }}
           className="text-muted hover:text-primary shrink-0"
-          title={path}
+          title={formatPath(path)}
         >
           <ExternalLink className="w-3.5 h-3.5" />
         </button>

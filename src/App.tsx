@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
 import { PanelLeft } from "lucide-react";
 import Markdown from "react-markdown";
 import { Switch } from "./components/ui/switch";
 import { ContextFileItem, ConfigFileItem } from "./components/ContextFileItem";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   LoadingState,
   EmptyState,
@@ -36,6 +37,26 @@ function usePersistedState<T>(key: string, defaultValue: T): [T, (value: T) => v
 
   return [state, setPersistedState];
 }
+
+// ============================================================================
+// App Config Context
+// ============================================================================
+
+interface AppConfig {
+  homeDir: string;
+  shortenPaths: boolean;
+  setShortenPaths: (value: boolean) => void;
+  formatPath: (path: string) => string;
+}
+
+const AppConfigContext = createContext<AppConfig>({
+  homeDir: "",
+  shortenPaths: true,
+  setShortenPaths: () => {},
+  formatPath: (p) => p,
+});
+
+export const useAppConfig = () => useContext(AppConfigContext);
 
 // ============================================================================
 // Types & Config
@@ -197,6 +218,29 @@ function App() {
   const [view, setView] = useState<View>({ type: "home" });
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState("lovcode:sidebarCollapsed", false);
   const [catalog, setCatalog] = useState<TemplatesCatalog | null>(null);
+  const [homeDir, setHomeDir] = useState("");
+  const [shortenPaths, setShortenPaths] = usePersistedState("lovcode:shortenPaths", true);
+  const [showSettings, setShowSettings] = useState(false);
+
+  // Load home directory for path shortening
+  useEffect(() => {
+    invoke<string>("get_home_dir").then(setHomeDir).catch(() => {});
+  }, []);
+
+  // Listen for menu settings event
+  useEffect(() => {
+    const unlisten = listen("menu-settings", () => setShowSettings(true));
+    return () => { unlisten.then(fn => fn()); };
+  }, []);
+
+  const formatPath = useCallback((path: string) => {
+    if (shortenPaths && homeDir && path.startsWith(homeDir)) {
+      return "~" + path.slice(homeDir.length);
+    }
+    return path;
+  }, [shortenPaths, homeDir]);
+
+  const appConfig: AppConfig = { homeDir, shortenPaths, setShortenPaths, formatPath };
 
   // Load marketplace catalog once for unified search
   useEffect(() => {
@@ -261,6 +305,7 @@ function App() {
   };
 
   return (
+    <AppConfigContext.Provider value={appConfig}>
     <div className="h-screen bg-canvas flex">
       {/* Sidebar with animation */}
       <aside className={`flex flex-col border-r border-border bg-card transition-all duration-300 ease-in-out overflow-hidden ${sidebarCollapsed ? "w-0 border-r-0" : "w-52"}`}>
@@ -501,6 +546,47 @@ function App() {
           <FeatureTodo feature={view.feature} />
         )}
         </main>
+      </div>
+    </div>
+    <AppSettingsDialog open={showSettings} onClose={() => setShowSettings(false)} />
+    </AppConfigContext.Provider>
+  );
+}
+
+// ============================================================================
+// App Settings Dialog
+// ============================================================================
+
+function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { shortenPaths, setShortenPaths } = useAppConfig();
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-card rounded-xl border border-border shadow-xl w-96 max-w-[90vw]">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-ink">Settings</h2>
+          <button onClick={onClose} className="text-muted hover:text-ink text-xl leading-none">&times;</button>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium text-ink">Shorten paths</p>
+              <p className="text-xs text-muted">Replace home directory with ~</p>
+            </div>
+            <Switch checked={shortenPaths} onCheckedChange={setShortenPaths} />
+          </div>
+        </div>
+        <div className="px-5 py-3 border-t border-border flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-sm font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90"
+          >
+            Done
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -1349,6 +1435,7 @@ function FeatureTodo({ feature }: { feature: FeatureType }) {
 type SortKey = "recent" | "sessions" | "name";
 
 function ProjectList({ onSelect }: { onSelect: (p: Project) => void }) {
+  const { formatPath } = useAppConfig();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState<SortKey>("recent");
@@ -1419,7 +1506,7 @@ function ProjectList({ onSelect }: { onSelect: (p: Project) => void }) {
             onClick={() => onSelect(project)}
             className="w-full text-left bg-card rounded-xl p-4 border border-border hover:border-primary transition-colors"
           >
-            <p className="font-medium text-ink truncate">{project.path}</p>
+            <p className="font-medium text-ink truncate">{formatPath(project.path)}</p>
             <p className="text-sm text-muted mt-1">
               {project.session_count} session{project.session_count !== 1 ? "s" : ""} · {formatRelativeTime(project.last_active)}
             </p>
@@ -1441,6 +1528,7 @@ function SessionList({
   onBack: () => void;
   onSelect: (s: Session) => void;
 }) {
+  const { formatPath } = useAppConfig();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [globalContext, setGlobalContext] = useState<ContextFile[]>([]);
   const [projectContext, setProjectContext] = useState<ContextFile[]>([]);
@@ -1483,7 +1571,7 @@ function SessionList({
           <span>←</span> Projects
         </button>
         <h1 className="font-serif text-2xl font-semibold text-ink truncate">
-          {projectPath || projectId}
+          {projectPath ? formatPath(projectPath) : projectId}
         </h1>
       </header>
 

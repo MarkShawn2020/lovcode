@@ -1,6 +1,7 @@
 import { useState, useEffect, ReactNode } from "react";
 import Markdown from "react-markdown";
 import { ExternalLink, Download } from "lucide-react";
+import { useAppConfig } from "../../App";
 
 // ============================================================================
 // Atomic Components
@@ -82,6 +83,7 @@ export function DetailHeader({
   path?: string;
   onOpenPath?: (path: string) => void;
 }) {
+  const { formatPath } = useAppConfig();
   return (
     <header className="mb-6">
       <button
@@ -96,7 +98,7 @@ export function DetailHeader({
           <button
             onClick={() => onOpenPath?.(path)}
             className="text-muted hover:text-primary"
-            title={path}
+            title={formatPath(path)}
           >
             <ExternalLink className="w-4 h-4" />
           </button>
