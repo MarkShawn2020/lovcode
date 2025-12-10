@@ -1,7 +1,13 @@
 import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, User } from "lucide-react";
 import Markdown from "react-markdown";
 import { Switch } from "./components/ui/switch";
+import { Avatar, AvatarImage, AvatarFallback } from "./components/ui/avatar";
+import { Popover, PopoverTrigger, PopoverContent } from "./components/ui/popover";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog";
+import { Input } from "./components/ui/input";
+import { Label } from "./components/ui/label";
+import { Button } from "./components/ui/button";
 import { ContextFileItem, ConfigFileItem } from "./components/ContextFileItem";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -214,6 +220,11 @@ type View =
 // App Component
 // ============================================================================
 
+interface UserProfile {
+  nickname: string;
+  avatarUrl: string;
+}
+
 function App() {
   const [view, setView] = useState<View>({ type: "home" });
   const [sidebarCollapsed, setSidebarCollapsed] = usePersistedState("lovcode:sidebarCollapsed", false);
@@ -221,6 +232,8 @@ function App() {
   const [homeDir, setHomeDir] = useState("");
   const [shortenPaths, setShortenPaths] = usePersistedState("lovcode:shortenPaths", true);
   const [showSettings, setShowSettings] = useState(false);
+  const [profile, setProfile] = usePersistedState<UserProfile>("lovcode:profile", { nickname: "", avatarUrl: "" });
+  const [showProfileDialog, setShowProfileDialog] = useState(false);
 
   // Load home directory for path shortening
   useEffect(() => {
@@ -384,7 +397,7 @@ function App() {
         {/* Top bar - always 52px height, button only visible when collapsed */}
         <div
           data-tauri-drag-region
-          className="h-[52px] shrink-0 flex items-center border-b border-border bg-card"
+          className="h-[52px] shrink-0 flex items-center justify-between border-b border-border bg-card"
         >
           <div className={`pl-[92px] transition-opacity duration-300 ${sidebarCollapsed ? "opacity-100" : "opacity-0 pointer-events-none"}`}>
             <button
@@ -394,6 +407,41 @@ function App() {
             >
               <PanelLeft className="w-4 h-4" />
             </button>
+          </div>
+
+          {/* Profile Button */}
+          <div className="pr-4">
+            <Popover>
+              <PopoverTrigger className="rounded-full hover:ring-2 hover:ring-primary/50 transition-all">
+                <Avatar className="h-8 w-8 cursor-pointer">
+                  {profile.avatarUrl ? (
+                    <AvatarImage src={profile.avatarUrl} alt={profile.nickname || "User"} />
+                  ) : null}
+                  <AvatarFallback className="bg-primary/10 text-primary text-sm">
+                    {profile.nickname ? profile.nickname.charAt(0).toUpperCase() : <User className="w-4 h-4" />}
+                  </AvatarFallback>
+                </Avatar>
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-48 p-2">
+                <div className="space-y-1">
+                  {profile.nickname && (
+                    <p className="px-2 py-1.5 text-sm font-medium text-ink truncate">{profile.nickname}</p>
+                  )}
+                  <button
+                    onClick={() => setShowProfileDialog(true)}
+                    className="w-full text-left px-2 py-1.5 text-sm text-muted hover:text-ink hover:bg-card-alt rounded-md transition-colors"
+                  >
+                    Edit Profile
+                  </button>
+                  <button
+                    onClick={() => setShowSettings(true)}
+                    className="w-full text-left px-2 py-1.5 text-sm text-muted hover:text-ink hover:bg-card-alt rounded-md transition-colors"
+                  >
+                    Settings
+                  </button>
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
 
@@ -549,6 +597,12 @@ function App() {
       </div>
     </div>
     <AppSettingsDialog open={showSettings} onClose={() => setShowSettings(false)} />
+    <ProfileDialog
+      open={showProfileDialog}
+      onClose={() => setShowProfileDialog(false)}
+      profile={profile}
+      onSave={setProfile}
+    />
     </AppConfigContext.Provider>
   );
 }
@@ -589,6 +643,104 @@ function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => vo
         </div>
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// Profile Dialog
+// ============================================================================
+
+function ProfileDialog({
+  open,
+  onClose,
+  profile,
+  onSave,
+}: {
+  open: boolean;
+  onClose: () => void;
+  profile: UserProfile;
+  onSave: (profile: UserProfile) => void;
+}) {
+  const [nickname, setNickname] = useState(profile.nickname);
+  const [avatarUrl, setAvatarUrl] = useState(profile.avatarUrl);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (open) {
+      setNickname(profile.nickname);
+      setAvatarUrl(profile.avatarUrl);
+    }
+  }, [open, profile]);
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64 = event.target?.result as string;
+      setAvatarUrl(base64);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleSave = () => {
+    onSave({ nickname, avatarUrl });
+    onClose();
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onClose}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit Profile</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 py-4">
+          {/* Avatar Preview with Upload */}
+          <div className="flex flex-col items-center gap-3">
+            <div
+              className="relative cursor-pointer group"
+              onClick={() => fileInputRef.current?.click()}
+            >
+              <Avatar className="h-20 w-20">
+                {avatarUrl ? (
+                  <AvatarImage src={avatarUrl} alt={nickname || "User"} />
+                ) : null}
+                <AvatarFallback className="bg-primary/10 text-primary text-2xl">
+                  {nickname ? nickname.charAt(0).toUpperCase() : <User className="w-8 h-8" />}
+                </AvatarFallback>
+              </Avatar>
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-white text-xs">Upload</span>
+              </div>
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+            <p className="text-xs text-muted">Click avatar to upload</p>
+          </div>
+
+          {/* Nickname */}
+          <div className="space-y-2">
+            <Label htmlFor="nickname">Nickname</Label>
+            <Input
+              id="nickname"
+              value={nickname}
+              onChange={(e) => setNickname(e.target.value)}
+              placeholder="Enter your nickname"
+            />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button onClick={handleSave}>Save</Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
