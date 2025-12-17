@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+### Patch Changes
+
+- 85d0e82: fix: update submodule reference to valid commit
+
 ## 0.5.0
 
 ### Minor Changes
