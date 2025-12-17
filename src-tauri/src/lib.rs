@@ -81,6 +81,11 @@ fn get_claude_dir() -> PathBuf {
     dirs::home_dir().unwrap().join(".claude")
 }
 
+/// Get path to ~/.claude.json (MCP servers config)
+fn get_claude_json_path() -> PathBuf {
+    dirs::home_dir().unwrap().join(".claude.json")
+}
+
 /// Decode project ID to actual filesystem path.
 /// Claude Code encodes: `/` -> `-`, and `.` -> `-`
 /// So `/.` becomes `--`, but `-` in directory names is NOT escaped
@@ -597,30 +602,43 @@ fn install_command_template(name: String, content: String) -> Result<String, Str
 
 #[tauri::command]
 fn install_mcp_template(name: String, config: String) -> Result<String, String> {
-    let settings_path = get_claude_dir().join("settings.json");
+    // MCP servers are stored in ~/.claude.json (not ~/.claude/settings.json)
+    let claude_json_path = get_claude_json_path();
 
     // Parse the MCP config
     let mcp_config: serde_json::Value = serde_json::from_str(&config).map_err(|e| e.to_string())?;
 
-    // Read existing settings or create new
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+    // Extract the actual server config from the template
+    // Templates may come as {"mcpServers": {"name": {...}}} or just {...}
+    let server_config = if let Some(mcp_servers) = mcp_config.get("mcpServers").and_then(|v| v.as_object()) {
+        // Template has mcpServers wrapper - extract the first server's config
+        mcp_servers.values().next()
+            .cloned()
+            .unwrap_or(mcp_config.clone())
+    } else {
+        // Template is already the bare config
+        mcp_config
+    };
+
+    // Read existing ~/.claude.json or create new
+    let mut claude_json: serde_json::Value = if claude_json_path.exists() {
+        let content = fs::read_to_string(&claude_json_path).map_err(|e| e.to_string())?;
         serde_json::from_str(&content).unwrap_or(serde_json::json!({}))
     } else {
         serde_json::json!({})
     };
 
     // Ensure mcpServers exists
-    if !settings.get("mcpServers").is_some() {
-        settings["mcpServers"] = serde_json::json!({});
+    if !claude_json.get("mcpServers").is_some() {
+        claude_json["mcpServers"] = serde_json::json!({});
     }
 
-    // Add the MCP server
-    settings["mcpServers"][&name] = mcp_config;
+    // Add the MCP server with the extracted config
+    claude_json["mcpServers"][&name] = server_config;
 
     // Write back
-    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+    let output = serde_json::to_string_pretty(&claude_json).map_err(|e| e.to_string())?;
+    fs::write(&claude_json_path, output).map_err(|e| e.to_string())?;
 
     Ok(format!("Installed MCP: {}", name))
 }
@@ -861,60 +879,63 @@ fn get_project_context(project_path: String) -> Result<Vec<ContextFile>, String>
 #[tauri::command]
 fn get_settings() -> Result<ClaudeSettings, String> {
     let settings_path = get_claude_dir().join("settings.json");
+    let claude_json_path = get_claude_json_path();
 
-    if !settings_path.exists() {
-        return Ok(ClaudeSettings {
-            raw: Value::Null,
-            permissions: None,
-            hooks: None,
-            mcp_servers: vec![],
-        });
-    }
+    // Read ~/.claude/settings.json for permissions, hooks, etc.
+    let (raw, permissions, hooks) = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        let raw: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+        let permissions = raw.get("permissions").cloned();
+        let hooks = raw.get("hooks").cloned();
+        (raw, permissions, hooks)
+    } else {
+        (Value::Null, None, None)
+    };
 
-    let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-    let raw: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-
-    let permissions = raw.get("permissions").cloned();
-    let hooks = raw.get("hooks").cloned();
-
-    // Extract MCP servers from settings
+    // Read ~/.claude.json for MCP servers
     let mut mcp_servers = Vec::new();
-    if let Some(mcp_obj) = raw.get("mcpServers").and_then(|v| v.as_object()) {
-        for (name, config) in mcp_obj {
-            if let Some(obj) = config.as_object() {
-                // Handle nested mcpServers format (from some installers)
-                let actual_config = if let Some(nested) = obj.get("mcpServers").and_then(|v| v.as_object()) {
-                    nested.values().next().and_then(|v| v.as_object())
-                } else {
-                    Some(obj)
-                };
+    if claude_json_path.exists() {
+        if let Ok(content) = fs::read_to_string(&claude_json_path) {
+            if let Ok(claude_json) = serde_json::from_str::<Value>(&content) {
+                if let Some(mcp_obj) = claude_json.get("mcpServers").and_then(|v| v.as_object()) {
+                    for (name, config) in mcp_obj {
+                        if let Some(obj) = config.as_object() {
+                            // Handle nested mcpServers format (from some installers)
+                            let actual_config = if let Some(nested) = obj.get("mcpServers").and_then(|v| v.as_object()) {
+                                nested.values().next().and_then(|v| v.as_object())
+                            } else {
+                                Some(obj)
+                            };
 
-                if let Some(cfg) = actual_config {
-                    let description = cfg.get("description")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    let command = cfg.get("command")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let args: Vec<String> = cfg.get("args")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-                        .unwrap_or_default();
-                    let env: HashMap<String, String> = cfg.get("env")
-                        .and_then(|v| v.as_object())
-                        .map(|m| m.iter().filter_map(|(k, v)| {
-                            v.as_str().map(|s| (k.clone(), s.to_string()))
-                        }).collect())
-                        .unwrap_or_default();
+                            if let Some(cfg) = actual_config {
+                                let description = cfg.get("description")
+                                    .and_then(|v| v.as_str())
+                                    .map(String::from);
+                                let command = cfg.get("command")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let args: Vec<String> = cfg.get("args")
+                                    .and_then(|v| v.as_array())
+                                    .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                                    .unwrap_or_default();
+                                let env: HashMap<String, String> = cfg.get("env")
+                                    .and_then(|v| v.as_object())
+                                    .map(|m| m.iter().filter_map(|(k, v)| {
+                                        v.as_str().map(|s| (k.clone(), s.to_string()))
+                                    }).collect())
+                                    .unwrap_or_default();
 
-                    mcp_servers.push(McpServer {
-                        name: name.clone(),
-                        description,
-                        command,
-                        args,
-                        env,
-                    });
+                                mcp_servers.push(McpServer {
+                                    name: name.clone(),
+                                    description,
+                                    command,
+                                    args,
+                                    env,
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -957,6 +978,11 @@ fn open_in_editor(path: String) -> Result<(), String> {
 #[tauri::command]
 fn get_settings_path() -> String {
     get_claude_dir().join("settings.json").to_string_lossy().to_string()
+}
+
+#[tauri::command]
+fn get_mcp_config_path() -> String {
+    get_claude_json_path().to_string_lossy().to_string()
 }
 
 #[tauri::command]
@@ -1045,6 +1071,7 @@ pub fn run() {
             install_setting_template,
             open_in_editor,
             get_settings_path,
+            get_mcp_config_path,
             get_home_dir,
             write_file
         ])

@@ -56,14 +56,21 @@ export function SearchInput({
 export function PageHeader({
   title,
   subtitle,
+  action,
 }: {
   title: string;
   subtitle: string;
+  action?: ReactNode;
 }) {
   return (
     <header className="mb-6">
-      <h1 className="font-serif text-3xl font-semibold text-ink">{title}</h1>
-      <p className="text-muted mt-1">{subtitle}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="font-serif text-3xl font-semibold text-ink">{title}</h1>
+          <p className="text-muted mt-1">{subtitle}</p>
+        </div>
+        {action}
+      </div>
     </header>
   );
 }

@@ -1040,13 +1040,21 @@ function McpView({
   marketplaceItems: MarketplaceItem[];
   onMarketplaceSelect: (item: MarketplaceItem) => void;
 }) {
+  const { formatPath } = useAppConfig();
   const [servers, setServers] = useState<McpServer[]>([]);
+  const [mcpConfigPath, setMcpConfigPath] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
 
   useEffect(() => {
-    invoke<ClaudeSettings>("get_settings")
-      .then((settings) => setServers(settings.mcp_servers))
+    Promise.all([
+      invoke<ClaudeSettings>("get_settings"),
+      invoke<string>("get_mcp_config_path"),
+    ])
+      .then(([settings, path]) => {
+        setServers(settings.mcp_servers);
+        setMcpConfigPath(path);
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -1060,7 +1068,21 @@ function McpView({
 
   return (
     <ConfigPage>
-      <PageHeader title="MCP Servers" subtitle={`${servers.length} configured servers`} />
+      <PageHeader
+        title="MCP Servers"
+        subtitle={`${servers.length} configured servers`}
+        action={
+          mcpConfigPath && (
+            <button
+              onClick={() => invoke("open_in_editor", { path: mcpConfigPath })}
+              className="flex items-center gap-2 px-3 py-1.5 text-sm text-muted hover:text-ink hover:bg-card-alt rounded-lg transition-colors"
+              title={formatPath(mcpConfigPath)}
+            >
+              <span>Open .claude.json</span>
+            </button>
+          )
+        }
+      />
       <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
       {filtered.length > 0 && (
