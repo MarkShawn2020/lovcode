@@ -8,6 +8,7 @@ const { execSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 const packageJsonPath = path.join(root, 'package.json');
 const cargoTomlPath = path.join(root, 'src-tauri/Cargo.toml');
+const tauriConfPath = path.join(root, 'src-tauri/tauri.conf.json');
 
 // 读取当前版本
 const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
@@ -53,10 +54,16 @@ cargoToml = cargoToml.replace(/^version = "[^"]+"$/m, `version = "${newVersion}"
 fs.writeFileSync(cargoTomlPath, cargoToml);
 console.log(`✓ Cargo.toml: ${currentVersion} → ${newVersion}`);
 
+// 更新 tauri.conf.json
+const tauriConf = JSON.parse(fs.readFileSync(tauriConfPath, 'utf8'));
+tauriConf.version = newVersion;
+fs.writeFileSync(tauriConfPath, JSON.stringify(tauriConf, null, 2) + '\n');
+console.log(`✓ tauri.conf.json: ${currentVersion} → ${newVersion}`);
+
 // Git commit 和 tag
 if (!process.argv.includes('--no-git')) {
   try {
-    execSync('git add package.json src-tauri/Cargo.toml', { cwd: root, stdio: 'pipe' });
+    execSync('git add package.json src-tauri/Cargo.toml src-tauri/tauri.conf.json', { cwd: root, stdio: 'pipe' });
     execSync(`git commit -m "chore: bump version to ${newVersion}"`, { cwd: root, stdio: 'pipe' });
     execSync(`git tag v${newVersion}`, { cwd: root, stdio: 'pipe' });
     console.log(`✓ Git commit + tag v${newVersion}`);
