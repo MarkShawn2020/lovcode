@@ -1690,6 +1690,9 @@ function SessionList({
   const [selectMode, setSelectMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [exporting, setExporting] = useState(false);
+  const [hideEmptySessions, setHideEmptySessions] = usePersistedState("lovcode-hide-empty-sessions", false);
+
+  const filteredSessions = hideEmptySessions ? sessions.filter(s => s.message_count > 0) : sessions;
 
   useEffect(() => {
     Promise.all([
@@ -1718,7 +1721,7 @@ function SessionList({
     });
   };
 
-  const selectAll = () => setSelectedIds(new Set(sessions.map(s => s.id)));
+  const selectAll = () => setSelectedIds(new Set(filteredSessions.map(s => s.id)));
   const deselectAll = () => setSelectedIds(new Set());
 
   const exportSessions = async () => {
@@ -1840,9 +1843,13 @@ generator: "Lovcode"
       {/* Sessions Header */}
       <div className="mb-4 flex items-center justify-between">
         <p className="text-xs text-muted uppercase tracking-wide">
-          💬 Sessions ({sessions.length})
+          💬 Sessions ({hideEmptySessions ? `${filteredSessions.length}/${sessions.length}` : sessions.length})
         </p>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-2 text-xs text-muted cursor-pointer">
+            <Switch checked={hideEmptySessions} onCheckedChange={setHideEmptySessions} />
+            <span>Hide empty</span>
+          </label>
           <label className="flex items-center gap-2 text-xs text-muted cursor-pointer">
             <Switch checked={selectMode} onCheckedChange={(v) => { setSelectMode(v); if (!v) deselectAll(); }} />
             <span>Select</span>
@@ -1850,10 +1857,10 @@ generator: "Lovcode"
           {selectMode && (
             <>
               <button
-                onClick={selectedIds.size === sessions.length ? deselectAll : selectAll}
+                onClick={selectedIds.size === filteredSessions.length ? deselectAll : selectAll}
                 className="text-xs px-2 py-1 rounded bg-card-alt hover:bg-border text-muted hover:text-ink transition-colors"
               >
-                {selectedIds.size === sessions.length ? "Deselect All" : "Select All"}
+                {selectedIds.size === filteredSessions.length ? "Deselect All" : "Select All"}
               </button>
               {selectedIds.size > 0 && (
                 <button
@@ -1870,7 +1877,7 @@ generator: "Lovcode"
       </div>
 
       <div className="space-y-3">
-        {sessions.map((session) => {
+        {filteredSessions.map((session) => {
           const isSelected = selectedIds.has(session.id);
           return (
             <div
