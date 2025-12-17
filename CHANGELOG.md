@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.2
+
+### Patch Changes
+
+- 8103989: fix: sync Tauri version from package.json to ensure consistent artifact naming
+
 ## 0.5.1
 
 ### Patch Changes
