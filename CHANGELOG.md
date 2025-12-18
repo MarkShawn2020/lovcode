@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1
+
+### Patch Changes
+
+- fix: add Cargo.toml version sync for correct binary versioning
+
 ## 0.6.0
 
 ### Minor Changes
