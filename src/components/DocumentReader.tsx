@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { ChevronLeft, ChevronDown, PanelLeftClose, PanelLeft, PanelRightClose, PanelRight } from "lucide-react";
 import { startCase } from "lodash-es";
 
@@ -497,11 +498,13 @@ function DocumentContent({
           prose-ul:my-4 prose-ol:my-4 prose-li:my-1
           prose-hr:border-border
           prose-img:rounded-xl prose-img:shadow-md
-          prose-table:text-sm
-          prose-th:bg-card-alt prose-th:px-4 prose-th:py-2
-          prose-td:px-4 prose-td:py-2 prose-td:border-border"
+          prose-table:w-full prose-table:border-collapse prose-table:border prose-table:border-border prose-table:rounded-lg prose-table:overflow-hidden prose-table:text-sm
+          prose-thead:bg-card-alt
+          prose-th:px-4 prose-th:py-2.5 prose-th:text-left prose-th:font-semibold prose-th:border-b prose-th:border-border
+          prose-td:px-4 prose-td:py-2.5 prose-td:border-b prose-td:border-border
+          prose-tr:even:bg-card-alt/30"
       >
-        <Markdown components={components}>
+        <Markdown remarkPlugins={[remarkGfm]} components={components}>
           {content}
         </Markdown>
       </div>
