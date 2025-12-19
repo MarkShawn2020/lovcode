@@ -260,6 +260,16 @@ interface TemplatesCatalog {
 
 type TemplateCategory = "settings" | "commands" | "mcps" | "skills" | "hooks" | "agents" | "output-styles";
 
+const TEMPLATE_CATEGORIES: { key: TemplateCategory; label: string; icon: string }[] = [
+  { key: "settings", label: "Configuration", icon: "⚙️" },
+  { key: "commands", label: "Commands", icon: "⚡" },
+  { key: "mcps", label: "MCPs", icon: "🔌" },
+  { key: "skills", label: "Skills", icon: "🎯" },
+  { key: "hooks", label: "Hooks", icon: "🪝" },
+  { key: "agents", label: "Sub Agents", icon: "🤖" },
+  { key: "output-styles", label: "Output Styles", icon: "🎨" },
+];
+
 // ============================================================================
 // View State
 // ============================================================================
@@ -458,7 +468,7 @@ function App() {
         navigate({ type: "kb-bookmarks" });
         break;
       case "marketplace":
-        navigate({ type: "marketplace" });
+        navigate({ type: "marketplace", category: marketplaceCategory });
         break;
       default:
         navigate({ type: "feature-todo", feature });
@@ -521,7 +531,7 @@ function App() {
                   <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
                 </div>
               </CollapsibleTrigger>
-              <CollapsibleBody className="pl-4">
+              <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
                 {FEATURES.filter(f => f.group === "knowledge").map((feature) => (
                   <FeatureButton
                     key={feature.type}
@@ -529,6 +539,7 @@ function App() {
                     active={currentFeature === feature.type}
                     onClick={() => handleFeatureClick(feature.type)}
                     statusIndicator={feature.type === "kb-distill" ? (distillWatchEnabled ? "on" : "off") : undefined}
+                    compact
                   />
                 ))}
               </CollapsibleBody>
@@ -537,14 +548,39 @@ function App() {
 
           {/* Marketplace Group */}
           <div className="px-2 mb-2">
-            {FEATURES.filter(f => f.group === "marketplace").map((feature) => (
-              <FeatureButton
-                key={feature.type}
-                feature={feature}
-                active={currentFeature === feature.type}
-                onClick={() => handleFeatureClick(feature.type)}
-              />
-            ))}
+            <Collapsible defaultOpen={view.type === "marketplace" || view.type === "template-detail"}>
+              <CollapsibleTrigger className="w-full group">
+                <div className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                  view.type === "marketplace" || view.type === "template-detail"
+                    ? "text-primary"
+                    : "text-ink hover:bg-card-alt"
+                }`}>
+                  <span className="text-lg">🛒</span>
+                  <span className="text-sm flex-1">Marketplace</span>
+                  <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+                </div>
+              </CollapsibleTrigger>
+              <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
+                {TEMPLATE_CATEGORIES.map((cat) => {
+                  const isActive = (view.type === "marketplace" && view.category === cat.key) ||
+                    (view.type === "template-detail" && view.category === cat.key);
+                  return (
+                    <button
+                      key={cat.key}
+                      onClick={() => navigate({ type: "marketplace", category: cat.key })}
+                      className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-left transition-colors ${
+                        isActive
+                          ? "bg-primary/10 text-primary"
+                          : "text-ink hover:bg-card-alt"
+                      }`}
+                    >
+                      <span className="text-lg">{cat.icon}</span>
+                      <span className="text-sm">{cat.label}</span>
+                    </button>
+                  );
+                })}
+              </CollapsibleBody>
+            </Collapsible>
           </div>
 
           {/* Config Group */}
@@ -859,10 +895,6 @@ function App() {
               setMarketplaceCategory(category);
               navigate({ type: "template-detail", template, category });
             }}
-            onCategoryChange={(category) => {
-              setMarketplaceCategory(category);
-              navigate({ type: "marketplace", category });
-            }}
           />
         )}
 
@@ -1038,16 +1070,18 @@ function FeatureButton({
   active,
   onClick,
   statusIndicator,
+  compact,
 }: {
   feature: FeatureConfig;
   active: boolean;
   onClick: () => void;
   statusIndicator?: "on" | "off";
+  compact?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+      className={`w-full flex items-center gap-3 px-3 ${compact ? "py-1.5" : "py-2"} rounded-lg text-left transition-colors ${
         active
           ? "bg-primary/10 text-primary"
           : feature.available
@@ -2060,25 +2094,12 @@ function SettingsView({
 // Marketplace Feature
 // ============================================================================
 
-// Same order as sidebar Configuration group
-const TEMPLATE_CATEGORIES: { key: TemplateCategory; label: string; icon: string }[] = [
-  { key: "settings", label: "Configuration", icon: "⚙️" },
-  { key: "commands", label: "Commands", icon: "⚡" },
-  { key: "mcps", label: "MCPs", icon: "🔌" },
-  { key: "skills", label: "Skills", icon: "🎯" },
-  { key: "hooks", label: "Hooks", icon: "🪝" },
-  { key: "agents", label: "Sub Agents", icon: "🤖" },
-  { key: "output-styles", label: "Output Styles", icon: "🎨" },
-];
-
 function MarketplaceView({
   initialCategory,
   onSelectTemplate,
-  onCategoryChange,
 }: {
   initialCategory?: TemplateCategory;
   onSelectTemplate: (template: TemplateComponent, category: TemplateCategory) => void;
-  onCategoryChange?: (category: TemplateCategory) => void;
 }) {
   const [catalog, setCatalog] = useState<TemplatesCatalog | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2115,34 +2136,17 @@ function MarketplaceView({
   );
   const sorted = [...filtered].sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
 
+  const categoryInfo = TEMPLATE_CATEGORIES.find(c => c.key === activeCategory);
+
   return (
     <ConfigPage>
-      <PageHeader title="Marketplace" subtitle="Browse and install Claude Code templates" />
-
-      {/* Category Tabs */}
-      <div className="flex flex-wrap gap-2 mb-6">
-        {TEMPLATE_CATEGORIES.map((cat) => {
-          const count = catalog[cat.key]?.length || 0;
-          return (
-            <button
-              key={cat.key}
-              onClick={() => onCategoryChange?.(cat.key)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm whitespace-nowrap transition-colors ${
-                activeCategory === cat.key
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-card-alt text-muted-foreground hover:text-ink"
-              }`}
-            >
-              <span>{cat.icon}</span>
-              <span>{cat.label}</span>
-              <span className="opacity-60">({count})</span>
-            </button>
-          );
-        })}
-      </div>
+      <PageHeader
+        title={categoryInfo?.label || "Marketplace"}
+        subtitle={`Browse and install ${categoryInfo?.label.toLowerCase()} templates`}
+      />
 
       <SearchInput
-        placeholder={`Search ${TEMPLATE_CATEGORIES.find(c => c.key === activeCategory)?.label.toLowerCase()}...`}
+        placeholder={`Search ${categoryInfo?.label.toLowerCase()}...`}
         value={search}
         onChange={setSearch}
       />
