@@ -8,7 +8,69 @@ use tauri::{Emitter, Manager};
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::{self, Value as TantivyValue, *};
+use tantivy::tokenizer::{LowerCaser, TextAnalyzer, Token, TokenStream, Tokenizer};
 use tantivy::{doc, Index, IndexWriter, ReloadPolicy};
+use jieba_rs::Jieba;
+use std::sync::LazyLock;
+
+// Global jieba instance for Chinese tokenization
+static JIEBA: LazyLock<Jieba> = LazyLock::new(|| Jieba::new());
+
+// Custom tokenizer for Chinese + English mixed content
+#[derive(Clone)]
+struct JiebaTokenizer;
+
+impl Tokenizer for JiebaTokenizer {
+    type TokenStream<'a> = JiebaTokenStream;
+
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        let words = JIEBA.cut(text, true);
+        let mut tokens = Vec::new();
+        let mut offset = 0;
+
+        for word in words {
+            let word_str = word.trim();
+            if !word_str.is_empty() {
+                let start = text[offset..].find(word).map(|i| offset + i).unwrap_or(offset);
+                let end = start + word.len();
+                tokens.push(Token {
+                    offset_from: start,
+                    offset_to: end,
+                    position: tokens.len(),
+                    text: word_str.to_string(),
+                    position_length: 1,
+                });
+                offset = end;
+            }
+        }
+
+        JiebaTokenStream { tokens, index: 0 }
+    }
+}
+
+struct JiebaTokenStream {
+    tokens: Vec<Token>,
+    index: usize,
+}
+
+impl TokenStream for JiebaTokenStream {
+    fn advance(&mut self) -> bool {
+        if self.index < self.tokens.len() {
+            self.index += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn token(&self) -> &Token {
+        &self.tokens[self.index - 1]
+    }
+
+    fn token_mut(&mut self) -> &mut Token {
+        &mut self.tokens[self.index - 1]
+    }
+}
 
 // Global search index state
 static SEARCH_INDEX: Mutex<Option<SearchIndex>> = Mutex::new(None);
@@ -25,17 +87,36 @@ fn get_index_dir() -> PathBuf {
         .join("search-index")
 }
 
+const JIEBA_TOKENIZER_NAME: &str = "jieba";
+
 fn create_schema() -> Schema {
     let mut schema_builder = Schema::builder();
+
+    // Use custom jieba tokenizer for content fields to support Chinese
+    let text_options = TextOptions::default()
+        .set_indexing_options(
+            TextFieldIndexing::default()
+                .set_tokenizer(JIEBA_TOKENIZER_NAME)
+                .set_index_option(schema::IndexRecordOption::WithFreqsAndPositions)
+        )
+        .set_stored();
+
     schema_builder.add_text_field("uuid", STRING | STORED);
-    schema_builder.add_text_field("content", TEXT | STORED);
+    schema_builder.add_text_field("content", text_options.clone());
     schema_builder.add_text_field("role", STRING | STORED);
     schema_builder.add_text_field("project_id", STRING | STORED);
     schema_builder.add_text_field("project_path", STRING | STORED);
     schema_builder.add_text_field("session_id", STRING | STORED);
-    schema_builder.add_text_field("session_summary", TEXT | STORED);
+    schema_builder.add_text_field("session_summary", text_options);
     schema_builder.add_text_field("timestamp", STRING | STORED);
     schema_builder.build()
+}
+
+fn register_jieba_tokenizer(index: &Index) {
+    let tokenizer = TextAnalyzer::builder(JiebaTokenizer)
+        .filter(LowerCaser)
+        .build();
+    index.tokenizers().register(JIEBA_TOKENIZER_NAME, tokenizer);
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -551,6 +632,9 @@ fn build_search_index() -> Result<usize, String> {
     let schema = create_schema();
     let index = Index::create_in_dir(&index_dir, schema.clone()).map_err(|e| e.to_string())?;
 
+    // Register jieba tokenizer for Chinese support
+    register_jieba_tokenizer(&index);
+
     let mut index_writer: IndexWriter = index
         .writer(50_000_000) // 50MB heap
         .map_err(|e| e.to_string())?;
@@ -660,6 +744,8 @@ fn search_chats(query: String, limit: Option<usize>) -> Result<Vec<SearchResult>
 
         let schema = create_schema();
         let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
+        // Register jieba tokenizer for Chinese support
+        register_jieba_tokenizer(&index);
         *guard = Some(SearchIndex { index, schema });
     }
 
