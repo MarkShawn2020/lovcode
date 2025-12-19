@@ -14,10 +14,21 @@ use jieba_rs::Jieba;
 use std::sync::LazyLock;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event};
 use std::sync::mpsc::channel;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 // Global jieba instance for Chinese tokenization
 static JIEBA: LazyLock<Jieba> = LazyLock::new(|| Jieba::new());
+
+// Cache for command stats with incremental update support
+// (stats, scanned_files with their mtime)
+static COMMAND_STATS_CACHE: LazyLock<Mutex<CommandStatsCache>> =
+    LazyLock::new(|| Mutex::new(CommandStatsCache::default()));
+
+#[derive(Default)]
+struct CommandStatsCache {
+    stats: HashMap<String, usize>,
+    scanned: HashMap<String, u64>, // path -> file_size (for incremental read)
+}
 
 // Custom tokenizer for Chinese + English mixed content
 #[derive(Clone)]
@@ -1611,51 +1622,83 @@ pub struct CommandStats {
 }
 
 #[tauri::command]
-fn get_command_stats() -> Result<HashMap<String, usize>, String> {
-    let projects_dir = get_claude_dir().join("projects");
-    let mut stats: HashMap<String, usize> = HashMap::new();
+async fn get_command_stats() -> Result<HashMap<String, usize>, String> {
+    // Get current cache state
+    let (cached_stats, cached_scanned) = {
+        let cache = COMMAND_STATS_CACHE.lock().unwrap();
+        (cache.stats.clone(), cache.scanned.clone())
+    };
 
-    if !projects_dir.exists() {
-        return Ok(stats);
-    }
+    // Incremental update in background
+    let (new_stats, new_scanned) = tauri::async_runtime::spawn_blocking(move || {
+        let projects_dir = get_claude_dir().join("projects");
+        let mut stats = cached_stats;
+        let mut scanned = cached_scanned;
 
-    // Regex to extract command names from session content
-    let command_pattern = regex::Regex::new(r"<command-name>(/[^<]+)</command-name>")
-        .map_err(|e| e.to_string())?;
-
-    // Iterate all project directories
-    for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
-        let project_entry = project_entry.map_err(|e| e.to_string())?;
-        let project_path = project_entry.path();
-
-        if !project_path.is_dir() {
-            continue;
+        if !projects_dir.exists() {
+            return Ok::<_, String>((stats, scanned));
         }
 
-        // Iterate all session files in project
-        for session_entry in fs::read_dir(&project_path).map_err(|e| e.to_string())? {
-            let session_entry = session_entry.map_err(|e| e.to_string())?;
-            let session_path = session_entry.path();
-            let name = session_path.file_name().unwrap().to_string_lossy().to_string();
+        let command_pattern = regex::Regex::new(r"<command-name>(/[^<]+)</command-name>")
+            .map_err(|e| e.to_string())?;
 
-            // Skip non-session files
-            if !name.ends_with(".jsonl") || name.starts_with("agent-") {
+        for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
+            let project_entry = project_entry.map_err(|e| e.to_string())?;
+            let project_path = project_entry.path();
+
+            if !project_path.is_dir() {
                 continue;
             }
 
-            // Read and parse session file
-            if let Ok(content) = fs::read_to_string(&session_path) {
-                for cap in command_pattern.captures_iter(&content) {
-                    if let Some(cmd_name) = cap.get(1) {
-                        let cmd = cmd_name.as_str().to_string();
-                        *stats.entry(cmd).or_insert(0) += 1;
+            for session_entry in fs::read_dir(&project_path).map_err(|e| e.to_string())? {
+                let session_entry = session_entry.map_err(|e| e.to_string())?;
+                let session_path = session_entry.path();
+                let name = session_path.file_name().unwrap().to_string_lossy().to_string();
+
+                if !name.ends_with(".jsonl") || name.starts_with("agent-") {
+                    continue;
+                }
+
+                let path_str = session_path.to_string_lossy().to_string();
+                let file_size = session_path.metadata().map(|m| m.len()).unwrap_or(0);
+                let prev_size = scanned.get(&path_str).copied().unwrap_or(0);
+
+                // Skip if no new content
+                if file_size <= prev_size {
+                    continue;
+                }
+
+                // Read only new content (from prev_size offset)
+                if let Ok(mut file) = std::fs::File::open(&session_path) {
+                    use std::io::{Read, Seek, SeekFrom};
+                    if file.seek(SeekFrom::Start(prev_size)).is_ok() {
+                        let mut new_content = String::new();
+                        if file.read_to_string(&mut new_content).is_ok() {
+                            for cap in command_pattern.captures_iter(&new_content) {
+                                if let Some(cmd_name) = cap.get(1) {
+                                    *stats.entry(cmd_name.as_str().to_string()).or_insert(0) += 1;
+                                }
+                            }
+                        }
                     }
                 }
+                scanned.insert(path_str, file_size);
             }
         }
+
+        Ok((stats, scanned))
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Update cache
+    {
+        let mut cache = COMMAND_STATS_CACHE.lock().unwrap();
+        cache.stats = new_stats.clone();
+        cache.scanned = new_scanned;
     }
 
-    Ok(stats)
+    Ok(new_stats)
 }
 
 // ============================================================================

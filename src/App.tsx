@@ -1569,16 +1569,18 @@ function CommandsView({
   const { search, setSearch, filtered } = useSearch(commands, ["name", "description"]);
 
   useEffect(() => {
-    Promise.all([
-      invoke<LocalCommand[]>("list_local_commands"),
-      invoke<Record<string, number>>("get_command_stats")
-    ])
-      .then(([cmds, stats]) => {
-        setCommands(cmds);
-        setCommandStats(stats);
-      })
+    // Load commands first for instant display
+    invoke<LocalCommand[]>("list_local_commands")
+      .then(setCommands)
       .finally(() => setLoading(false));
   }, []);
+
+  // Load stats after initial render to avoid blocking UI
+  useEffect(() => {
+    if (!loading) {
+      invoke<Record<string, number>>("get_command_stats").then(setCommandStats);
+    }
+  }, [loading]);
 
   // Sort filtered commands
   const sorted = [...filtered].sort((a, b) => {
