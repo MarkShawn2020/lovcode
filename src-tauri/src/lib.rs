@@ -285,133 +285,72 @@ fn try_merge_segments(prefix: &str, rest: &str) -> Option<String> {
 }
 
 #[tauri::command]
-fn list_projects() -> Result<Vec<Project>, String> {
-    let projects_dir = get_claude_dir().join("projects");
+async fn list_projects() -> Result<Vec<Project>, String> {
+    // Run blocking IO on a separate thread to avoid blocking the main thread
+    tauri::async_runtime::spawn_blocking(|| {
+        let projects_dir = get_claude_dir().join("projects");
 
-    if !projects_dir.exists() {
-        return Ok(vec![]);
-    }
+        if !projects_dir.exists() {
+            return Ok(vec![]);
+        }
 
-    let mut projects = Vec::new();
+        let mut projects = Vec::new();
 
-    for entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+        for entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
 
-        if path.is_dir() {
-            let id = path.file_name().unwrap().to_string_lossy().to_string();
-            let display_path = decode_project_path(&id);
+            if path.is_dir() {
+                let id = path.file_name().unwrap().to_string_lossy().to_string();
+                let display_path = decode_project_path(&id);
 
-            let mut session_count = 0;
-            let mut last_active: u64 = 0;
+                let mut session_count = 0;
+                let mut last_active: u64 = 0;
 
-            if let Ok(entries) = fs::read_dir(&path) {
-                for entry in entries.filter_map(|e| e.ok()) {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if name.ends_with(".jsonl") && !name.starts_with("agent-") {
-                        session_count += 1;
-                        if let Ok(meta) = entry.metadata() {
-                            if let Ok(modified) = meta.modified() {
-                                if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
-                                    last_active = last_active.max(duration.as_secs());
+                if let Ok(entries) = fs::read_dir(&path) {
+                    for entry in entries.filter_map(|e| e.ok()) {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.ends_with(".jsonl") && !name.starts_with("agent-") {
+                            session_count += 1;
+                            if let Ok(meta) = entry.metadata() {
+                                if let Ok(modified) = meta.modified() {
+                                    if let Ok(duration) = modified.duration_since(std::time::UNIX_EPOCH) {
+                                        last_active = last_active.max(duration.as_secs());
+                                    }
                                 }
                             }
                         }
                     }
                 }
+
+                projects.push(Project {
+                    id: id.clone(),
+                    path: display_path,
+                    session_count,
+                    last_active,
+                });
             }
-
-            projects.push(Project {
-                id: id.clone(),
-                path: display_path,
-                session_count,
-                last_active,
-            });
         }
-    }
 
-    projects.sort_by(|a, b| b.last_active.cmp(&a.last_active));
-    Ok(projects)
+        projects.sort_by(|a, b| b.last_active.cmp(&a.last_active));
+        Ok(projects)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_sessions(project_id: String) -> Result<Vec<Session>, String> {
-    let project_dir = get_claude_dir().join("projects").join(&project_id);
+async fn list_sessions(project_id: String) -> Result<Vec<Session>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let project_dir = get_claude_dir().join("projects").join(&project_id);
 
-    if !project_dir.exists() {
-        return Err("Project not found".to_string());
-    }
-
-    let mut sessions = Vec::new();
-
-    for entry in fs::read_dir(&project_dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        let name = path.file_name().unwrap().to_string_lossy().to_string();
-
-        if name.ends_with(".jsonl") && !name.starts_with("agent-") {
-            let session_id = name.trim_end_matches(".jsonl").to_string();
-            let content = fs::read_to_string(&path).unwrap_or_default();
-
-            let mut summary = None;
-            let mut message_count = 0;
-
-            for line in content.lines() {
-                if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
-                    if parsed.line_type.as_deref() == Some("summary") {
-                        summary = parsed.summary;
-                    }
-                    if parsed.line_type.as_deref() == Some("user") ||
-                       parsed.line_type.as_deref() == Some("assistant") {
-                        message_count += 1;
-                    }
-                }
-            }
-
-            let metadata = fs::metadata(&path).ok();
-            let last_modified = metadata
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-
-            sessions.push(Session {
-                id: session_id,
-                project_id: project_id.clone(),
-                project_path: None,
-                summary,
-                message_count,
-                last_modified,
-            });
-        }
-    }
-
-    sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-    Ok(sessions)
-}
-
-#[tauri::command]
-fn list_all_sessions() -> Result<Vec<Session>, String> {
-    let projects_dir = get_claude_dir().join("projects");
-
-    if !projects_dir.exists() {
-        return Ok(vec![]);
-    }
-
-    let mut all_sessions = Vec::new();
-
-    for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
-        let project_entry = project_entry.map_err(|e| e.to_string())?;
-        let project_path = project_entry.path();
-
-        if !project_path.is_dir() {
-            continue;
+        if !project_dir.exists() {
+            return Err("Project not found".to_string());
         }
 
-        let project_id = project_path.file_name().unwrap().to_string_lossy().to_string();
-        let display_path = decode_project_path(&project_id);
+        let mut sessions = Vec::new();
 
-        for entry in fs::read_dir(&project_path).map_err(|e| e.to_string())? {
+        for entry in fs::read_dir(&project_dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
             let name = path.file_name().unwrap().to_string_lossy().to_string();
@@ -442,101 +381,235 @@ fn list_all_sessions() -> Result<Vec<Session>, String> {
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
 
-                all_sessions.push(Session {
+                sessions.push(Session {
                     id: session_id,
                     project_id: project_id.clone(),
-                    project_path: Some(display_path.clone()),
+                    project_path: None,
                     summary,
                     message_count,
                     last_modified,
                 });
             }
         }
-    }
 
-    all_sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
-    Ok(all_sessions)
+        sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+        Ok(sessions)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
-fn list_all_chats(limit: Option<usize>) -> Result<ChatsResponse, String> {
-    let projects_dir = get_claude_dir().join("projects");
-    let max_messages = limit.unwrap_or(500);
+async fn list_all_sessions() -> Result<Vec<Session>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let projects_dir = get_claude_dir().join("projects");
 
-    if !projects_dir.exists() {
-        return Ok(ChatsResponse { items: vec![], total: 0 });
-    }
-
-    // Collect all session files with metadata
-    let mut session_files: Vec<(PathBuf, String, String, u64)> = Vec::new();
-
-    for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
-        let project_entry = project_entry.map_err(|e| e.to_string())?;
-        let project_path = project_entry.path();
-
-        if !project_path.is_dir() {
-            continue;
+        if !projects_dir.exists() {
+            return Ok(vec![]);
         }
 
-        let project_id = project_path.file_name().unwrap().to_string_lossy().to_string();
-        let display_path = decode_project_path(&project_id);
+        let mut all_sessions = Vec::new();
 
-        for entry in fs::read_dir(&project_path).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            let name = path.file_name().unwrap().to_string_lossy().to_string();
+        for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
+            let project_entry = project_entry.map_err(|e| e.to_string())?;
+            let project_path = project_entry.path();
 
-            if name.ends_with(".jsonl") && !name.starts_with("agent-") {
-                let last_modified = entry.metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
-                    .unwrap_or(0);
+            if !project_path.is_dir() {
+                continue;
+            }
 
-                session_files.push((path, project_id.clone(), display_path.clone(), last_modified));
+            let project_id = project_path.file_name().unwrap().to_string_lossy().to_string();
+            let display_path = decode_project_path(&project_id);
+
+            for entry in fs::read_dir(&project_path).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+
+                if name.ends_with(".jsonl") && !name.starts_with("agent-") {
+                    let session_id = name.trim_end_matches(".jsonl").to_string();
+                    let content = fs::read_to_string(&path).unwrap_or_default();
+
+                    let mut summary = None;
+                    let mut message_count = 0;
+
+                    for line in content.lines() {
+                        if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+                            if parsed.line_type.as_deref() == Some("summary") {
+                                summary = parsed.summary;
+                            }
+                            if parsed.line_type.as_deref() == Some("user") ||
+                               parsed.line_type.as_deref() == Some("assistant") {
+                                message_count += 1;
+                            }
+                        }
+                    }
+
+                    let metadata = fs::metadata(&path).ok();
+                    let last_modified = metadata
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+
+                    all_sessions.push(Session {
+                        id: session_id,
+                        project_id: project_id.clone(),
+                        project_path: Some(display_path.clone()),
+                        summary,
+                        message_count,
+                        last_modified,
+                    });
+                }
             }
         }
-    }
 
-    // Sort by last modified (newest first)
-    session_files.sort_by(|a, b| b.3.cmp(&a.3));
+        all_sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+        Ok(all_sessions)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 
-    let mut all_chats: Vec<ChatMessage> = Vec::new();
+#[tauri::command]
+async fn list_all_chats(limit: Option<usize>) -> Result<ChatsResponse, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let projects_dir = get_claude_dir().join("projects");
+        let max_messages = limit.unwrap_or(500);
 
-    // Process all sessions to get total count
-    for (path, project_id, project_path, _) in session_files {
-        let session_id = path.file_stem().unwrap().to_string_lossy().to_string();
-        let content = fs::read_to_string(&path).unwrap_or_default();
+        if !projects_dir.exists() {
+            return Ok(ChatsResponse { items: vec![], total: 0 });
+        }
 
-        let mut session_summary: Option<String> = None;
-        let mut session_messages: Vec<ChatMessage> = Vec::new();
+        // Collect all session files with metadata
+        let mut session_files: Vec<(PathBuf, String, String, u64)> = Vec::new();
+
+        for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
+            let project_entry = project_entry.map_err(|e| e.to_string())?;
+            let project_path = project_entry.path();
+
+            if !project_path.is_dir() {
+                continue;
+            }
+
+            let project_id = project_path.file_name().unwrap().to_string_lossy().to_string();
+            let display_path = decode_project_path(&project_id);
+
+            for entry in fs::read_dir(&project_path).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+
+                if name.ends_with(".jsonl") && !name.starts_with("agent-") {
+                    let last_modified = entry.metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+
+                    session_files.push((path, project_id.clone(), display_path.clone(), last_modified));
+                }
+            }
+        }
+
+        // Sort by last modified (newest first)
+        session_files.sort_by(|a, b| b.3.cmp(&a.3));
+
+        let mut all_chats: Vec<ChatMessage> = Vec::new();
+
+        // Process all sessions to get total count
+        for (path, project_id, project_path, _) in session_files {
+            let session_id = path.file_stem().unwrap().to_string_lossy().to_string();
+            let content = fs::read_to_string(&path).unwrap_or_default();
+
+            let mut session_summary: Option<String> = None;
+            let mut session_messages: Vec<ChatMessage> = Vec::new();
+
+            for line in content.lines() {
+                if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+                    let line_type = parsed.line_type.as_deref();
+
+                    if line_type == Some("summary") {
+                        session_summary = parsed.summary;
+                    }
+
+                    if line_type == Some("user") || line_type == Some("assistant") {
+                        if let Some(msg) = &parsed.message {
+                            let role = msg.role.clone().unwrap_or_default();
+                            let (text_content, _is_tool) = extract_content_with_meta(&msg.content);
+                            let is_meta = parsed.is_meta.unwrap_or(false);
+
+                            // Skip meta messages and empty content
+                            if !is_meta && !text_content.is_empty() {
+                                session_messages.push(ChatMessage {
+                                    uuid: parsed.uuid.unwrap_or_default(),
+                                    role,
+                                    content: text_content,
+                                    timestamp: parsed.timestamp.unwrap_or_default(),
+                                    project_id: project_id.clone(),
+                                    project_path: project_path.clone(),
+                                    session_id: session_id.clone(),
+                                    session_summary: None, // Will be filled later
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Update session_summary for all messages
+            for msg in &mut session_messages {
+                msg.session_summary = session_summary.clone();
+            }
+
+            all_chats.extend(session_messages);
+        }
+
+        // Sort all by timestamp (newest first)
+        all_chats.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+
+        let total = all_chats.len();
+        all_chats.truncate(max_messages);
+
+        Ok(ChatsResponse { items: all_chats, total })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn get_session_messages(project_id: String, session_id: String) -> Result<Vec<Message>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let session_path = get_claude_dir()
+            .join("projects")
+            .join(&project_id)
+            .join(format!("{}.jsonl", session_id));
+
+        if !session_path.exists() {
+            return Err("Session not found".to_string());
+        }
+
+        let content = fs::read_to_string(&session_path).map_err(|e| e.to_string())?;
+        let mut messages = Vec::new();
 
         for line in content.lines() {
             if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
                 let line_type = parsed.line_type.as_deref();
-
-                if line_type == Some("summary") {
-                    session_summary = parsed.summary;
-                }
-
                 if line_type == Some("user") || line_type == Some("assistant") {
                     if let Some(msg) = &parsed.message {
                         let role = msg.role.clone().unwrap_or_default();
-                        let (text_content, _is_tool) = extract_content_with_meta(&msg.content);
+                        let (content, is_tool) = extract_content_with_meta(&msg.content);
                         let is_meta = parsed.is_meta.unwrap_or(false);
 
-                        // Skip meta messages and empty content
-                        if !is_meta && !text_content.is_empty() {
-                            session_messages.push(ChatMessage {
+                        if !content.is_empty() {
+                            messages.push(Message {
                                 uuid: parsed.uuid.unwrap_or_default(),
                                 role,
-                                content: text_content,
+                                content,
                                 timestamp: parsed.timestamp.unwrap_or_default(),
-                                project_id: project_id.clone(),
-                                project_path: project_path.clone(),
-                                session_id: session_id.clone(),
-                                session_summary: None, // Will be filled later
+                                is_meta,
+                                is_tool,
                             });
                         }
                     }
@@ -544,62 +617,10 @@ fn list_all_chats(limit: Option<usize>) -> Result<ChatsResponse, String> {
             }
         }
 
-        // Update session_summary for all messages
-        for msg in &mut session_messages {
-            msg.session_summary = session_summary.clone();
-        }
-
-        all_chats.extend(session_messages);
-    }
-
-    // Sort all by timestamp (newest first)
-    all_chats.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-
-    let total = all_chats.len();
-    all_chats.truncate(max_messages);
-
-    Ok(ChatsResponse { items: all_chats, total })
-}
-
-#[tauri::command]
-fn get_session_messages(project_id: String, session_id: String) -> Result<Vec<Message>, String> {
-    let session_path = get_claude_dir()
-        .join("projects")
-        .join(&project_id)
-        .join(format!("{}.jsonl", session_id));
-
-    if !session_path.exists() {
-        return Err("Session not found".to_string());
-    }
-
-    let content = fs::read_to_string(&session_path).map_err(|e| e.to_string())?;
-    let mut messages = Vec::new();
-
-    for line in content.lines() {
-        if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
-            let line_type = parsed.line_type.as_deref();
-            if line_type == Some("user") || line_type == Some("assistant") {
-                if let Some(msg) = &parsed.message {
-                    let role = msg.role.clone().unwrap_or_default();
-                    let (content, is_tool) = extract_content_with_meta(&msg.content);
-                    let is_meta = parsed.is_meta.unwrap_or(false);
-
-                    if !content.is_empty() {
-                        messages.push(Message {
-                            uuid: parsed.uuid.unwrap_or_default(),
-                            role,
-                            content,
-                            timestamp: parsed.timestamp.unwrap_or_default(),
-                            is_meta,
-                            is_tool,
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(messages)
+        Ok(messages)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ============================================================================
@@ -620,97 +641,99 @@ pub struct SearchResult {
 }
 
 #[tauri::command]
-fn build_search_index() -> Result<usize, String> {
-    let index_dir = get_index_dir();
+async fn build_search_index() -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let index_dir = get_index_dir();
 
-    // Remove old index if exists
-    if index_dir.exists() {
-        fs::remove_dir_all(&index_dir).map_err(|e| e.to_string())?;
-    }
-    fs::create_dir_all(&index_dir).map_err(|e| e.to_string())?;
+        // Remove old index if exists
+        if index_dir.exists() {
+            fs::remove_dir_all(&index_dir).map_err(|e| e.to_string())?;
+        }
+        fs::create_dir_all(&index_dir).map_err(|e| e.to_string())?;
 
-    let schema = create_schema();
-    let index = Index::create_in_dir(&index_dir, schema.clone()).map_err(|e| e.to_string())?;
+        let schema = create_schema();
+        let index = Index::create_in_dir(&index_dir, schema.clone()).map_err(|e| e.to_string())?;
 
-    // Register jieba tokenizer for Chinese support
-    register_jieba_tokenizer(&index);
+        // Register jieba tokenizer for Chinese support
+        register_jieba_tokenizer(&index);
 
-    let mut index_writer: IndexWriter = index
-        .writer(50_000_000) // 50MB heap
-        .map_err(|e| e.to_string())?;
+        let mut index_writer: IndexWriter = index
+            .writer(50_000_000) // 50MB heap
+            .map_err(|e| e.to_string())?;
 
-    let uuid_field = schema.get_field("uuid").unwrap();
-    let content_field = schema.get_field("content").unwrap();
-    let role_field = schema.get_field("role").unwrap();
-    let project_id_field = schema.get_field("project_id").unwrap();
-    let project_path_field = schema.get_field("project_path").unwrap();
-    let session_id_field = schema.get_field("session_id").unwrap();
-    let session_summary_field = schema.get_field("session_summary").unwrap();
-    let timestamp_field = schema.get_field("timestamp").unwrap();
+        let uuid_field = schema.get_field("uuid").unwrap();
+        let content_field = schema.get_field("content").unwrap();
+        let role_field = schema.get_field("role").unwrap();
+        let project_id_field = schema.get_field("project_id").unwrap();
+        let project_path_field = schema.get_field("project_path").unwrap();
+        let session_id_field = schema.get_field("session_id").unwrap();
+        let session_summary_field = schema.get_field("session_summary").unwrap();
+        let timestamp_field = schema.get_field("timestamp").unwrap();
 
-    let projects_dir = get_claude_dir().join("projects");
-    let mut indexed_count = 0;
+        let projects_dir = get_claude_dir().join("projects");
+        let mut indexed_count = 0;
 
-    if !projects_dir.exists() {
-        return Ok(0);
-    }
-
-    for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
-        let project_entry = project_entry.map_err(|e| e.to_string())?;
-        let project_path_buf = project_entry.path();
-
-        if !project_path_buf.is_dir() {
-            continue;
+        if !projects_dir.exists() {
+            return Ok(0);
         }
 
-        let project_id = project_path_buf.file_name().unwrap().to_string_lossy().to_string();
-        let display_path = decode_project_path(&project_id);
+        for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
+            let project_entry = project_entry.map_err(|e| e.to_string())?;
+            let project_path_buf = project_entry.path();
 
-        for entry in fs::read_dir(&project_path_buf).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            if !project_path_buf.is_dir() {
+                continue;
+            }
 
-            if name.ends_with(".jsonl") && !name.starts_with("agent-") {
-                let session_id = name.trim_end_matches(".jsonl").to_string();
-                let file_content = fs::read_to_string(&path).unwrap_or_default();
+            let project_id = project_path_buf.file_name().unwrap().to_string_lossy().to_string();
+            let display_path = decode_project_path(&project_id);
 
-                let mut session_summary: Option<String> = None;
+            for entry in fs::read_dir(&project_path_buf).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let path = entry.path();
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
 
-                // First pass: get summary
-                for line in file_content.lines() {
-                    if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
-                        if parsed.line_type.as_deref() == Some("summary") {
-                            session_summary = parsed.summary;
-                            break;
+                if name.ends_with(".jsonl") && !name.starts_with("agent-") {
+                    let session_id = name.trim_end_matches(".jsonl").to_string();
+                    let file_content = fs::read_to_string(&path).unwrap_or_default();
+
+                    let mut session_summary: Option<String> = None;
+
+                    // First pass: get summary
+                    for line in file_content.lines() {
+                        if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+                            if parsed.line_type.as_deref() == Some("summary") {
+                                session_summary = parsed.summary;
+                                break;
+                            }
                         }
                     }
-                }
 
-                // Second pass: index messages
-                for line in file_content.lines() {
-                    if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
-                        let line_type = parsed.line_type.as_deref();
+                    // Second pass: index messages
+                    for line in file_content.lines() {
+                        if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+                            let line_type = parsed.line_type.as_deref();
 
-                        if line_type == Some("user") || line_type == Some("assistant") {
-                            if let Some(msg) = &parsed.message {
-                                let role = msg.role.clone().unwrap_or_default();
-                                let (text_content, _) = extract_content_with_meta(&msg.content);
-                                let is_meta = parsed.is_meta.unwrap_or(false);
+                            if line_type == Some("user") || line_type == Some("assistant") {
+                                if let Some(msg) = &parsed.message {
+                                    let role = msg.role.clone().unwrap_or_default();
+                                    let (text_content, _) = extract_content_with_meta(&msg.content);
+                                    let is_meta = parsed.is_meta.unwrap_or(false);
 
-                                if !is_meta && !text_content.is_empty() {
-                                    index_writer.add_document(doc!(
-                                        uuid_field => parsed.uuid.clone().unwrap_or_default(),
-                                        content_field => text_content,
-                                        role_field => role,
-                                        project_id_field => project_id.clone(),
-                                        project_path_field => display_path.clone(),
-                                        session_id_field => session_id.clone(),
-                                        session_summary_field => session_summary.clone().unwrap_or_default(),
-                                        timestamp_field => parsed.timestamp.clone().unwrap_or_default(),
-                                    )).map_err(|e| e.to_string())?;
+                                    if !is_meta && !text_content.is_empty() {
+                                        index_writer.add_document(doc!(
+                                            uuid_field => parsed.uuid.clone().unwrap_or_default(),
+                                            content_field => text_content,
+                                            role_field => role,
+                                            project_id_field => project_id.clone(),
+                                            project_path_field => display_path.clone(),
+                                            session_id_field => session_id.clone(),
+                                            session_summary_field => session_summary.clone().unwrap_or_default(),
+                                            timestamp_field => parsed.timestamp.clone().unwrap_or_default(),
+                                        )).map_err(|e| e.to_string())?;
 
-                                    indexed_count += 1;
+                                        indexed_count += 1;
+                                    }
                                 }
                             }
                         }
@@ -718,15 +741,17 @@ fn build_search_index() -> Result<usize, String> {
                 }
             }
         }
-    }
 
-    index_writer.commit().map_err(|e| e.to_string())?;
+        index_writer.commit().map_err(|e| e.to_string())?;
 
-    // Store index in global state
-    let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
-    *guard = Some(SearchIndex { index, schema });
+        // Store index in global state
+        let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
+        *guard = Some(SearchIndex { index, schema });
 
-    Ok(indexed_count)
+        Ok(indexed_count)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]

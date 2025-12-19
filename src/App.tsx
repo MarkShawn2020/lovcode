@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef, createContext, useContext, us
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { version } from "../package.json";
-import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check, MoreHorizontal } from "lucide-react";
+import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Markdown from "react-markdown";
@@ -2171,6 +2171,7 @@ function ProjectList({
   const [searching, setSearching] = useState(false);
   const [indexBuilding, setIndexBuilding] = useState(false);
   const [indexStatus, setIndexStatus] = useState<string | null>(null);
+  const [indexBuilt, setIndexBuilt] = useState(false);
 
   // Lazy load projects only when needed
   useEffect(() => {
@@ -2212,14 +2213,21 @@ function ProjectList({
     setIndexBuilding(true);
     setIndexStatus(null);
     try {
-      const count = await invoke<number>("build_search_index");
-      setIndexStatus(`Index built: ${count} messages indexed`);
+      await invoke<number>("build_search_index");
+      setIndexBuilt(true);
     } catch (e) {
       setIndexStatus(`Error: ${e}`);
     } finally {
       setIndexBuilding(false);
     }
   };
+
+  // Auto-build search index when switching to chats view
+  useEffect(() => {
+    if (viewMode === "chats" && !indexBuilt && !indexBuilding) {
+      handleBuildIndex();
+    }
+  }, [viewMode, indexBuilt, indexBuilding]);
 
   // Debounced search effect
   useEffect(() => {
@@ -2293,7 +2301,7 @@ function ProjectList({
             ? `${(projects || []).length} projects with Claude Code history`
             : viewMode === "sessions"
               ? `${filteredSessions.length} sessions${hideEmptySessions ? ` (${(allSessions || []).length - filteredSessions.length} hidden)` : ""}`
-              : `${(allChats || []).length} / ${totalChats} messages`}
+              : `${totalChats} messages${indexBuilt ? " · Index ready" : indexBuilding ? " · Building index..." : ""}`}
         </p>
       </header>
 
@@ -2381,10 +2389,11 @@ function ProjectList({
             <button
               onClick={handleBuildIndex}
               disabled={indexBuilding}
-              className="px-3 py-2 rounded-lg bg-card-alt text-muted-foreground hover:text-ink border border-border transition-colors disabled:opacity-50"
-              title="Build search index"
+              className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card-alt text-muted-foreground hover:text-ink border border-border transition-colors disabled:opacity-50"
+              title="Rebuild search index"
             >
-              {indexBuilding ? "Building..." : "🔄 Index"}
+              <RefreshCw className={`w-4 h-4 ${indexBuilding ? "animate-spin" : ""}`} />
+              {indexBuilding ? "Building..." : "Rebuild"}
             </button>
           </div>
           {indexStatus && (
