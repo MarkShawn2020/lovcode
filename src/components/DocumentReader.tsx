@@ -2,7 +2,61 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
+import type { CSSProperties } from "react";
+
+// Warm Academic code theme - matches design system
+const warmAcademicTheme: { [key: string]: CSSProperties } = {
+  'code[class*="language-"]': {
+    color: "#181818",
+    background: "none",
+    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+    fontSize: "0.875rem",
+    textAlign: "left",
+    whiteSpace: "pre",
+    wordSpacing: "normal",
+    wordBreak: "normal",
+    wordWrap: "normal",
+    lineHeight: "1.6",
+  },
+  'pre[class*="language-"]': {
+    color: "#181818",
+    background: "#F0EEE6",
+    padding: "1rem",
+    margin: "0",
+    overflow: "auto",
+  },
+  comment: { color: "#87867F", fontStyle: "italic" },
+  prolog: { color: "#87867F" },
+  doctype: { color: "#87867F" },
+  cdata: { color: "#87867F" },
+  punctuation: { color: "#5C5C5C" },
+  property: { color: "#CC785C" },
+  tag: { color: "#CC785C" },
+  boolean: { color: "#CC785C" },
+  number: { color: "#CC785C" },
+  constant: { color: "#CC785C" },
+  symbol: { color: "#CC785C" },
+  deleted: { color: "#CC785C" },
+  selector: { color: "#6B7F59" },
+  "attr-name": { color: "#6B7F59" },
+  string: { color: "#6B7F59" },
+  char: { color: "#6B7F59" },
+  builtin: { color: "#6B7F59" },
+  inserted: { color: "#6B7F59" },
+  operator: { color: "#87867F" },
+  entity: { color: "#87867F", cursor: "help" },
+  url: { color: "#87867F" },
+  ".language-css .token.string": { color: "#87867F" },
+  ".style .token.string": { color: "#87867F" },
+  atrule: { color: "#7D6B99" },
+  "attr-value": { color: "#7D6B99" },
+  keyword: { color: "#7D6B99" },
+  function: { color: "#4A6785" },
+  "class-name": { color: "#4A6785" },
+  regex: { color: "#CC785C" },
+  important: { color: "#CC785C", fontWeight: "bold" },
+  variable: { color: "#CC785C" },
+};
 import { ChevronLeft, ChevronDown, PanelLeftClose, PanelLeft, PanelRightClose, PanelRight, Copy, Check } from "lucide-react";
 import { startCase } from "lodash-es";
 
@@ -416,18 +470,18 @@ function CodeBlock({
 
   // Code block
   return (
-    <div className="relative group not-prose my-4">
+    <div className="relative group not-prose my-4 border border-border rounded-xl overflow-hidden">
       {/* Header with language and copy button */}
-      <div className="flex items-center justify-between px-4 py-2 bg-[#1e1e1e] border-b border-white/10 rounded-t-xl">
-        <span className="text-xs text-gray-400 font-mono">{language || "text"}</span>
+      <div className="flex items-center justify-between px-4 py-2 bg-card-alt border-b border-border">
+        <span className="text-xs text-muted-foreground font-mono">{language || "text"}</span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-400 hover:text-white rounded transition-colors"
+          className="flex items-center gap-1.5 px-2 py-1 text-xs text-muted-foreground hover:text-primary rounded transition-colors"
         >
           {copied ? (
             <>
-              <Check className="w-3.5 h-3.5" />
-              <span>Copied!</span>
+              <Check className="w-3.5 h-3.5 text-primary" />
+              <span className="text-primary">Copied!</span>
             </>
           ) : (
             <>
@@ -439,14 +493,13 @@ function CodeBlock({
       </div>
       {/* Code content */}
       <SyntaxHighlighter
-        style={oneDark}
+        style={warmAcademicTheme}
         language={language}
         PreTag="div"
         customStyle={{
           margin: 0,
-          borderRadius: "0 0 0.75rem 0.75rem",
-          fontSize: "0.875rem",
-          lineHeight: 1.6,
+          borderRadius: 0,
+          background: "hsl(var(--card-alt))",
         }}
       >
         {codeString}
