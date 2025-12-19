@@ -466,7 +466,7 @@ function App() {
               <CollapsibleTrigger className="w-full group">
                 <div className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
                   currentFeature?.startsWith("kb-")
-                    ? "bg-primary/10 text-primary"
+                    ? "text-primary"
                     : "text-ink hover:bg-card-alt"
                 }`}>
                   <span className="text-lg">📚</span>
