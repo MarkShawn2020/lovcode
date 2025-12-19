@@ -2658,8 +2658,16 @@ function SessionList({
   const [exporting, setExporting] = useState(false);
   const [hideEmptySessions, setHideEmptySessions] = usePersistedState("lovcode-hide-empty-sessions", false);
   const [userPromptsOnly, setUserPromptsOnly] = usePersistedState("lovcode:userPromptsOnly", false);
+  const [searchQuery, setSearchQuery] = useState("");
 
-  const filteredSessions = hideEmptySessions ? sessions.filter(s => s.message_count > 0) : sessions;
+  const filteredSessions = sessions.filter(s => {
+    if (hideEmptySessions && s.message_count === 0) return false;
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      return (s.summary || "").toLowerCase().includes(q);
+    }
+    return true;
+  });
 
   useEffect(() => {
     Promise.all([
@@ -2769,6 +2777,12 @@ generator: "Lovcode"
           {projectPath ? formatPath(projectPath) : projectId}
         </h1>
       </header>
+
+      <SearchInput
+        placeholder="Search sessions..."
+        value={searchQuery}
+        onChange={setSearchQuery}
+      />
 
       {/* Context Card with Tabs */}
       {(globalContext.length > 0 || projectContext.length > 0) && (

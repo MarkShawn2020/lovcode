@@ -126,6 +126,7 @@ jobs:
 
       - name: Extract changelog for current version
         id: changelog
+        shell: bash
         run: |
           VERSION="${{ steps.get-tag.outputs.tag }}"
           VERSION="${VERSION#v}"  # Remove 'v' prefix
