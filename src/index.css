@@ -19,6 +19,10 @@
   --color-card: #FFFFFF;
   --color-card-alt: var(--color-canvas-alt);
   --color-border: #E8E6DC;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: var(--color-ink);
+  --color-accent: var(--color-canvas-alt);
+  --color-accent-foreground: var(--color-ink);
 
   /* Typography */
   --font-serif: Georgia, "Times New Roman", Times, serif;

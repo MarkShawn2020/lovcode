@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef, createContext, useContext } from "react";
+import { useState, useEffect, useCallback, useRef, createContext, useContext, useMemo } from "react";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { version } from "../package.json";
-import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check } from "lucide-react";
+import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check, MoreHorizontal } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Markdown from "react-markdown";
@@ -10,6 +10,22 @@ import { Switch } from "./components/ui/switch";
 import { Avatar, AvatarImage, AvatarFallback } from "./components/ui/avatar";
 import { Popover, PopoverTrigger, PopoverContent } from "./components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog";
+import {
+  ContextMenu,
+  ContextMenuTrigger,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuCheckboxItem,
+  ContextMenuSeparator,
+} from "./components/ui/context-menu";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuSeparator,
+} from "./components/ui/dropdown-menu";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import { Button } from "./components/ui/button";
@@ -2735,10 +2751,28 @@ interface ExportDialogProps {
   onOpenChange: (open: boolean) => void;
   allMessages: Message[];
   selectedIds: Set<string>;
+  onSelectedIdsChange: (ids: Set<string>) => void;
   defaultName: string;
 }
 
-function ExportDialog({ open, onOpenChange, allMessages, selectedIds, defaultName }: ExportDialogProps) {
+function ExportDialog({ open, onOpenChange, allMessages, selectedIds, onSelectedIdsChange, defaultName }: ExportDialogProps) {
+  const [selectPreset, setSelectPreset] = useState<"all" | "user" | "custom">("all");
+
+  // Apply preset when changed
+  useEffect(() => {
+    if (selectPreset === "all") {
+      onSelectedIdsChange(new Set(allMessages.map(m => m.uuid)));
+    } else if (selectPreset === "user") {
+      onSelectedIdsChange(new Set(allMessages.filter(m => m.role === "user").map(m => m.uuid)));
+    }
+  }, [selectPreset, allMessages, onSelectedIdsChange]);
+
+  // Initialize to all when dialog opens
+  useEffect(() => {
+    if (open) {
+      setSelectPreset("all");
+    }
+  }, [open]);
   const [format, setFormat] = useAtom(exportFormatAtom);
   const [mdStyle, setMdStyle] = useAtom(exportMdStyleAtom);
   const [truncateBullet, setTruncateBullet] = useAtom(exportTruncateAtom);
@@ -2830,37 +2864,45 @@ function ExportDialog({ open, onOpenChange, allMessages, selectedIds, defaultNam
           <DialogTitle>Export {messages.length} Messages</DialogTitle>
         </DialogHeader>
 
-        <div className="flex flex-col gap-2 py-2 border-b border-border">
-          <div className="flex gap-4 items-center">
-            <div className="flex items-center gap-2">
-              <Label className="text-sm text-muted">Format</Label>
+        <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 py-2 border-b border-border items-center">
+          <Label className="text-sm text-muted">Select</Label>
+          <select
+            value={selectPreset}
+            onChange={(e) => setSelectPreset(e.target.value as "all" | "user" | "custom")}
+            className="text-sm px-2 py-1 rounded bg-card-alt border border-border text-ink w-fit"
+          >
+            <option value="all">All ({allMessages.length})</option>
+            <option value="user">User only ({allMessages.filter(m => m.role === "user").length})</option>
+            <option value="custom">Custom ({selectedIds.size})</option>
+          </select>
+
+          <Label className="text-sm text-muted">Format</Label>
+          <select
+            value={format}
+            onChange={(e) => setFormat(e.target.value as ExportFormat)}
+            className="text-sm px-2 py-1 rounded bg-card-alt border border-border text-ink w-fit"
+          >
+            <option value="markdown">Markdown</option>
+            <option value="json">JSON</option>
+          </select>
+
+          {format === "markdown" && (
+            <>
+              <Label className="text-sm text-muted">Style</Label>
               <select
-                value={format}
-                onChange={(e) => setFormat(e.target.value as ExportFormat)}
-                className="text-sm px-2 py-1 rounded bg-card-alt border border-border text-ink"
+                value={mdStyle}
+                onChange={(e) => setMdStyle(e.target.value as MarkdownStyle)}
+                className="text-sm px-2 py-1 rounded bg-card-alt border border-border text-ink w-fit"
               >
-                <option value="markdown">Markdown</option>
-                <option value="json">JSON</option>
+                <option value="full">Full</option>
+                <option value="qa">QA</option>
+                <option value="bullet">QA (list)</option>
               </select>
-            </div>
+            </>
+          )}
 
-            {format === "markdown" && (
-              <div className="flex items-center gap-2">
-                <Label className="text-sm text-muted">Style</Label>
-                <select
-                  value={mdStyle}
-                  onChange={(e) => setMdStyle(e.target.value as MarkdownStyle)}
-                  className="text-sm px-2 py-1 rounded bg-card-alt border border-border text-ink"
-                >
-                  <option value="full">Full</option>
-                  <option value="qa">QA</option>
-                  <option value="bullet">QA (list)</option>
-                </select>
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-4 items-center">
+          <Label className="text-sm text-muted">Options</Label>
+          <div className="flex gap-4 flex-wrap">
             <label className="flex items-center gap-2 text-sm text-muted cursor-pointer">
               <input
                 type="checkbox"
@@ -2956,8 +2998,7 @@ function MessageView({
   const [originalChat, setOriginalChat] = usePersistedState("lovcode:originalChat", true);
   const [markdownPreview, setMarkdownPreview] = usePersistedState("lovcode:markdownPreview", false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [selectMode, setSelectMode] = usePersistedState("lovcode:selectMode", false);
-  const [selectPreset, setSelectPreset] = usePersistedState<"all" | "user" | "none">("lovcode:selectPreset", "all");
+  const [exportDialogOpen, setExportDialogOpen] = useState(false);
 
   useEffect(() => {
     invoke<Message[]>("get_session_messages", { projectId, sessionId })
@@ -2969,47 +3010,10 @@ function MessageView({
     return originalChat ? restoreSlashCommand(content) : content;
   };
 
-  const filteredMessages = originalChat
-    ? messages.filter(m => !m.is_meta && !m.is_tool)
-    : messages;
-
-  // Auto-apply selection preset when messages load or filter changes
-  useEffect(() => {
-    if (!selectMode || filteredMessages.length === 0) return;
-    if (selectPreset === "all") {
-      setSelectedIds(new Set(filteredMessages.map(m => m.uuid)));
-    } else if (selectPreset === "user") {
-      setSelectedIds(new Set(filteredMessages.filter(m => m.role === "user").map(m => m.uuid)));
-    } else {
-      setSelectedIds(new Set());
-    }
-  }, [filteredMessages, selectMode, selectPreset]);
-
-  const toggleSelect = (uuid: string) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev);
-      if (next.has(uuid)) next.delete(uuid);
-      else next.add(uuid);
-      return next;
-    });
-  };
-
-  const selectAll = () => {
-    setSelectMode(true);
-    setSelectPreset("all");
-  };
-
-  const selectUserOnly = () => {
-    setSelectMode(true);
-    setSelectPreset("user");
-  };
-
-  const deselectAll = () => {
-    setSelectMode(false);
-    setSelectPreset("none");
-  };
-
-  const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const filteredMessages = useMemo(() =>
+    originalChat ? messages.filter(m => !m.is_meta && !m.is_tool) : messages,
+    [messages, originalChat]
+  );
 
   if (loading) {
     return (
@@ -3018,11 +3022,6 @@ function MessageView({
       </div>
     );
   }
-
-  const pillBase = "px-2.5 py-1 text-xs rounded-full transition-colors";
-  const pillActive = "bg-primary/15 text-primary";
-  const pillInactive = "text-muted hover:text-ink hover:bg-card-alt";
-  const groupLabel = "text-[10px] uppercase tracking-wider text-muted px-2";
 
   return (
     <div className="px-6 py-8">
@@ -3033,85 +3032,86 @@ function MessageView({
         >
           <span>←</span> Sessions
         </button>
-        <div className="flex items-start justify-between gap-4 mb-2">
-          <h1 className="font-serif text-2xl font-semibold text-ink leading-tight">
-            {summary || "Session"}
-          </h1>
-          <button
-            onClick={() => invoke("reveal_session_file", { projectId, sessionId })}
-            className="text-muted hover:text-ink transition-colors shrink-0 mt-1"
-            title="Reveal in Finder"
-          >
-            <FolderOpen size={18} />
-          </button>
-        </div>
-        <button
-          onClick={() => invoke("open_session_in_editor", { projectId, sessionId })}
-          className="text-primary text-xs font-mono mb-6 hover:underline"
-          title="Open in editor"
-        >
-          {sessionId}
-        </button>
-        <div className="space-y-2">
-          <div className="flex items-center gap-3">
-            <span className={groupLabel}>View</span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => setOriginalChat(!originalChat)}
-                className={`${pillBase} ${originalChat ? pillActive : pillInactive}`}
-                title="Show original conversation (restore slash commands, hide tool calls)"
+        <div className="flex items-start justify-between gap-4">
+          <ContextMenu>
+            <ContextMenuTrigger asChild>
+              <div className="cursor-context-menu flex-1 min-w-0">
+                <h1 className="font-serif text-2xl font-semibold text-ink leading-tight mb-1">
+                  {summary || "Session"}
+                </h1>
+                <p className="text-primary text-xs font-mono truncate">{sessionId}</p>
+              </div>
+            </ContextMenuTrigger>
+            <ContextMenuContent className="w-48">
+              <ContextMenuItem onClick={() => invoke("reveal_session_file", { projectId, sessionId })}>
+                <FolderOpen size={14} />
+                Reveal in Finder
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => invoke("open_session_in_editor", { projectId, sessionId })}>
+                <ExternalLink size={14} />
+                Open in Editor
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuCheckboxItem
+                checked={originalChat}
+                onCheckedChange={setOriginalChat}
               >
-                Original
-              </button>
-              <button
-                onClick={() => setMarkdownPreview(!markdownPreview)}
-                className={`${pillBase} ${markdownPreview ? pillActive : pillInactive}`}
-                title="Render markdown"
+                Original View
+              </ContextMenuCheckboxItem>
+              <ContextMenuCheckboxItem
+                checked={markdownPreview}
+                onCheckedChange={setMarkdownPreview}
               >
                 Markdown Preview
+              </ContextMenuCheckboxItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem onClick={() => setExportDialogOpen(true)}>
+                <Download size={14} />
+                Export
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="text-muted hover:text-ink transition-colors p-1 rounded hover:bg-card-alt shrink-0">
+                <MoreHorizontal size={18} />
               </button>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className={groupLabel}>Select</span>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={selectAll}
-                className={`${pillBase} ${selectPreset === "all" ? pillActive : pillInactive}`}
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={() => invoke("reveal_session_file", { projectId, sessionId })}>
+                <FolderOpen size={14} />
+                Reveal in Finder
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => invoke("open_session_in_editor", { projectId, sessionId })}>
+                <ExternalLink size={14} />
+                Open in Editor
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuCheckboxItem
+                checked={originalChat}
+                onCheckedChange={setOriginalChat}
               >
-                All
-              </button>
-              <button
-                onClick={selectUserOnly}
-                className={`${pillBase} ${selectPreset === "user" ? pillActive : pillInactive}`}
+                Original View
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuCheckboxItem
+                checked={markdownPreview}
+                onCheckedChange={setMarkdownPreview}
               >
-                User
-              </button>
-              <button
-                onClick={deselectAll}
-                className={`${pillBase} ${selectPreset === "none" ? pillActive : pillInactive}`}
-              >
-                None
-              </button>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className={groupLabel}>Export</span>
-            <button
-              onClick={() => setExportDialogOpen(true)}
-              disabled={selectedIds.size === 0}
-              className="px-3 py-1 text-xs rounded-full bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {selectedIds.size > 0 ? `${selectedIds.size} selected` : "Select messages first"}
-            </button>
-          </div>
+                Markdown Preview
+              </DropdownMenuCheckboxItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => setExportDialogOpen(true)}>
+                <Download size={14} />
+                Export
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
       <div className="space-y-4">
         {filteredMessages.map((msg) => {
           const displayContent = processContent(msg.content);
-          const isSelected = selectedIds.has(msg.uuid);
           return (
             <div
               key={msg.uuid}
@@ -3119,20 +3119,9 @@ function MessageView({
                 msg.role === "user"
                   ? "bg-card-alt"
                   : "bg-card border border-border"
-              } ${selectMode && isSelected ? "ring-2 ring-primary" : ""}`}
-              onClick={selectMode ? () => toggleSelect(msg.uuid) : undefined}
+              }`}
             >
-              {selectMode ? (
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => toggleSelect(msg.uuid)}
-                  className="absolute top-3 right-3 w-4 h-4 accent-primary cursor-pointer"
-                  onClick={(e) => e.stopPropagation()}
-                />
-              ) : (
-                <CopyButton text={displayContent} />
-              )}
+              <CopyButton text={displayContent} />
               <p className="text-xs text-muted mb-2 uppercase tracking-wide">
                 {msg.role}
               </p>
@@ -3145,8 +3134,9 @@ function MessageView({
       <ExportDialog
         open={exportDialogOpen}
         onOpenChange={setExportDialogOpen}
-        allMessages={messages}
+        allMessages={filteredMessages}
         selectedIds={selectedIds}
+        onSelectedIdsChange={setSelectedIds}
         defaultName={summary?.slice(0, 50).replace(/[/\\?%*:|"<>]/g, '-') || 'session'}
       />
     </div>
