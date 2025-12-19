@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { version } from "../package.json";
-import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw, ChevronLeft, ChevronRight, Store, Archive, RotateCcw } from "lucide-react";
+import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, ChevronRight as ChevronRightIcon, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw, ChevronLeft, ChevronRight, Store, Archive, RotateCcw, List, FolderTree, Folder } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Markdown from "react-markdown";
@@ -26,6 +26,9 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuCheckboxItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuLabel,
   DropdownMenuSeparator,
 } from "./components/ui/dropdown-menu";
 import { Input } from "./components/ui/input";
@@ -1573,6 +1576,8 @@ function CommandsView({
   const [sortKey, setSortKey] = useState<CommandSortKey>("usage");
   const [sortDir, setSortDir] = useState<SortDirection>("desc");
   const [showDeprecated, setShowDeprecated] = useState(false);
+  const [viewMode, setViewMode] = useState<"flat" | "tree">("flat");
+  const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   const { search, setSearch, filtered } = useSearch(commands, ["name", "description"]);
 
   useEffect(() => {
@@ -1625,42 +1630,164 @@ function CommandsView({
   const activeCount = commands.filter((c) => c.status === "active").length;
   const deprecatedCount = commands.filter((c) => c.status !== "active").length;
 
+  // Build tree structure for tree view
+  type TreeNode = { type: "folder"; name: string; path: string; children: TreeNode[] } | { type: "command"; command: LocalCommand };
+
+  const buildTree = (cmds: LocalCommand[]): TreeNode[] => {
+    const root: Map<string, TreeNode> = new Map();
+
+    for (const cmd of cmds) {
+      // Extract relative path from full path (e.g., "~/.claude/commands/foo/bar.md" -> "foo/bar.md")
+      const match = cmd.path.match(/\.claude\/commands\/(.+)$/);
+      const relativePath = match ? match[1] : cmd.name + ".md";
+      const parts = relativePath.replace(/\.md$/, "").split("/");
+
+      if (parts.length === 1) {
+        // Root level command
+        root.set(cmd.name, { type: "command", command: cmd });
+      } else {
+        // Nested command - build folder structure
+        let currentLevel = root;
+        let currentPath = "";
+        for (let i = 0; i < parts.length - 1; i++) {
+          const folderName = parts[i];
+          currentPath = currentPath ? `${currentPath}/${folderName}` : folderName;
+          let folder = currentLevel.get(folderName);
+          if (!folder || folder.type !== "folder") {
+            folder = { type: "folder", name: folderName, path: currentPath, children: [] };
+            currentLevel.set(folderName, folder);
+          }
+          // Convert children array to map for next level
+          if (folder.type === "folder") {
+            const childMap = new Map<string, TreeNode>();
+            for (const child of folder.children) {
+              const key = child.type === "folder" ? child.name : child.command.name;
+              childMap.set(key, child);
+            }
+            if (i === parts.length - 2) {
+              // Last folder level - add command
+              childMap.set(cmd.name, { type: "command", command: cmd });
+            }
+            folder.children = Array.from(childMap.values());
+            currentLevel = childMap;
+          }
+        }
+      }
+    }
+
+    // Sort: folders first, then commands, alphabetically
+    const sortNodes = (nodes: TreeNode[]): TreeNode[] => {
+      return nodes.sort((a, b) => {
+        if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
+        const nameA = a.type === "folder" ? a.name : a.command.name;
+        const nameB = b.type === "folder" ? b.name : b.command.name;
+        return nameA.localeCompare(nameB);
+      }).map(node => node.type === "folder" ? { ...node, children: sortNodes(node.children) } : node);
+    };
+
+    return sortNodes(Array.from(root.values()));
+  };
+
+  const tree = viewMode === "tree" ? buildTree(statusFiltered) : [];
+
+  const toggleFolder = (path: string) => {
+    setExpandedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  const renderTreeNode = (node: TreeNode, depth: number = 0): React.ReactNode => {
+    if (node.type === "command") {
+      return (
+        <div key={node.command.path} style={{ paddingLeft: depth * 16 }}>
+          <CommandItemCard
+            command={node.command}
+            usageCount={commandStats[node.command.name]}
+            onClick={() => onSelect(node.command)}
+          />
+        </div>
+      );
+    }
+
+    const isExpanded = expandedFolders.has(node.path);
+    return (
+      <div key={node.path}>
+        <button
+          onClick={() => toggleFolder(node.path)}
+          className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-card-alt rounded-lg transition-colors"
+          style={{ paddingLeft: depth * 16 + 12 }}
+        >
+          <ChevronRightIcon className={`w-4 h-4 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+          <Folder className="w-4 h-4 text-primary" />
+          <span className="font-medium text-ink">{node.name}</span>
+          <span className="text-xs text-muted-foreground">({node.children.length})</span>
+        </button>
+        {isExpanded && (
+          <div className="space-y-1">
+            {node.children.map(child => renderTreeNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   if (loading) return <LoadingState message="Loading commands..." />;
 
   return (
     <ConfigPage>
       <PageHeader title="Commands" subtitle={`${activeCount} active, ${deprecatedCount} deprecated/archived`} action={<BrowseMarketplaceButton onClick={onBrowseMore} />} />
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex items-center gap-3 mb-6">
         <SearchInput
           placeholder="Search local & marketplace..."
           value={search}
           onChange={setSearch}
-          className="flex-1 max-w-md px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+          className="flex-1 px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted-foreground focus:outline-none focus:border-primary"
         />
-        <div className="flex items-center gap-3 text-xs shrink-0">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <Switch checked={showDeprecated} onCheckedChange={setShowDeprecated} />
-            <span className="text-muted-foreground">Deprecated</span>
-          </label>
-          <span className="text-border">|</span>
-          <span className="text-muted-foreground">Sort:</span>
-          <button
-            onClick={() => toggleSort("usage")}
-            className={`px-2 py-1 rounded ${sortKey === "usage" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-ink"}`}
-          >
-            Usage {sortKey === "usage" && (sortDir === "desc" ? "↓" : "↑")}
-          </button>
-          <button
-            onClick={() => toggleSort("name")}
-            className={`px-2 py-1 rounded ${sortKey === "name" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-ink"}`}
-          >
-            Name {sortKey === "name" && (sortDir === "desc" ? "↓" : "↑")}
-          </button>
-        </div>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" className="shrink-0">
+              <MoreHorizontal className="w-4 h-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-44">
+            <DropdownMenuLabel className="text-xs">View</DropdownMenuLabel>
+            <DropdownMenuRadioGroup value={viewMode} onValueChange={(v) => setViewMode(v as "flat" | "tree")}>
+              <DropdownMenuRadioItem value="flat">
+                <List className="w-4 h-4 mr-2" /> Flat
+              </DropdownMenuRadioItem>
+              <DropdownMenuRadioItem value="tree">
+                <FolderTree className="w-4 h-4 mr-2" /> Tree
+              </DropdownMenuRadioItem>
+            </DropdownMenuRadioGroup>
+            {viewMode === "flat" && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuLabel className="text-xs">Sort</DropdownMenuLabel>
+                <DropdownMenuItem onClick={() => toggleSort("usage")}>
+                  {sortKey === "usage" && <Check className="w-4 h-4 mr-2" />}
+                  {sortKey !== "usage" && <span className="w-4 mr-2" />}
+                  Usage {sortKey === "usage" && (sortDir === "desc" ? "↓" : "↑")}
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => toggleSort("name")}>
+                  {sortKey === "name" && <Check className="w-4 h-4 mr-2" />}
+                  {sortKey !== "name" && <span className="w-4 mr-2" />}
+                  Name {sortKey === "name" && (sortDir === "desc" ? "↓" : "↑")}
+                </DropdownMenuItem>
+              </>
+            )}
+            <DropdownMenuSeparator />
+            <DropdownMenuCheckboxItem checked={showDeprecated} onCheckedChange={setShowDeprecated}>
+              Show deprecated
+            </DropdownMenuCheckboxItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
 
       {/* Local results */}
-      {sorted.length > 0 && (
+      {viewMode === "flat" && sorted.length > 0 && (
         <div className="space-y-2">
           {sorted.map((cmd) => (
             <CommandItemCard
@@ -1670,6 +1797,11 @@ function CommandsView({
               onClick={() => onSelect(cmd)}
             />
           ))}
+        </div>
+      )}
+      {viewMode === "tree" && tree.length > 0 && (
+        <div className="space-y-1">
+          {tree.map(node => renderTreeNode(node))}
         </div>
       )}
 
