@@ -534,25 +534,57 @@ export function DocumentReader({
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < documents.length - 1;
 
+  // Track if scroll has been restored for current document
+  const scrollRestoredRef = useRef(false);
+
+  // Reset restore flag when document changes
+  useEffect(() => {
+    scrollRestoredRef.current = false;
+  }, [sourceName, currentIndex]);
+
   // Restore scroll position after content loads
   useEffect(() => {
-    if (loading || !scrollContainerRef.current) return;
+    // Wait for content to be loaded
+    if (loading || !content || scrollRestoredRef.current) return;
+
     const scrollKey = `lovcode:ref-scroll:${sourceName}:${currentIndex}`;
     const savedScroll = localStorage.getItem(scrollKey);
-    if (savedScroll) {
-      scrollContainerRef.current.scrollTop = parseInt(savedScroll, 10);
+    if (!savedScroll) {
+      scrollRestoredRef.current = true;
+      return;
     }
-  }, [loading, sourceName, currentIndex]);
 
-  // Save scroll position periodically
+    const targetScroll = parseInt(savedScroll, 10);
+    scrollRestoredRef.current = true;
+
+    // Wait for Markdown to render, then restore scroll
+    const timer = setTimeout(() => {
+      if (scrollContainerRef.current) {
+        scrollContainerRef.current.scrollTop = targetScroll;
+      }
+    }, 100);
+
+    return () => clearTimeout(timer);
+  }, [loading, content, sourceName, currentIndex]);
+
+  // Save scroll position periodically (only after restore completes)
   useEffect(() => {
     const container = scrollContainerRef.current;
     if (!container) return;
 
     const saveScroll = () => {
+      // Don't save until restore is complete, to avoid overwriting saved position with 0
+      if (!scrollRestoredRef.current) return;
       const scrollKey = `lovcode:ref-scroll:${sourceName}:${currentIndex}`;
       localStorage.setItem(scrollKey, String(container.scrollTop));
     };
+
+    // Save before app reload (Cmd+R)
+    const handleBeforeReload = () => saveScroll();
+    window.addEventListener("app:before-reload", handleBeforeReload);
+
+    // Save before page unload
+    window.addEventListener("beforeunload", handleBeforeReload);
 
     // Debounced save on scroll
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -563,9 +595,11 @@ export function DocumentReader({
 
     container.addEventListener("scroll", handleScroll);
     return () => {
+      window.removeEventListener("app:before-reload", handleBeforeReload);
+      window.removeEventListener("beforeunload", handleBeforeReload);
       container.removeEventListener("scroll", handleScroll);
       clearTimeout(timeoutId);
-      saveScroll(); // Save on unmount
+      saveScroll();
     };
   }, [sourceName, currentIndex]);
 

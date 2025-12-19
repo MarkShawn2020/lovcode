@@ -400,7 +400,10 @@ function App() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "r") {
         e.preventDefault();
-        window.location.reload();
+        // Trigger save before reload
+        window.dispatchEvent(new Event("app:before-reload"));
+        // Small delay to ensure save completes
+        setTimeout(() => window.location.reload(), 50);
       }
     };
     window.addEventListener("keydown", handleKeyDown);
