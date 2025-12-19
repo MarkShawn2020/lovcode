@@ -12,6 +12,9 @@ use tantivy::tokenizer::{LowerCaser, TextAnalyzer, Token, TokenStream, Tokenizer
 use tantivy::{doc, Index, IndexWriter, ReloadPolicy};
 use jieba_rs::Jieba;
 use std::sync::LazyLock;
+use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event};
+use std::sync::mpsc::channel;
+use std::time::Duration;
 
 // Global jieba instance for Chinese tokenization
 static JIEBA: LazyLock<Jieba> = LazyLock::new(|| Jieba::new());
@@ -74,6 +77,9 @@ impl TokenStream for JiebaTokenStream {
 
 // Global search index state
 static SEARCH_INDEX: Mutex<Option<SearchIndex>> = Mutex::new(None);
+
+// Distill watch state
+static DISTILL_WATCH_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 struct SearchIndex {
     index: Index,
@@ -1145,6 +1151,16 @@ fn get_distill_command_file() -> Result<String, String> {
     fs::read_to_string(&cmd_path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn get_distill_watch_enabled() -> bool {
+    DISTILL_WATCH_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[tauri::command]
+fn set_distill_watch_enabled(enabled: bool) {
+    DISTILL_WATCH_ENABLED.store(enabled, std::sync::atomic::Ordering::Relaxed);
+}
+
 // ============================================================================
 // Marketplace Feature
 // ============================================================================
@@ -1794,6 +1810,45 @@ pub fn run() {
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder, PredefinedMenuItem};
 
+            // Start watching distill directory for changes
+            let app_handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let distill_dir = get_distill_dir();
+                if !distill_dir.exists() {
+                    // Create directory if it doesn't exist so we can watch it
+                    let _ = fs::create_dir_all(&distill_dir);
+                }
+
+                let (tx, rx) = channel();
+                let mut watcher: RecommendedWatcher = match notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+                    if let Ok(event) = res {
+                        // Only trigger on create/modify/remove events
+                        if event.kind.is_create() || event.kind.is_modify() || event.kind.is_remove() {
+                            let _ = tx.send(());
+                        }
+                    }
+                }) {
+                    Ok(w) => w,
+                    Err(_) => return,
+                };
+
+                if watcher.watch(&distill_dir, RecursiveMode::NonRecursive).is_err() {
+                    return;
+                }
+
+                // Debounce: wait for events to settle before emitting
+                loop {
+                    if rx.recv().is_ok() {
+                        // Drain any additional events that came in quickly
+                        while rx.recv_timeout(Duration::from_millis(200)).is_ok() {}
+                        // Only emit if watch is enabled
+                        if DISTILL_WATCH_ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
+                            let _ = app_handle.emit("distill-changed", ());
+                        }
+                    }
+                }
+            });
+
             let settings = MenuItemBuilder::with_id("settings", "Settings...")
                 .accelerator("CmdOrCtrl+,")
                 .build(app)?;
@@ -1874,7 +1929,9 @@ pub fn run() {
             list_distill_documents,
             get_distill_document,
             find_session_project,
-            get_distill_command_file
+            get_distill_command_file,
+            get_distill_watch_enabled,
+            set_distill_watch_enabled
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

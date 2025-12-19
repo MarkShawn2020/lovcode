@@ -2,6 +2,22 @@ import { useState, useEffect, ReactNode } from "react";
 import Markdown from "react-markdown";
 import { ExternalLink, Download, MessageCircle } from "lucide-react";
 import { useAppConfig } from "../../App";
+import { differenceInMinutes, differenceInHours, differenceInDays, differenceInWeeks, differenceInMonths } from "date-fns";
+
+function formatRelativeTime(date: Date): string {
+  const now = new Date();
+  const mins = differenceInMinutes(now, date);
+  if (mins < 1) return "刚刚";
+  if (mins < 60) return `${mins}分钟前`;
+  const hours = differenceInHours(now, date);
+  if (hours < 24) return `${hours}小时前`;
+  const days = differenceInDays(now, date);
+  if (days < 7) return `${days}天前`;
+  const weeks = differenceInWeeks(now, date);
+  if (weeks < 5) return `${weeks}周前`;
+  const months = differenceInMonths(now, date);
+  return `${months}个月前`;
+}
 
 // ============================================================================
 // Atomic Components
@@ -61,7 +77,7 @@ export function PageHeader({
   action,
 }: {
   title: string;
-  subtitle: string;
+  subtitle: ReactNode;
   action?: ReactNode;
 }) {
   return (
@@ -69,7 +85,7 @@ export function PageHeader({
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="font-serif text-3xl font-semibold text-ink">{title}</h1>
-          <p className="text-muted-foreground mt-1">{subtitle}</p>
+          <div className="text-muted-foreground mt-1">{subtitle}</div>
         </div>
         {action}
       </div>
@@ -135,6 +151,7 @@ export function ItemCard({
   badge,
   badgeVariant = "accent",
   usageCount,
+  timestamp,
   onClick,
 }: {
   name: string;
@@ -142,12 +159,17 @@ export function ItemCard({
   badge?: string | null;
   badgeVariant?: "accent" | "muted";
   usageCount?: number;
+  timestamp?: string | Date;
   onClick: () => void;
 }) {
   const badgeClass =
     badgeVariant === "accent"
       ? "bg-accent/20 text-accent"
       : "bg-card-alt text-muted-foreground";
+
+  const relativeTime = timestamp
+    ? formatRelativeTime(new Date(timestamp))
+    : null;
 
   return (
     <button
@@ -168,11 +190,18 @@ export function ItemCard({
             <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{description}</p>
           )}
         </div>
-        {badge && (
-          <span className={`text-xs px-2 py-1 rounded shrink-0 ${badgeClass}`}>
-            {badge}
-          </span>
-        )}
+        <div className="flex flex-col items-end gap-1 shrink-0">
+          {badge && (
+            <span className={`text-xs px-2 py-0.5 rounded ${badgeClass}`}>
+              {badge}
+            </span>
+          )}
+          {relativeTime && (
+            <span className="text-xs text-muted-foreground" title={String(timestamp)}>
+              {relativeTime}
+            </span>
+          )}
+        </div>
       </div>
     </button>
   );

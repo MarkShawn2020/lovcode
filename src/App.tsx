@@ -110,7 +110,7 @@ const FEATURES: FeatureConfig[] = [
   // Projects
   { type: "chat", label: "Projects", icon: "💬", description: "Browse conversation history", available: true, group: "history" },
   // Knowledge (collapsible submenu)
-  { type: "kb-distill", label: "Distill", icon: "💡", description: "Experience summaries", available: true, group: "knowledge" },
+  { type: "kb-distill", label: "Distill (CC)", icon: "💡", description: "Experience summaries", available: true, group: "knowledge" },
   { type: "kb-notes", label: "Notes", icon: "📝", description: "Markdown notes", available: false, group: "knowledge" },
   { type: "kb-bookmarks", label: "Bookmarks", icon: "🔖", description: "External links", available: false, group: "knowledge" },
   // Configuration
@@ -316,10 +316,12 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [profile, setProfile] = usePersistedState<UserProfile>("lovcode:profile", { nickname: "", avatarUrl: "" });
   const [showProfileDialog, setShowProfileDialog] = useState(false);
+  const [distillWatchEnabled, setDistillWatchEnabled] = useState(true);
 
-  // Load home directory for path shortening
+  // Load home directory and distill watch status
   useEffect(() => {
     invoke<string>("get_home_dir").then(setHomeDir).catch(() => {});
+    invoke<boolean>("get_distill_watch_enabled").then(setDistillWatchEnabled).catch(() => {});
   }, []);
 
   // Persist view to localStorage
@@ -482,6 +484,7 @@ function App() {
                     feature={feature}
                     active={currentFeature === feature.type}
                     onClick={() => handleFeatureClick(feature.type)}
+                    statusIndicator={feature.type === "kb-distill" ? (distillWatchEnabled ? "on" : "off") : undefined}
                   />
                 ))}
               </CollapsibleBody>
@@ -707,6 +710,11 @@ function App() {
         {view.type === "kb-distill" && (
           <DistillView
             onSelect={(doc) => setView({ type: "kb-distill-detail", document: doc })}
+            watchEnabled={distillWatchEnabled}
+            onWatchToggle={(enabled) => {
+              setDistillWatchEnabled(enabled);
+              invoke("set_distill_watch_enabled", { enabled });
+            }}
           />
         )}
 
@@ -958,10 +966,12 @@ function FeatureButton({
   feature,
   active,
   onClick,
+  statusIndicator,
 }: {
   feature: FeatureConfig;
   active: boolean;
   onClick: () => void;
+  statusIndicator?: "on" | "off";
 }) {
   return (
     <button
@@ -975,10 +985,13 @@ function FeatureButton({
       }`}
     >
       <span className="text-lg">{feature.icon}</span>
-      <span className="text-sm">
+      <span className="text-sm flex-1">
         {feature.label}
         {!feature.available && <span className="ml-1.5 text-xs opacity-60">(TODO)</span>}
       </span>
+      {statusIndicator !== undefined && (
+        <span className={`w-1.5 h-1.5 rounded-full ${statusIndicator === "on" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
+      )}
     </button>
   );
 }
@@ -1137,18 +1150,27 @@ function SubAgentDetailView({ agent, onBack }: { agent: LocalAgent; onBack: () =
 // Distill Feature (Knowledge Base)
 // ============================================================================
 
-function DistillHelpButton() {
-  const [open, setOpen] = useState(false);
+function DistillMenu({
+  watchEnabled,
+  onWatchToggle,
+  onRefresh,
+}: {
+  watchEnabled: boolean;
+  onWatchToggle: (enabled: boolean) => void;
+  onRefresh: () => void;
+}) {
+  const { homeDir } = useAppConfig();
+  const [helpOpen, setHelpOpen] = useState(false);
   const [commandContent, setCommandContent] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (open && !commandContent) {
+    if (helpOpen && !commandContent) {
       invoke<string>("get_distill_command_file")
         .then(setCommandContent)
         .catch(() => setCommandContent(null));
     }
-  }, [open, commandContent]);
+  }, [helpOpen, commandContent]);
 
   const handleCopy = async () => {
     if (commandContent) {
@@ -1172,15 +1194,33 @@ function DistillHelpButton() {
 
   return (
     <>
-      <button
-        onClick={() => setOpen(true)}
-        className="p-2 rounded-lg text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors"
-        title="How to use Distill"
-      >
-        <HelpCircle className="w-5 h-5" />
-      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button className="p-2 rounded-lg text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors">
+            <MoreHorizontal className="w-5 h-5" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-48">
+          <DropdownMenuItem onClick={() => setHelpOpen(true)}>
+            <HelpCircle className="w-4 h-4 mr-2" />
+            Help
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => invoke("open_in_editor", { path: `${homeDir}/.lovstudio/docs/distill` })}>
+            <FolderOpen className="w-4 h-4 mr-2" />
+            Open Folder
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={onRefresh} disabled={watchEnabled}>
+            <RefreshCw className="w-4 h-4 mr-2" />
+            Refresh
+          </DropdownMenuItem>
+          <DropdownMenuCheckboxItem checked={watchEnabled} onCheckedChange={onWatchToggle}>
+            Auto Refresh
+          </DropdownMenuCheckboxItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={helpOpen} onOpenChange={setHelpOpen}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
             <DialogTitle>How to use Distill</DialogTitle>
@@ -1191,7 +1231,17 @@ function DistillHelpButton() {
               <p>Distill captures wisdom from your Claude Code sessions into reusable knowledge.</p>
               <p className="font-medium text-ink">In Claude Code, run:</p>
               <code className="block px-3 py-2 rounded-lg bg-card-alt font-mono text-sm">/distill</code>
-              <p>This analyzes your conversation and extracts key learnings into structured documents stored in <code className="text-xs bg-card-alt px-1 rounded">~/.lovstudio/docs/distill/</code></p>
+              <p>This analyzes your conversation and extracts key learnings into structured documents stored in:</p>
+              <div className="flex items-center gap-2">
+                <code className="text-xs bg-card-alt px-2 py-1 rounded">~/.lovstudio/docs/distill/</code>
+                <button
+                  onClick={() => invoke("open_in_editor", { path: `${homeDir}/.lovstudio/docs/distill` })}
+                  className="p-1.5 rounded text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors"
+                  title="Open distill directory"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {commandContent && (
@@ -1233,17 +1283,31 @@ function DistillHelpButton() {
 
 function DistillView({
   onSelect,
+  watchEnabled,
+  onWatchToggle,
 }: {
   onSelect: (doc: DistillDocument) => void;
+  watchEnabled: boolean;
+  onWatchToggle: (enabled: boolean) => void;
 }) {
   const [documents, setDocuments] = useState<DistillDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const { search, setSearch, filtered } = useSearch(documents, ["title", "tags"]);
 
-  useEffect(() => {
+  const fetchDocuments = () => {
+    setLoading(true);
     invoke<DistillDocument[]>("list_distill_documents")
       .then(setDocuments)
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    fetchDocuments();
+    // Listen for distill directory changes
+    const unlisten = listen("distill-changed", () => {
+      fetchDocuments();
+    });
+    return () => { unlisten.then(fn => fn()); };
   }, []);
 
   if (loading) return <LoadingState message="Loading distill documents..." />;
@@ -1251,9 +1315,9 @@ function DistillView({
   return (
     <ConfigPage>
       <PageHeader
-        title="Distill"
-        subtitle={`${documents.length} experience summaries`}
-        action={<DistillHelpButton />}
+        title="Distill (CC)"
+        subtitle={`${documents.length} summaries`}
+        action={<DistillMenu watchEnabled={watchEnabled} onWatchToggle={onWatchToggle} onRefresh={fetchDocuments} />}
       />
 
       <SearchInput
@@ -1269,7 +1333,7 @@ function DistillView({
               key={doc.file}
               name={doc.title}
               description={doc.tags.map(t => `#${t}`).join(" ")}
-              badge={doc.date}
+              timestamp={doc.date}
               onClick={() => onSelect(doc)}
             />
           ))}
