@@ -136,3 +136,68 @@ input, button, a, select, textarea {
     @apply bg-background text-foreground;
   }
 }
+
+/* Document Reader Animations */
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-out-left {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-16px);
+  }
+}
+
+@keyframes slide-out-right {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.3s ease-out forwards;
+}
+
+.animate-slide-out-left {
+  animation: slide-out-left 0.15s ease-in forwards;
+}
+
+.animate-slide-out-right {
+  animation: slide-out-right 0.15s ease-in forwards;
+}
+
+/* Heading highlight when navigating from TOC */
+@keyframes heading-highlight {
+  0% {
+    background-color: oklch(0.62 0.12 35 / 0.2);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+.heading-highlight {
+  animation: heading-highlight 2s ease-out forwards;
+  border-radius: 0.25rem;
+  margin-left: -0.5rem;
+  margin-right: -0.5rem;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}

@@ -35,6 +35,7 @@ import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import { Button } from "./components/ui/button";
 import { ContextFileItem, ConfigFileItem } from "./components/ContextFileItem";
+import { DocumentReader } from "./components/DocumentReader";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -297,6 +298,7 @@ type View =
   | { type: "kb-distill" }
   | { type: "kb-distill-detail"; document: DistillDocument }
   | { type: "kb-reference" }
+  | { type: "kb-reference-doc"; source: string; docIndex: number }
   | { type: "marketplace"; category?: TemplateCategory }
   | { type: "template-detail"; template: TemplateComponent; category: TemplateCategory }
   | { type: "feature-todo"; feature: FeatureType };
@@ -426,7 +428,7 @@ function App() {
                     ? "output-styles"
                     : view.type === "kb-distill" || view.type === "kb-distill-detail"
                       ? "kb-distill"
-                      : view.type === "kb-reference"
+                      : view.type === "kb-reference" || view.type === "kb-reference-doc"
                         ? "kb-reference"
                         : view.type === "marketplace" || view.type === "template-detail"
                         ? "marketplace"
@@ -835,10 +837,13 @@ function App() {
           />
         )}
 
-        {view.type === "kb-reference" && (
-          <ConfigPage>
-            <ReferenceView />
-          </ConfigPage>
+        {(view.type === "kb-reference" || view.type === "kb-reference-doc") && (
+          <ReferenceView
+            initialSource={view.type === "kb-reference-doc" ? view.source : undefined}
+            initialDocIndex={view.type === "kb-reference-doc" ? view.docIndex : undefined}
+            onDocOpen={(source, docIndex) => navigate({ type: "kb-reference-doc", source, docIndex })}
+            onDocClose={() => navigate({ type: "kb-reference" })}
+          />
         )}
 
         {view.type === "settings" && (
@@ -1591,190 +1596,137 @@ function ReferenceDocTree({
   );
 }
 
-function ReferenceView() {
+function ReferenceView({
+  initialSource,
+  initialDocIndex,
+  onDocOpen,
+  onDocClose,
+}: {
+  initialSource?: string;
+  initialDocIndex?: number;
+  onDocOpen: (source: string, docIndex: number) => void;
+  onDocClose: () => void;
+}) {
   const [sources, setSources] = useState<ReferenceSource[]>([]);
   const [loading, setLoading] = useState(true);
-  const [expandedSource, setExpandedSource] = useState<string | null>(null);
+  const [expandedSource, setExpandedSource] = useState<string | null>(initialSource ?? null);
   const [docs, setDocs] = useState<ReferenceDoc[]>([]);
   const [docsLoading, setDocsLoading] = useState(false);
-  const [selectedDoc, setSelectedDoc] = useState<{ source: string; doc: ReferenceDoc; index: number } | null>(null);
   const [docContent, setDocContent] = useState<string>("");
   const [docLoading, setDocLoading] = useState(false);
-  const [showGoToTop, setShowGoToTop] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
 
+  const isDocView = initialSource !== undefined && initialDocIndex !== undefined;
+
+  // Load sources
   useEffect(() => {
     invoke<ReferenceSource[]>("list_reference_sources")
       .then(setSources)
       .finally(() => setLoading(false));
   }, []);
 
-  // Scroll listener for Go to Top button
+  // Load docs when source is expanded or when initial source is provided
   useEffect(() => {
-    if (!selectedDoc) {
-      setShowGoToTop(false);
-      return;
-    }
-    const scrollContainer = containerRef.current?.closest("main");
-    if (!scrollContainer) return;
+    if (!expandedSource) return;
+    setDocsLoading(true);
+    invoke<ReferenceDoc[]>("list_reference_docs", { source: expandedSource })
+      .then(setDocs)
+      .finally(() => setDocsLoading(false));
+  }, [expandedSource]);
 
-    const handleScroll = () => {
-      setShowGoToTop(scrollContainer.scrollTop > 200);
-    };
-    scrollContainer.addEventListener("scroll", handleScroll);
-    return () => scrollContainer.removeEventListener("scroll", handleScroll);
-  }, [selectedDoc]);
+  // Load doc content when in doc view
+  useEffect(() => {
+    if (!isDocView || docs.length === 0) return;
+    const doc = docs[initialDocIndex];
+    if (!doc) return;
+    setDocLoading(true);
+    invoke<string>("get_reference_doc", { path: doc.path })
+      .then(setDocContent)
+      .finally(() => setDocLoading(false));
+  }, [isDocView, initialDocIndex, docs]);
 
-  const scrollToTop = () => {
-    const scrollContainer = containerRef.current?.closest("main");
-    scrollContainer?.scrollTo({ top: 0, behavior: "smooth" });
-  };
-
-  const handleSourceClick = async (source: ReferenceSource) => {
+  const handleSourceClick = (source: ReferenceSource) => {
     if (expandedSource === source.name) {
       setExpandedSource(null);
       setDocs([]);
       return;
     }
     setExpandedSource(source.name);
-    setDocsLoading(true);
-    try {
-      const result = await invoke<ReferenceDoc[]>("list_reference_docs", { source: source.name });
-      setDocs(result);
-    } finally {
-      setDocsLoading(false);
+  };
+
+  const handleDocClick = (source: string, _doc: ReferenceDoc, index: number) => {
+    onDocOpen(source, index);
+  };
+
+  const handleNavigate = async (index: number) => {
+    if (!initialSource) return;
+    // Save scroll position before navigating
+    const scrollKey = `lovcode:ref-scroll:${initialSource}:${initialDocIndex}`;
+    const scrollContainer = document.querySelector("[data-ref-scroll]");
+    if (scrollContainer) {
+      localStorage.setItem(scrollKey, String(scrollContainer.scrollTop));
     }
-  };
-
-  const handleDocClick = async (source: string, doc: ReferenceDoc, index: number) => {
-    setSelectedDoc({ source, doc, index });
-    setDocLoading(true);
-    try {
-      const content = await invoke<string>("get_reference_doc", { path: doc.path });
-      setDocContent(content);
-    } finally {
-      setDocLoading(false);
-    }
-  };
-
-  const handlePrev = () => {
-    if (!selectedDoc || selectedDoc.index <= 0) return;
-    const prevDoc = docs[selectedDoc.index - 1];
-    handleDocClick(selectedDoc.source, prevDoc, selectedDoc.index - 1);
-  };
-
-  const handleNext = () => {
-    if (!selectedDoc || selectedDoc.index >= docs.length - 1) return;
-    const nextDoc = docs[selectedDoc.index + 1];
-    handleDocClick(selectedDoc.source, nextDoc, selectedDoc.index + 1);
+    onDocOpen(initialSource, index);
   };
 
   if (loading) return <LoadingState message="Loading reference sources..." />;
 
-  if (selectedDoc) {
-    const hasPrev = selectedDoc.index > 0;
-    const hasNext = selectedDoc.index < docs.length - 1;
-
+  if (isDocView && docs.length > 0) {
     return (
-      <div ref={containerRef} className="space-y-4 relative">
-        <div className="flex items-center justify-between">
-          <button
-            onClick={() => setSelectedDoc(null)}
-            className="flex items-center gap-2 text-sm text-muted-foreground hover:text-ink transition-colors"
-          >
-            <ChevronDown className="w-4 h-4 rotate-90" />
-            Back to {selectedDoc.source}
-          </button>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={handlePrev}
-              disabled={!hasPrev}
-              className={`p-1.5 rounded-lg transition-colors ${hasPrev ? "hover:bg-card-alt text-muted-foreground hover:text-ink" : "text-muted-foreground/30 cursor-not-allowed"}`}
-              title="Previous document"
-            >
-              <ChevronDown className="w-4 h-4 rotate-90" />
-            </button>
-            <span className="text-xs text-muted-foreground px-2">{selectedDoc.index + 1} / {docs.length}</span>
-            <button
-              onClick={handleNext}
-              disabled={!hasNext}
-              className={`p-1.5 rounded-lg transition-colors ${hasNext ? "hover:bg-card-alt text-muted-foreground hover:text-ink" : "text-muted-foreground/30 cursor-not-allowed"}`}
-              title="Next document"
-            >
-              <ChevronDown className="w-4 h-4 -rotate-90" />
-            </button>
-          </div>
-        </div>
-        {docLoading ? (
-          <LoadingState message="Loading document..." />
-        ) : (
-          <>
-            <ContentCard label="" content={docContent} showGoToTop={showGoToTop} onGoToTop={scrollToTop} />
-            <div className="flex items-center justify-between pt-4 border-t border-border">
-              <button
-                onClick={handlePrev}
-                disabled={!hasPrev}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${hasPrev ? "hover:bg-card-alt text-muted-foreground hover:text-ink" : "text-muted-foreground/30 cursor-not-allowed"}`}
-              >
-                <ChevronDown className="w-4 h-4 rotate-90" />
-                {hasPrev && docs[selectedDoc.index - 1]?.name}
-              </button>
-              <button
-                onClick={handleNext}
-                disabled={!hasNext}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${hasNext ? "hover:bg-card-alt text-muted-foreground hover:text-ink" : "text-muted-foreground/30 cursor-not-allowed"}`}
-              >
-                {hasNext && docs[selectedDoc.index + 1]?.name}
-                <ChevronDown className="w-4 h-4 -rotate-90" />
-              </button>
-            </div>
-          </>
-        )}
-      </div>
+      <DocumentReader
+        documents={docs}
+        currentIndex={initialDocIndex}
+        content={docContent}
+        loading={docLoading}
+        sourceName={initialSource}
+        onNavigate={handleNavigate}
+        onBack={onDocClose}
+      />
     );
   }
 
   return (
-    <div className="space-y-2">
-      {sources.length > 0 ? (
-        sources.map((source) => (
-          <div key={source.name}>
-            <button
-              onClick={() => handleSourceClick(source)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-colors ${
-                expandedSource === source.name
-                  ? "bg-primary/10 text-primary"
-                  : "bg-card hover:bg-card-alt"
-              }`}
-            >
-              <span className="text-lg">📖</span>
-              <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm">{source.name}</div>
-                <div className="text-xs text-muted-foreground">{source.doc_count} docs</div>
-              </div>
-              <ChevronDown className={`w-4 h-4 transition-transform ${expandedSource === source.name ? "rotate-180" : ""}`} />
-            </button>
-            {expandedSource === source.name && (
-              <div className="ml-4 mt-1 space-y-1">
-                {docsLoading ? (
-                  <div className="px-4 py-2 text-sm text-muted-foreground">Loading...</div>
-                ) : docs.length > 0 ? (
-                  <ReferenceDocTree docs={docs} sourceName={source.name} onDocClick={handleDocClick} />
-                ) : (
-                  <div className="px-4 py-2 text-sm text-muted-foreground">No documents</div>
-                )}
-              </div>
-            )}
-          </div>
-        ))
-      ) : (
-        <EmptyState
-          icon="📖"
-          message="No reference sources"
-          hint="Add documentation symlinks to ~/.lovstudio/docs/reference/"
-        />
-      )}
-    </div>
+    <ConfigPage>
+      <div className="space-y-2">
+        {sources.length > 0 ? (
+          sources.map((source) => (
+            <div key={source.name}>
+              <button
+                onClick={() => handleSourceClick(source)}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition-colors ${
+                  expandedSource === source.name
+                    ? "bg-primary/10 text-primary"
+                    : "bg-card hover:bg-card-alt"
+                }`}
+              >
+                <span className="text-lg">📖</span>
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-sm">{source.name}</div>
+                  <div className="text-xs text-muted-foreground">{source.doc_count} docs</div>
+                </div>
+                <ChevronDown className={`w-4 h-4 transition-transform ${expandedSource === source.name ? "rotate-180" : ""}`} />
+              </button>
+              {expandedSource === source.name && (
+                <div className="ml-4 mt-1 space-y-1">
+                  {docsLoading ? (
+                    <div className="px-4 py-2 text-sm text-muted-foreground">Loading...</div>
+                  ) : docs.length > 0 ? (
+                    <ReferenceDocTree docs={docs} sourceName={source.name} onDocClick={handleDocClick} />
+                  ) : (
+                    <div className="px-4 py-2 text-sm text-muted-foreground">No documents</div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))
+        ) : (
+          <EmptyState
+            icon="📖"
+            message="No reference sources"
+            hint="Add documentation symlinks to ~/.lovstudio/docs/reference/"
+          />
+        )}
+      </div>
+    </ConfigPage>
   );
 }
 
