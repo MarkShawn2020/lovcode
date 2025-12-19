@@ -1507,6 +1507,88 @@ interface ReferenceSource {
 interface ReferenceDoc {
   name: string;
   path: string;
+  group: string | null;
+}
+
+function ReferenceDocTree({
+  docs,
+  sourceName,
+  onDocClick,
+}: {
+  docs: ReferenceDoc[];
+  sourceName: string;
+  onDocClick: (source: string, doc: ReferenceDoc, index: number) => void;
+}) {
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+
+  // Group docs by their group field
+  const grouped = useMemo(() => {
+    const groups: { name: string | null; docs: { doc: ReferenceDoc; index: number }[] }[] = [];
+    let currentGroup: string | null = null;
+    let currentDocs: { doc: ReferenceDoc; index: number }[] = [];
+
+    docs.forEach((doc, index) => {
+      if (doc.group !== currentGroup) {
+        if (currentDocs.length > 0) {
+          groups.push({ name: currentGroup, docs: currentDocs });
+        }
+        currentGroup = doc.group;
+        currentDocs = [];
+      }
+      currentDocs.push({ doc, index });
+    });
+
+    if (currentDocs.length > 0) {
+      groups.push({ name: currentGroup, docs: currentDocs });
+    }
+
+    return groups;
+  }, [docs]);
+
+  const toggleGroup = (groupName: string) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupName)) {
+        next.delete(groupName);
+      } else {
+        next.add(groupName);
+      }
+      return next;
+    });
+  };
+
+  return (
+    <div className="space-y-1">
+      {grouped.map((group, groupIdx) => (
+        <div key={group.name ?? `ungrouped-${groupIdx}`}>
+          {group.name && (
+            <button
+              onClick={() => toggleGroup(group.name!)}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-ink transition-colors"
+            >
+              <ChevronDown className={`w-3 h-3 transition-transform ${collapsedGroups.has(group.name) ? "-rotate-90" : ""}`} />
+              <span className="font-medium">{group.name}</span>
+              <span className="text-muted-foreground/60">({group.docs.length})</span>
+            </button>
+          )}
+          {!collapsedGroups.has(group.name ?? "") && (
+            <div className={group.name ? "ml-3" : ""}>
+              {group.docs.map(({ doc, index }) => (
+                <button
+                  key={doc.path}
+                  onClick={() => onDocClick(sourceName, doc, index)}
+                  className="w-full flex items-center gap-2 px-4 py-1.5 rounded-lg text-left text-sm hover:bg-card-alt transition-colors"
+                >
+                  <span className="text-muted-foreground text-xs">📄</span>
+                  <span className="truncate">{doc.name}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function ReferenceView() {
@@ -1677,16 +1759,7 @@ function ReferenceView() {
                 {docsLoading ? (
                   <div className="px-4 py-2 text-sm text-muted-foreground">Loading...</div>
                 ) : docs.length > 0 ? (
-                  docs.map((doc, index) => (
-                    <button
-                      key={doc.path}
-                      onClick={() => handleDocClick(source.name, doc, index)}
-                      className="w-full flex items-center gap-2 px-4 py-2 rounded-lg text-left text-sm hover:bg-card-alt transition-colors"
-                    >
-                      <span className="text-muted-foreground">📄</span>
-                      <span className="truncate">{doc.name}</span>
-                    </button>
-                  ))
+                  <ReferenceDocTree docs={docs} sourceName={source.name} onDocClick={handleDocClick} />
                 ) : (
                   <div className="px-4 py-2 text-sm text-muted-foreground">No documents</div>
                 )}

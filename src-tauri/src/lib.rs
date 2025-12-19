@@ -1229,6 +1229,7 @@ pub struct ReferenceSource {
 pub struct ReferenceDoc {
     pub name: String,
     pub path: String,
+    pub group: Option<String>,
 }
 
 #[tauri::command]
@@ -1276,6 +1277,35 @@ fn list_reference_docs(source: String) -> Result<Vec<ReferenceDoc>, String> {
         return Ok(vec![]);
     }
 
+    // Read _order.txt if exists, parse groups from comments
+    let order_file = source_dir.join("_order.txt");
+    let mut order_map: HashMap<String, (usize, Option<String>)> = HashMap::new(); // name -> (order, group)
+
+    if order_file.exists() {
+        if let Ok(content) = fs::read_to_string(&order_file) {
+            let mut current_group: Option<String> = None;
+            let mut order_idx = 0;
+
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if trimmed.starts_with('#') {
+                    // Comment line = group name (strip # and trim)
+                    let group_name = trimmed.trim_start_matches('#').trim();
+                    if !group_name.is_empty() {
+                        current_group = Some(group_name.to_string());
+                    }
+                } else {
+                    // Doc name
+                    order_map.insert(trimmed.to_string(), (order_idx, current_group.clone()));
+                    order_idx += 1;
+                }
+            }
+        }
+    }
+
     let mut docs = Vec::new();
     for entry in fs::read_dir(&source_dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -1286,14 +1316,27 @@ fn list_reference_docs(source: String) -> Result<Vec<ReferenceDoc>, String> {
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_default();
 
+            let group = order_map.get(&name).and_then(|(_, g)| g.clone());
+
             docs.push(ReferenceDoc {
                 name,
                 path: path.to_string_lossy().to_string(),
+                group,
             });
         }
     }
 
-    docs.sort_by(|a, b| a.name.cmp(&b.name));
+    // Sort by _order.txt if available, otherwise alphabetically
+    if !order_map.is_empty() {
+        docs.sort_by(|a, b| {
+            let a_idx = order_map.get(&a.name).map(|(i, _)| *i).unwrap_or(usize::MAX);
+            let b_idx = order_map.get(&b.name).map(|(i, _)| *i).unwrap_or(usize::MAX);
+            a_idx.cmp(&b_idx)
+        });
+    } else {
+        docs.sort_by(|a, b| a.name.cmp(&b.name));
+    }
+
     Ok(docs)
 }
 
