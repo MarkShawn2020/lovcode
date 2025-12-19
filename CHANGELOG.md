@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.7.0
+
+### Minor Changes
+
+- ### Features
+
+  - feat(distill): 添加目录监听自动刷新与 UI 优化
+  - feat(chats): 实现虚拟无限滚动加载
+  - feat(distill): 支持从 distill 跳转到 session
+
+  ### Performance
+
+  - perf: 优化 History 页面性能，避免 IO 阻塞 UI
+
+  ### Fixes
+
+  - fix(export): 修复导出对话框按钮被隐藏的问题
+  - fix(distill): 修复打开文件路径解析错误
+
+  ### Style
+
+  - style(sidebar): 优化 Knowledge 子菜单选中状态的视觉层次
+  - style(theme): 集成 Lovstudio 暖学术设计系统
+
+  ### Refactor
+
+  - refactor(session): 使用下拉菜单优化 SessionDetail 工具栏
+
 ## 0.6.2
 
 ### Patch Changes
