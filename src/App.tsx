@@ -2434,15 +2434,27 @@ function CommandDetailView({
     }
   };
 
+  // Generate default alias placeholder from command name (e.g., /lovstudio/better/readme -> /better-readme)
+  const defaultAliasPlaceholder = (() => {
+    const parts = command.name.split("/").filter(Boolean);
+    if (parts.length <= 1) return "";
+    // Take last two parts and join with hyphen
+    const lastParts = parts.slice(-2);
+    return "/" + lastParts.join("-");
+  })();
+
   const handleAliasKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
       e.preventDefault();
       handleSaveAliases();
     } else if (e.key === "Tab" && !e.shiftKey) {
       e.preventDefault();
-      // Add comma and space if not already ending with comma
       const trimmed = aliasesInput.trimEnd();
-      if (trimmed && !trimmed.endsWith(",")) {
+      if (!trimmed && defaultAliasPlaceholder) {
+        // Accept placeholder when input is empty
+        setAliasesInput(defaultAliasPlaceholder + ", ");
+      } else if (trimmed && !trimmed.endsWith(",")) {
+        // Add comma and space to continue
         setAliasesInput(trimmed + ", ");
       }
     }
@@ -2517,7 +2529,7 @@ function CommandDetailView({
               value={aliasesInput}
               onChange={(e) => setAliasesInput(e.target.value)}
               onKeyDown={handleAliasKeyDown}
-              placeholder="/old-name, /another-old-name (Enter to save, Tab to add more)"
+              placeholder={defaultAliasPlaceholder || "/old-name"}
               className="font-mono text-sm"
               autoFocus
             />
