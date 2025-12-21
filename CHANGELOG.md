@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.8.0
+
+### Minor Changes
+
+- commands: 支持重命名/aliases/智能 placeholder
+  distill: 支持可选 session + source 渠道标记
+  fix: usePersistedState JSON 解析异常
+
 ## 0.7.0
 
 ### Minor Changes
