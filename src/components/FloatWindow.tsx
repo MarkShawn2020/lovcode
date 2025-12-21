@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ClipboardList, X, GripVertical } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, currentMonitor, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
@@ -19,10 +19,80 @@ export interface ReviewItem {
 // FloatWindow Component
 // ============================================================================
 
+// 磁吸阈值（px）
+const SNAP_THRESHOLD = 240;
+
 export function FloatWindow() {
   const [items, setItems] = useState<ReviewItem[]>([]);
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandDirection, setExpandDirection] = useState<"left" | "right">("right");
+  const isDraggingRef = useRef(false);
+
+  // 磁吸到边缘
+  const snapToEdge = async () => {
+    const win = getCurrentWindow();
+    const monitor = await currentMonitor();
+    if (!monitor) return;
+
+    const pos = await win.outerPosition();
+    const size = await win.outerSize();
+    const scaleFactor = monitor.scaleFactor;
+
+    const screenWidth = monitor.size.width / scaleFactor;
+    const screenHeight = monitor.size.height / scaleFactor;
+    const windowX = pos.x / scaleFactor;
+    const windowY = pos.y / scaleFactor;
+    const windowWidth = size.width / scaleFactor;
+    const windowHeight = size.height / scaleFactor;
+
+    let newX = windowX;
+    let newY = windowY;
+    let snapped = false;
+
+    // 左边磁吸
+    if (windowX < SNAP_THRESHOLD) {
+      newX = 0;
+      snapped = true;
+    }
+    // 右边磁吸
+    else if (screenWidth - (windowX + windowWidth) < SNAP_THRESHOLD) {
+      newX = screenWidth - windowWidth;
+      snapped = true;
+    }
+
+    // 上边磁吸
+    if (windowY < SNAP_THRESHOLD) {
+      newY = 0;
+      snapped = true;
+    }
+    // 下边磁吸
+    else if (screenHeight - (windowY + windowHeight) < SNAP_THRESHOLD) {
+      newY = screenHeight - windowHeight;
+      snapped = true;
+    }
+
+    if (snapped) {
+      await win.setPosition(new LogicalPosition(newX, newY));
+    }
+  };
+
+  // 监听鼠标松开事件，拖拽结束后磁吸
+  useEffect(() => {
+    const handleGlobalMouseUp = () => {
+      if (isDraggingRef.current) {
+        isDraggingRef.current = false;
+        // 延迟一帧确保窗口位置已更新
+        requestAnimationFrame(() => {
+          snapToEdge();
+        });
+      }
+    };
+
+    window.addEventListener("mouseup", handleGlobalMouseUp);
+    return () => {
+      window.removeEventListener("mouseup", handleGlobalMouseUp);
+    };
+  }, []);
 
   // 监听后端推送
   useEffect(() => {
@@ -54,6 +124,7 @@ export function FloatWindow() {
       // 移动超过5px才算拖拽
       if (!isDragging && (dx > 5 || dy > 5)) {
         isDragging = true;
+        isDraggingRef.current = true;
         document.removeEventListener("mousemove", handleMouseMove);
         document.removeEventListener("mouseup", handleMouseUp);
 

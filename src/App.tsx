@@ -2089,8 +2089,8 @@ function CommandsView({
 
   const renderTreeNode = (node: TreeNode, depth: number = 0): React.ReactNode => {
     const isFolder = node.type === "folder";
-    // 文件夹正常缩进，命令文本对齐到父文件夹文本
-    const indent = isFolder ? depth * 24 : Math.max(0, (depth - 1) * 24);
+    // 命令图标对齐到父文件夹文字开始位置
+    const indent = depth * 24;
     const isExpanded = isFolder && expandedFolders.has(node.path);
 
     // 命令相关

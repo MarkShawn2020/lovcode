@@ -1213,7 +1213,6 @@ fn rename_command(path: String, new_name: String, create_dir: Option<bool>) -> R
         return Err(format!("A command with name '{}' already exists", new_filename));
     }
 
-    println!("[rename_command] src: {:?}, dest: {:?}, equal: {}", src, dest, dest == src);
     if dest != src {
         // Calculate old command name (derive from filename without .md)
         let old_basename = src.file_stem()
@@ -1250,9 +1249,7 @@ fn rename_command(path: String, new_name: String, create_dir: Option<bool>) -> R
             fs::write(&src, &updated).map_err(|e| e.to_string())?;
         }
 
-        println!("[rename_command] executing fs::rename from {:?} to {:?}", src, dest);
         fs::rename(&src, &dest).map_err(|e| e.to_string())?;
-        println!("[rename_command] fs::rename succeeded");
 
         // Also rename associated .changelog file if exists
         let changelog_src = src.with_extension("changelog");
