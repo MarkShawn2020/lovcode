@@ -1158,9 +1158,9 @@ fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
     (frontmatter, body)
 }
 
-/// Rename a command file
+/// Rename a command file (supports path changes like /foo/bar -> /foo/baz/bar)
 #[tauri::command]
-fn rename_command(path: String, new_name: String) -> Result<String, String> {
+fn rename_command(path: String, new_name: String, create_dir: Option<bool>) -> Result<String, String> {
     let src = PathBuf::from(&path);
     if !src.exists() {
         return Err(format!("Command file not found: {}", path));
@@ -1170,35 +1170,38 @@ fn rename_command(path: String, new_name: String) -> Result<String, String> {
         return Err("Can only rename .md commands".to_string());
     }
 
-    // Extract just the filename part (last segment after /)
+    // Parse new_name as a command path (e.g., /lovstudio/repo/takeover)
     let name = new_name.trim().trim_start_matches('/');
     if name.is_empty() {
         return Err("New name cannot be empty".to_string());
     }
 
-    // Get just the last part if it contains path separators
-    let basename = name.rsplit('/').next().unwrap_or(name);
-    if basename.is_empty() {
-        return Err("New name cannot be empty".to_string());
-    }
-
-    let new_filename = if basename.ends_with(".md") {
-        basename.to_string()
+    // Build destination path from command name
+    let commands_dir = get_claude_dir().join("commands");
+    let new_filename = if name.ends_with(".md") {
+        name.to_string()
     } else {
-        format!("{}.md", basename)
+        format!("{}.md", name)
     };
+    let dest = commands_dir.join(&new_filename);
 
-    let dest = src.parent()
-        .ok_or("Cannot get parent directory")?
-        .join(&new_filename);
+    // Check if destination directory exists
+    if let Some(dest_parent) = dest.parent() {
+        if !dest_parent.exists() {
+            if create_dir.unwrap_or(false) {
+                fs::create_dir_all(dest_parent).map_err(|e| format!("Failed to create directory: {}", e))?;
+            } else {
+                // Return special error for frontend to show confirmation
+                return Err(format!("DIR_NOT_EXIST:{}", dest_parent.to_string_lossy()));
+            }
+        }
+    }
 
     if dest.exists() && dest != src {
         return Err(format!("A command with name '{}' already exists", new_filename));
     }
 
     if dest != src {
-        let commands_dir = get_claude_dir().join("commands");
-
         // Calculate old command name (derive from filename without .md)
         let old_basename = src.file_stem()
             .and_then(|s| s.to_str())

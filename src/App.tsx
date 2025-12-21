@@ -2378,6 +2378,8 @@ function CommandDetailView({
   const [deprecateDialogOpen, setDeprecateDialogOpen] = useState(false);
   const [replacementCommand, setReplacementCommand] = useState("");
   const [deprecationNote, setDeprecationNote] = useState("");
+  const [createDirDialogOpen, setCreateDirDialogOpen] = useState(false);
+  const [pendingRename, setPendingRename] = useState<{ newName: string; dirPath: string } | null>(null);
   const changelogRef = useRef<HTMLDivElement>(null);
   const [editingAliases, setEditingAliases] = useState(false);
   const [localAliases, setLocalAliases] = useState(command.aliases);
@@ -2473,12 +2475,27 @@ function CommandDetailView({
     }
   };
 
-  const handleRename = async (newName: string) => {
+  const handleRename = async (newName: string, createDir = false) => {
     try {
-      const newPath = await invoke<string>("rename_command", { path: command.path, newName });
+      const newPath = await invoke<string>("rename_command", { path: command.path, newName, createDir });
       onRenamed?.(newPath);
     } catch (e) {
-      console.error("Failed to rename command:", e);
+      const error = String(e);
+      if (error.startsWith("DIR_NOT_EXIST:")) {
+        const dirPath = error.slice("DIR_NOT_EXIST:".length);
+        setPendingRename({ newName, dirPath });
+        setCreateDirDialogOpen(true);
+      } else {
+        console.error("Failed to rename command:", e);
+      }
+    }
+  };
+
+  const handleConfirmCreateDir = async () => {
+    if (pendingRename) {
+      setCreateDirDialogOpen(false);
+      await handleRename(pendingRename.newName, true);
+      setPendingRename(null);
     }
   };
 
@@ -2611,6 +2628,32 @@ function CommandDetailView({
             </Button>
             <Button onClick={handleDeprecate} disabled={loading} className="bg-amber-600 hover:bg-amber-700">
               Deprecate
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create directory dialog */}
+      <Dialog open={createDirDialogOpen} onOpenChange={(open) => {
+        setCreateDirDialogOpen(open);
+        if (!open) setPendingRename(null);
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Directory?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground py-4">
+            The directory <code className="bg-card-alt px-1 rounded">{pendingRename?.dirPath}</code> does not exist. Create it?
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => {
+              setCreateDirDialogOpen(false);
+              setPendingRename(null);
+            }}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmCreateDir}>
+              Create
             </Button>
           </div>
         </DialogContent>
