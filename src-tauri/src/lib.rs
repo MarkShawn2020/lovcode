@@ -215,6 +215,7 @@ pub struct LocalCommand {
     pub version: Option<String>,
     pub status: String,                    // "active" | "deprecated" | "archived"
     pub deprecated_by: Option<String>,     // replacement command name
+    pub changelog: Option<String>,         // changelog content if .changelog file exists
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -898,47 +899,120 @@ fn list_local_commands() -> Result<Vec<LocalCommand>, String> {
         return Ok(vec![]);
     }
 
+    // One-time migration: check version marker for incremental migrations
+    let migration_marker = commands_dir.join(".archive/.migrated");
+    let current_version = fs::read_to_string(&migration_marker).unwrap_or_default();
+    let need_migration_v1 = !current_version.contains("v1");
+    let need_migration_v2 = !current_version.contains("v2");
+
     let mut commands = Vec::new();
-    collect_commands(&commands_dir, &commands_dir, &mut commands)?;
+    collect_commands(&commands_dir, &commands_dir, &mut commands, need_migration_v1)?;
+
+    // v2: migrate orphan .changelog files whose .md is already in .archive
+    if need_migration_v2 {
+        migrate_orphan_changelogs(&commands_dir);
+    }
+
+    // Update migration marker
+    if need_migration_v1 || need_migration_v2 {
+        if let Some(parent) = migration_marker.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(&migration_marker, "v1,v2");
+    }
 
     commands.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(commands)
 }
 
-fn collect_commands(base_dir: &PathBuf, current_dir: &PathBuf, commands: &mut Vec<LocalCommand>) -> Result<(), String> {
+/// Migrate orphan .changelog files whose .md is already in .archive
+fn migrate_orphan_changelogs(commands_dir: &PathBuf) {
+    let archive_dir = commands_dir.join(".archive");
+    if !archive_dir.exists() {
+        return;
+    }
+
+    // Find all .md files in .archive
+    if let Ok(entries) = fs::read_dir(&archive_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "md") {
+                let base_name = path.file_stem().unwrap_or_default().to_string_lossy();
+                // Check if orphan .changelog exists in parent
+                let changelog_src = commands_dir.join(format!("{}.changelog", base_name));
+                if changelog_src.exists() {
+                    let changelog_dest = archive_dir.join(format!("{}.changelog", base_name));
+                    let _ = fs::rename(&changelog_src, &changelog_dest);
+                }
+            }
+        }
+    }
+}
+
+fn collect_commands(base_dir: &PathBuf, current_dir: &PathBuf, commands: &mut Vec<LocalCommand>, need_migration: bool) -> Result<(), String> {
     for entry in fs::read_dir(current_dir).map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
         let path = entry.path();
 
         if path.is_dir() {
-            collect_commands(base_dir, &path, commands)?;
+            collect_commands(base_dir, &path, commands, need_migration)?;
         } else {
             let filename = path.file_name().unwrap_or_default().to_string_lossy();
+            let path_str = path.to_string_lossy();
+
+            // Check if file is in .archive directory (deprecated)
+            let in_archive = path_str.contains("/.archive/") || path_str.contains("\\.archive\\");
+
+            // Migrate legacy .md.deprecated files to .archive/ directory (only on first run)
+            let (actual_path, migrated) = if need_migration && filename.ends_with(".md.deprecated") && !in_archive {
+                if let Some(migrated_path) = migrate_deprecated_file(&path) {
+                    (migrated_path, true)
+                } else {
+                    (path.clone(), false)
+                }
+            } else {
+                (path.clone(), false)
+            };
+
+            let actual_filename = actual_path.file_name().unwrap_or_default().to_string_lossy();
+            let actual_path_str = actual_path.to_string_lossy();
+            let actual_in_archive = migrated || actual_path_str.contains("/.archive/") || actual_path_str.contains("\\.archive\\");
 
             // Determine file type and status
-            let (is_command, status, name_suffix) = if filename.ends_with(".md.deprecated") {
-                (true, "deprecated", ".md.deprecated")
-            } else if filename.ends_with(".md.archived") {
+            let (is_command, status, name_suffix) = if actual_in_archive && actual_filename.ends_with(".md") {
+                (true, "deprecated", ".md")
+            } else if actual_filename.ends_with(".md.archived") {
                 (true, "archived", ".md.archived")
-            } else if filename.ends_with(".md") {
+            } else if actual_filename.ends_with(".md") {
                 (true, "active", ".md")
             } else {
                 (false, "", "")
             };
 
             if is_command {
-                let relative = path.strip_prefix(base_dir).unwrap_or(&path);
+                let relative = actual_path.strip_prefix(base_dir).unwrap_or(&actual_path);
+                // Remove .archive/ from the name for cleaner display
                 let name = relative.to_string_lossy()
                     .trim_end_matches(name_suffix)
                     .replace("\\", "/")
+                    .replace(".archive/", "")
                     .to_string();
 
-                let content = fs::read_to_string(&path).unwrap_or_default();
+                let content = fs::read_to_string(&actual_path).unwrap_or_default();
                 let (frontmatter, body) = parse_frontmatter(&content);
+
+                // Read changelog if exists (same directory, .changelog extension)
+                let changelog = actual_path.parent()
+                    .map(|dir| {
+                        let base = actual_path.file_stem().unwrap_or_default().to_string_lossy();
+                        dir.join(format!("{}.changelog", base))
+                    })
+                    .filter(|p| p.exists())
+                    .and_then(|p| fs::read_to_string(p).ok());
 
                 commands.push(LocalCommand {
                     name: format!("/{}", name),
-                    path: path.to_string_lossy().to_string(),
+                    path: actual_path.to_string_lossy().to_string(),
                     description: frontmatter.get("description").cloned(),
                     allowed_tools: frontmatter.get("allowed-tools").cloned(),
                     argument_hint: frontmatter.get("argument-hint").cloned(),
@@ -946,11 +1020,42 @@ fn collect_commands(base_dir: &PathBuf, current_dir: &PathBuf, commands: &mut Ve
                     version: frontmatter.get("version").cloned(),
                     status: status.to_string(),
                     deprecated_by: frontmatter.get("replaced-by").cloned(),
+                    changelog,
                 });
             }
         }
     }
     Ok(())
+}
+
+/// Migrate a legacy .md.deprecated file to .archive/ directory
+fn migrate_deprecated_file(path: &PathBuf) -> Option<PathBuf> {
+    let parent = path.parent()?;
+    let archive_dir = parent.join(".archive");
+
+    // Create .archive directory if needed
+    if fs::create_dir_all(&archive_dir).is_err() {
+        return None;
+    }
+
+    // Get original filename without .deprecated suffix
+    let filename = path.file_name()?.to_string_lossy();
+    let new_filename = filename.trim_end_matches(".deprecated");
+    let dest = archive_dir.join(new_filename);
+
+    // Move file to .archive/
+    if fs::rename(path, &dest).is_ok() {
+        // Also migrate associated .changelog file if exists
+        let base_name = new_filename.trim_end_matches(".md");
+        let changelog_src = parent.join(format!("{}.changelog", base_name));
+        if changelog_src.exists() {
+            let changelog_dest = archive_dir.join(format!("{}.changelog", base_name));
+            let _ = fs::rename(&changelog_src, &changelog_dest);
+        }
+        Some(dest)
+    } else {
+        None
+    }
 }
 
 fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
@@ -977,8 +1082,8 @@ fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
     (frontmatter, body)
 }
 
-/// Deprecate a command by renaming it from .md to .md.deprecated
-/// This makes Claude Code stop loading it while preserving the file
+/// Deprecate a command by moving it to .archive/ hidden directory
+/// This makes Claude Code stop loading it and hides it from file browsers
 #[tauri::command]
 fn deprecate_command(path: String, replaced_by: Option<String>, note: Option<String>) -> Result<String, String> {
     let src = PathBuf::from(&path);
@@ -986,8 +1091,8 @@ fn deprecate_command(path: String, replaced_by: Option<String>, note: Option<Str
         return Err(format!("Command file not found: {}", path));
     }
 
-    // Only allow deprecating active .md files
-    if !path.ends_with(".md") || path.ends_with(".deprecated") || path.ends_with(".archived") {
+    // Only allow deprecating active .md files (not already in .archive/)
+    if !path.ends_with(".md") || path.contains("/.archive/") || path.contains("\\.archive\\") {
         return Err("Can only deprecate active .md commands".to_string());
     }
 
@@ -1004,9 +1109,23 @@ fn deprecate_command(path: String, replaced_by: Option<String>, note: Option<Str
         fs::write(&src, updated).map_err(|e| e.to_string())?;
     }
 
-    // Rename to .md.deprecated
-    let dest = PathBuf::from(format!("{}.deprecated", path));
+    // Create .archive/ directory in the same folder and move file there
+    let parent = src.parent().ok_or("Cannot get parent directory")?;
+    let archive_dir = parent.join(".archive");
+    fs::create_dir_all(&archive_dir).map_err(|e| e.to_string())?;
+
+    let filename = src.file_name().ok_or("Cannot get filename")?;
+    let dest = archive_dir.join(filename);
     fs::rename(&src, &dest).map_err(|e| e.to_string())?;
+
+    // Also move associated .changelog file if exists
+    let base_name = path.trim_end_matches(".md");
+    let changelog_src = PathBuf::from(format!("{}.changelog", base_name));
+    if changelog_src.exists() {
+        let changelog_filename = changelog_src.file_name().unwrap();
+        let changelog_dest = archive_dir.join(changelog_filename);
+        let _ = fs::rename(&changelog_src, &changelog_dest);
+    }
 
     Ok(dest.to_string_lossy().to_string())
 }
@@ -1043,17 +1162,25 @@ fn restore_command(path: String) -> Result<String, String> {
         return Err(format!("Command file not found: {}", path));
     }
 
-    let filename = src.to_string_lossy();
-    let dest_path = if filename.ends_with(".md.deprecated") {
-        // Remove .deprecated suffix
-        filename.trim_end_matches(".deprecated").to_string()
-    } else if filename.ends_with(".md.archived") {
+    let path_str = src.to_string_lossy();
+    let in_archive = path_str.contains("/.archive/") || path_str.contains("\\.archive\\");
+
+    let (dest_path, archive_dir, parent_dir) = if in_archive {
+        // Move from .archive/ back to parent directory
+        let archive_dir = src.parent().ok_or("Cannot get parent directory")?;
+        let parent = archive_dir.parent().ok_or("Cannot get grandparent directory")?;
+        let filename = src.file_name().ok_or("Cannot get filename")?;
+        (parent.join(filename).to_string_lossy().to_string(), Some(archive_dir.to_path_buf()), Some(parent.to_path_buf()))
+    } else if path_str.ends_with(".md.deprecated") {
+        // Legacy support: remove .deprecated suffix
+        (path_str.trim_end_matches(".deprecated").to_string(), None, None)
+    } else if path_str.ends_with(".md.archived") {
         // Move from versions/ back to parent and remove version info
         let parent = src.parent().and_then(|p| p.parent()).unwrap_or(&src);
         let file_name = src.file_name().unwrap_or_default().to_string_lossy();
         // Extract base name: "cmd.v1.0.0.md.archived" -> "cmd"
         let base = file_name.split(".v").next().unwrap_or(&file_name);
-        parent.join(format!("{}.md", base)).to_string_lossy().to_string()
+        (parent.join(format!("{}.md", base)).to_string_lossy().to_string(), None, None)
     } else {
         return Err("File is not deprecated or archived".to_string());
     };
@@ -1066,6 +1193,17 @@ fn restore_command(path: String) -> Result<String, String> {
     }
 
     fs::rename(&src, &dest).map_err(|e| e.to_string())?;
+
+    // Also restore associated .changelog file if exists (only for .archive/ case)
+    if let (Some(archive_dir), Some(parent_dir)) = (archive_dir, parent_dir) {
+        let base_name = dest_path.trim_end_matches(".md");
+        let changelog_name = format!("{}.changelog", PathBuf::from(base_name).file_name().unwrap_or_default().to_string_lossy());
+        let changelog_src = archive_dir.join(&changelog_name);
+        if changelog_src.exists() {
+            let changelog_dest = parent_dir.join(&changelog_name);
+            let _ = fs::rename(&changelog_src, &changelog_dest);
+        }
+    }
 
     Ok(dest_path)
 }

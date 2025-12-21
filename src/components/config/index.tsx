@@ -119,6 +119,8 @@ export function DetailHeader({
   badge,
   statusBadge,
   menuItems,
+  hasChangelog,
+  onChangelogClick,
 }: {
   title: string;
   description?: string | null;
@@ -130,6 +132,8 @@ export function DetailHeader({
   badge?: string | null;
   statusBadge?: { label: string; variant: "success" | "warning" | "muted" } | null;
   menuItems?: DetailHeaderMenuItem[];
+  hasChangelog?: boolean;
+  onChangelogClick?: () => void;
 }) {
   const hasMenu = (path && onOpenPath) || onNavigateSession || (menuItems && menuItems.length > 0);
 
@@ -148,6 +152,14 @@ export function DetailHeader({
             <span className="text-xs px-2 py-0.5 rounded bg-card-alt text-muted-foreground">
               {badge}
             </span>
+          )}
+          {hasChangelog && (
+            <button
+              onClick={onChangelogClick}
+              className="text-xs px-2 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 transition-colors cursor-pointer"
+            >
+              changelog
+            </button>
           )}
           {statusBadge && (
             <span className={`text-xs px-2 py-0.5 rounded ${

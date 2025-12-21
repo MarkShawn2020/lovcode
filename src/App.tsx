@@ -3,7 +3,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { version } from "../package.json";
-import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, ChevronRight as ChevronRightIcon, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw, ChevronLeft, ChevronRight, Store, Archive, RotateCcw, List, FolderTree, Folder, Zap } from "lucide-react";
+import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, ChevronRight as ChevronRightIcon, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw, ChevronLeft, ChevronRight, Store, Archive, RotateCcw, List, FolderTree, Folder, Terminal, FileText } from "lucide-react";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Markdown from "react-markdown";
@@ -195,6 +195,7 @@ interface LocalCommand {
   version: string | null;
   status: "active" | "deprecated" | "archived";
   deprecated_by: string | null;
+  changelog: string | null;
 }
 
 interface LocalAgent {
@@ -287,7 +288,7 @@ type View =
   | { type: "chat-messages"; projectId: string; sessionId: string; summary: string | null }
   | { type: "settings" }
   | { type: "commands" }
-  | { type: "command-detail"; command: LocalCommand }
+  | { type: "command-detail"; command: LocalCommand; scrollToChangelog?: boolean }
   | { type: "mcp" }
   | { type: "skills" }
   | { type: "skill-detail"; skill: LocalSkill }
@@ -1788,6 +1789,7 @@ function CommandsView({
   const [selectedCommand, setSelectedCommand] = useState<LocalCommand | null>(null);
   const [replacementCommand, setReplacementCommand] = useState("");
   const [deprecationNote, setDeprecationNote] = useState("");
+  const [changelogCommand, setChangelogCommand] = useState<LocalCommand | null>(null);
   const { search, setSearch, filtered } = useSearch(commands, ["name", "description"]);
 
   const refreshCommands = () => {
@@ -1947,8 +1949,9 @@ function CommandsView({
   };
 
   const renderTreeNode = (node: TreeNode, depth: number = 0): React.ReactNode => {
-    const indent = depth * 24;
     const isFolder = node.type === "folder";
+    // 文件夹正常缩进，命令文本对齐到父文件夹文本
+    const indent = isFolder ? depth * 24 : Math.max(0, (depth - 1) * 24);
     const isExpanded = isFolder && expandedFolders.has(node.path);
 
     // 命令相关
@@ -1961,23 +1964,15 @@ function CommandsView({
       <div key={isFolder ? node.path : cmd!.path} style={{ marginLeft: indent }}>
         <button
           onClick={() => isFolder ? toggleFolder(node.path) : onSelect(cmd!)}
-          className={`w-full flex items-center gap-2 py-2 px-3 text-left rounded-lg border transition-colors ${
-            isInactive
-              ? "bg-card-alt border-dashed border-border/50 opacity-70 hover:opacity-100"
-              : "bg-card border-border hover:border-primary"
-          }`}
+          className={`w-full flex items-center gap-2 py-1.5 px-2 text-left rounded-md transition-colors ${
+            isInactive ? "opacity-60 hover:opacity-100" : ""
+          } hover:bg-muted/50`}
         >
-          {/* Chevron 或占位 */}
-          {isFolder ? (
-            <ChevronRightIcon className={`w-4 h-4 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`} />
-          ) : (
-            <span className="w-4 h-4" />
-          )}
           {/* 图标 */}
           {isFolder ? (
             <Folder className="w-4 h-4 text-primary" />
           ) : (
-            <Zap className={`w-4 h-4 ${isInactive ? "text-muted-foreground" : "text-primary"}`} />
+            <Terminal className={`w-4 h-4 ${isInactive ? "text-muted-foreground" : "text-primary"}`} />
           )}
           {/* 名称 */}
           <span className={`font-mono font-medium ${isInactive ? "text-muted-foreground" : "text-primary"}`}>
@@ -2014,54 +2009,54 @@ function CommandsView({
           {cmd?.status === "archived" && (
             <span className="text-xs px-1.5 py-0.5 rounded bg-card-alt text-muted-foreground">archived</span>
           )}
-          {/* 菜单 */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <span
-                role="button"
-                className="w-4 h-4 flex items-center justify-center cursor-pointer hover:text-primary"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <MoreHorizontal className="w-4 h-4" />
-              </span>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {isFolder ? (
-                <>
-                  <DropdownMenuItem onClick={() => toggleFolder(node.path)}>
-                    {isExpanded ? "Collapse" : "Expand"}
+          {/* 命令菜单 */}
+          {!isFolder && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <span
+                  role="button"
+                  className="w-4 h-4 flex items-center justify-center cursor-pointer hover:text-primary"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <MoreHorizontal className="w-4 h-4" />
+                </span>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => onSelect(cmd!)}>
+                  <HelpCircle className="w-4 h-4 mr-2" />
+                  View Details
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => cmd?.changelog && setChangelogCommand(cmd)}
+                  disabled={!cmd?.changelog}
+                  className={!cmd?.changelog ? "opacity-50" : ""}
+                >
+                  <FileText className="w-4 h-4 mr-2" />
+                  View Changelog
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => invoke("open_in_editor", { path: cmd!.path })}>
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  Open in Editor
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => navigator.clipboard.writeText(cmd!.path)}>
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy Path
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {isInactive ? (
+                  <DropdownMenuItem onClick={() => handleRestore(cmd!)}>
+                    <RotateCcw className="w-4 h-4 mr-2" />
+                    Restore
                   </DropdownMenuItem>
-                </>
-              ) : (
-                <>
-                  <DropdownMenuItem onClick={() => onSelect(cmd!)}>
-                    <HelpCircle className="w-4 h-4 mr-2" />
-                    View Details
+                ) : (
+                  <DropdownMenuItem onClick={() => openDeprecateDialog(cmd!)} className="text-amber-600">
+                    <Archive className="w-4 h-4 mr-2" />
+                    Deprecate
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => invoke("open_in_editor", { path: cmd!.path })}>
-                    <ExternalLink className="w-4 h-4 mr-2" />
-                    Open in Editor
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => navigator.clipboard.writeText(cmd!.path)}>
-                    <Copy className="w-4 h-4 mr-2" />
-                    Copy Path
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  {isInactive ? (
-                    <DropdownMenuItem onClick={() => handleRestore(cmd!)}>
-                      <RotateCcw className="w-4 h-4 mr-2" />
-                      Restore
-                    </DropdownMenuItem>
-                  ) : (
-                    <DropdownMenuItem onClick={() => openDeprecateDialog(cmd!)} className="text-amber-600">
-                      <Archive className="w-4 h-4 mr-2" />
-                      Deprecate
-                    </DropdownMenuItem>
-                  )}
-                </>
-              )}
-            </DropdownMenuContent>
-          </DropdownMenu>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </button>
         {isFolder && isExpanded && (
           <div className="space-y-1 mt-1">
@@ -2161,7 +2156,7 @@ function CommandsView({
           </DialogHeader>
           <div className="space-y-4 py-4">
             <p className="text-sm text-muted-foreground">
-              This will rename the file to <code>.md.deprecated</code>, making Claude Code stop loading it.
+              This will move the file to a hidden <code>.archive/</code> folder, making it invisible to Claude Code and file browsers.
             </p>
             <div>
               <Label htmlFor="replacement">Replacement command (optional)</Label>
@@ -2190,6 +2185,25 @@ function CommandsView({
             </Button>
             <Button onClick={handleDeprecate} className="bg-amber-600 hover:bg-amber-700">
               Deprecate
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Changelog Dialog */}
+      <Dialog open={!!changelogCommand} onOpenChange={(open) => !open && setChangelogCommand(null)}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="font-serif">Changelog: {changelogCommand?.name}</DialogTitle>
+          </DialogHeader>
+          <div className="overflow-y-auto flex-1 py-4">
+            <pre className="text-sm text-muted-foreground whitespace-pre-wrap font-mono bg-muted/30 p-4 rounded-lg">
+              {changelogCommand?.changelog}
+            </pre>
+          </div>
+          <div className="flex justify-end pt-2">
+            <Button variant="outline" onClick={() => setChangelogCommand(null)}>
+              Close
             </Button>
           </div>
         </DialogContent>
@@ -2229,14 +2243,11 @@ function CommandItemCard({
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-2 py-2 px-3 text-left rounded-lg border transition-colors ${
-        isInactive
-          ? "bg-card-alt border-dashed border-border/50 opacity-70 hover:opacity-100"
-          : "bg-card border-border hover:border-primary"
-      }`}
+      className={`w-full flex items-center gap-2 py-1.5 px-2 text-left rounded-md transition-colors ${
+        isInactive ? "opacity-60 hover:opacity-100" : ""
+      } hover:bg-muted/50`}
     >
-      <span className="w-4 shrink-0" /> {/* 占位对齐 chevron */}
-      <Zap className={`w-4 h-4 shrink-0 ${isInactive ? "text-muted-foreground" : "text-primary"}`} />
+      <Terminal className={`w-4 h-4 shrink-0 ${isInactive ? "text-muted-foreground" : "text-primary"}`} />
       <span className={`font-mono font-medium shrink-0 ${isInactive ? "text-muted-foreground" : "text-primary"}`}>
         {displayName ?? command.name}
       </span>
@@ -2326,10 +2337,15 @@ function CommandDetailView({
   const [deprecateDialogOpen, setDeprecateDialogOpen] = useState(false);
   const [replacementCommand, setReplacementCommand] = useState("");
   const [deprecationNote, setDeprecationNote] = useState("");
+  const changelogRef = useRef<HTMLDivElement>(null);
 
   const isDeprecated = command.status === "deprecated";
   const isArchived = command.status === "archived";
   const isInactive = isDeprecated || isArchived;
+
+  const scrollToChangelog = () => {
+    changelogRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const handleDeprecate = async () => {
     setLoading(true);
@@ -2378,6 +2394,8 @@ function CommandDetailView({
             ? [{ label: "Restore", onClick: handleRestore, icon: RotateCcw, disabled: loading }]
             : [{ label: "Deprecate", onClick: () => setDeprecateDialogOpen(true), icon: Archive, variant: "danger" as const }]
         }
+        hasChangelog={!!command.changelog}
+        onChangelogClick={scrollToChangelog}
       />
 
       {/* Deprecation warning */}
@@ -2410,6 +2428,11 @@ function CommandDetailView({
           </DetailCard>
         )}
         <ContentCard label="Content" content={command.content} />
+        {command.changelog && (
+          <div ref={changelogRef}>
+            <ContentCard label="Changelog" content={command.changelog} />
+          </div>
+        )}
       </div>
 
       {/* Deprecate dialog */}
@@ -2420,7 +2443,7 @@ function CommandDetailView({
           </DialogHeader>
           <div className="space-y-4 py-4">
             <p className="text-sm text-muted-foreground">
-              This will rename the file to <code>.md.deprecated</code>, making Claude Code stop loading it.
+              This will move the file to a hidden <code>.archive/</code> folder, making it invisible to Claude Code and file browsers.
             </p>
             <div>
               <Label htmlFor="replacement">Replacement command (optional)</Label>
