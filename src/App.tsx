@@ -1876,23 +1876,21 @@ function CommandsView({
   const activeCount = commands.filter((c) => c.status === "active").length;
   const deprecatedCount = commands.filter((c) => c.status !== "active").length;
 
-  // Build tree structure for tree view
+  // Build tree structure for tree view (supports unlimited nesting)
+  type FolderNode = { type: "folder"; name: string; path: string; childMap: Map<string, TreeNode> };
   type TreeNode = { type: "folder"; name: string; path: string; children: TreeNode[] } | { type: "command"; command: LocalCommand };
 
   const buildTree = (cmds: LocalCommand[]): TreeNode[] => {
-    const root: Map<string, TreeNode> = new Map();
+    const root: Map<string, FolderNode | { type: "command"; command: LocalCommand }> = new Map();
 
     for (const cmd of cmds) {
-      // Extract relative path from full path (e.g., "~/.claude/commands/foo/bar.md" -> "foo/bar.md")
       const match = cmd.path.match(/\.claude\/commands\/(.+)$/);
       const relativePath = match ? match[1] : cmd.name + ".md";
       const parts = relativePath.replace(/\.md$/, "").split("/");
 
       if (parts.length === 1) {
-        // Root level command
         root.set(cmd.name, { type: "command", command: cmd });
       } else {
-        // Nested command - build folder structure
         let currentLevel = root;
         let currentPath = "";
         for (let i = 0; i < parts.length - 1; i++) {
@@ -1900,50 +1898,41 @@ function CommandsView({
           currentPath = currentPath ? `${currentPath}/${folderName}` : folderName;
           let folder = currentLevel.get(folderName);
           if (!folder || folder.type !== "folder") {
-            folder = { type: "folder", name: folderName, path: currentPath, children: [] };
+            folder = { type: "folder", name: folderName, path: currentPath, childMap: new Map() };
             currentLevel.set(folderName, folder);
           }
-          // Convert children array to map for next level
-          if (folder.type === "folder") {
-            const childMap = new Map<string, TreeNode>();
-            for (const child of folder.children) {
-              const key = child.type === "folder" ? child.name : child.command.name;
-              childMap.set(key, child);
-            }
-            if (i === parts.length - 2) {
-              // Last folder level - add command
-              childMap.set(cmd.name, { type: "command", command: cmd });
-            }
-            folder.children = Array.from(childMap.values());
-            currentLevel = childMap;
-          }
+          currentLevel = folder.childMap;
         }
+        currentLevel.set(cmd.name, { type: "command", command: cmd });
       }
     }
 
-    // Sort: folders first (alphabetically), then commands (by sortKey/sortDir)
-    const sortNodes = (nodes: TreeNode[]): TreeNode[] => {
+    // Convert FolderNode to TreeNode and sort
+    const convertAndSort = (map: Map<string, FolderNode | { type: "command"; command: LocalCommand }>): TreeNode[] => {
+      const nodes: TreeNode[] = [];
+      for (const node of map.values()) {
+        if (node.type === "folder") {
+          nodes.push({ type: "folder", name: node.name, path: node.path, children: convertAndSort(node.childMap) });
+        } else {
+          nodes.push(node);
+        }
+      }
       return nodes.sort((a, b) => {
         if (a.type !== b.type) return a.type === "folder" ? -1 : 1;
-        if (a.type === "folder" && b.type === "folder") {
-          return a.name.localeCompare(b.name);
-        }
-        // Both are commands
+        if (a.type === "folder" && b.type === "folder") return a.name.localeCompare(b.name);
         if (a.type === "command" && b.type === "command") {
           if (sortKey === "usage") {
-            const aCount = commandStats[a.command.name] || 0;
-            const bCount = commandStats[b.command.name] || 0;
-            return sortDir === "desc" ? bCount - aCount : aCount - bCount;
-          } else {
-            const cmp = a.command.name.localeCompare(b.command.name);
-            return sortDir === "desc" ? -cmp : cmp;
+            const diff = (commandStats[b.command.name] || 0) - (commandStats[a.command.name] || 0);
+            return sortDir === "desc" ? diff : -diff;
           }
+          const cmp = a.command.name.localeCompare(b.command.name);
+          return sortDir === "desc" ? -cmp : cmp;
         }
         return 0;
-      }).map(node => node.type === "folder" ? { ...node, children: sortNodes(node.children) } : node);
+      });
     };
 
-    return sortNodes(Array.from(root.values()));
+    return convertAndSort(root);
   };
 
   const tree = viewMode === "tree" ? buildTree(statusFiltered) : [];
