@@ -748,7 +748,7 @@ function App() {
 
         {view.type === "commands" && (
           <CommandsView
-            onSelect={(cmd) => navigate({ type: "command-detail", command: cmd })}
+            onSelect={(cmd, scrollToChangelog) => navigate({ type: "command-detail", command: cmd, scrollToChangelog })}
             marketplaceItems={catalog?.commands || []}
             onMarketplaceSelect={(item) => {
               const template = catalog?.commands.find(c => c.path === item.path);
@@ -765,6 +765,7 @@ function App() {
             onCommandUpdated={() => {
               // Will refresh when navigating back to commands view
             }}
+            scrollToChangelog={view.scrollToChangelog}
           />
         )}
 
@@ -1772,7 +1773,7 @@ function CommandsView({
   onMarketplaceSelect,
   onBrowseMore,
 }: {
-  onSelect: (cmd: LocalCommand) => void;
+  onSelect: (cmd: LocalCommand, scrollToChangelog?: boolean) => void;
   marketplaceItems: MarketplaceItem[];
   onMarketplaceSelect: (item: MarketplaceItem) => void;
   onBrowseMore?: () => void;
@@ -1789,7 +1790,6 @@ function CommandsView({
   const [selectedCommand, setSelectedCommand] = useState<LocalCommand | null>(null);
   const [replacementCommand, setReplacementCommand] = useState("");
   const [deprecationNote, setDeprecationNote] = useState("");
-  const [changelogCommand, setChangelogCommand] = useState<LocalCommand | null>(null);
   const { search, setSearch, filtered } = useSearch(commands, ["name", "description"]);
 
   const refreshCommands = () => {
@@ -2027,7 +2027,7 @@ function CommandsView({
                   View Details
                 </DropdownMenuItem>
                 <DropdownMenuItem
-                  onClick={() => cmd?.changelog && setChangelogCommand(cmd)}
+                  onClick={() => cmd?.changelog && onSelect(cmd, true)}
                   disabled={!cmd?.changelog}
                   className={!cmd?.changelog ? "opacity-50" : ""}
                 >
@@ -2189,25 +2189,6 @@ function CommandsView({
           </div>
         </DialogContent>
       </Dialog>
-
-      {/* Changelog Dialog */}
-      <Dialog open={!!changelogCommand} onOpenChange={(open) => !open && setChangelogCommand(null)}>
-        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
-          <DialogHeader>
-            <DialogTitle className="font-serif">Changelog: {changelogCommand?.name}</DialogTitle>
-          </DialogHeader>
-          <div className="overflow-y-auto flex-1 py-4">
-            <pre className="text-sm text-muted-foreground whitespace-pre-wrap font-mono bg-muted/30 p-4 rounded-lg">
-              {changelogCommand?.changelog}
-            </pre>
-          </div>
-          <div className="flex justify-end pt-2">
-            <Button variant="outline" onClick={() => setChangelogCommand(null)}>
-              Close
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </ConfigPage>
   );
 }
@@ -2328,10 +2309,12 @@ function CommandDetailView({
   command,
   onBack,
   onCommandUpdated,
+  scrollToChangelog: shouldScrollToChangelog,
 }: {
   command: LocalCommand;
   onBack: () => void;
   onCommandUpdated?: () => void;
+  scrollToChangelog?: boolean;
 }) {
   const [loading, setLoading] = useState(false);
   const [deprecateDialogOpen, setDeprecateDialogOpen] = useState(false);
@@ -2346,6 +2329,14 @@ function CommandDetailView({
   const scrollToChangelog = () => {
     changelogRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
+
+  // Auto-scroll to changelog if requested
+  useEffect(() => {
+    if (shouldScrollToChangelog && command.changelog) {
+      // Small delay to ensure DOM is ready
+      setTimeout(scrollToChangelog, 100);
+    }
+  }, [shouldScrollToChangelog, command.changelog]);
 
   const handleDeprecate = async () => {
     setLoading(true);
