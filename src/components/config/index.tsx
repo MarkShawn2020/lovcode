@@ -1,6 +1,6 @@
-import { useState, useEffect, ReactNode, ComponentType } from "react";
+import { useState, useEffect, useRef, ReactNode, ComponentType } from "react";
 import Markdown from "react-markdown";
-import { ExternalLink, Download, MessageCircle, MoreHorizontal, ChevronDown, type LucideProps } from "lucide-react";
+import { ExternalLink, Download, MessageCircle, MoreHorizontal, ChevronDown, Pencil, type LucideProps } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -121,6 +121,7 @@ export function DetailHeader({
   menuItems,
   hasChangelog,
   onChangelogClick,
+  onRename,
 }: {
   title: string;
   description?: string | null;
@@ -134,8 +135,42 @@ export function DetailHeader({
   menuItems?: DetailHeaderMenuItem[];
   hasChangelog?: boolean;
   onChangelogClick?: () => void;
+  onRename?: (newName: string) => void;
 }) {
   const hasMenu = (path && onOpenPath) || onNavigateSession || (menuItems && menuItems.length > 0);
+  const [isEditing, setIsEditing] = useState(false);
+  const [editValue, setEditValue] = useState(title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (isEditing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [isEditing]);
+
+  useEffect(() => {
+    setEditValue(title);
+  }, [title]);
+
+  const handleSubmit = () => {
+    const trimmed = editValue.trim();
+    if (trimmed && trimmed !== title) {
+      onRename?.(trimmed);
+    } else {
+      setEditValue(title);
+    }
+    setIsEditing(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      handleSubmit();
+    } else if (e.key === "Escape") {
+      setEditValue(title);
+      setIsEditing(false);
+    }
+  };
 
   return (
     <header className="mb-6">
@@ -147,7 +182,33 @@ export function DetailHeader({
       </button>
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <h1 className="font-mono text-2xl font-semibold text-primary">{title}</h1>
+          {isEditing ? (
+            <input
+              ref={inputRef}
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              onBlur={handleSubmit}
+              onKeyDown={handleKeyDown}
+              className="font-mono text-2xl font-semibold text-primary bg-transparent border-b-2 border-primary outline-none"
+            />
+          ) : (
+            <h1
+              className={`font-mono text-2xl font-semibold text-primary ${onRename ? "cursor-pointer hover:opacity-80" : ""}`}
+              onClick={onRename ? () => setIsEditing(true) : undefined}
+              title={onRename ? "Click to rename" : undefined}
+            >
+              {title}
+            </h1>
+          )}
+          {onRename && !isEditing && (
+            <button
+              onClick={() => setIsEditing(true)}
+              className="p-1 text-muted-foreground hover:text-primary transition-colors"
+              title="Rename"
+            >
+              <Pencil className="w-4 h-4" />
+            </button>
+          )}
           {badge && (
             <span className="text-xs px-2 py-0.5 rounded bg-card-alt text-muted-foreground">
               {badge}
