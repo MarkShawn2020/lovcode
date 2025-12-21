@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { ClipboardList, X, GripVertical } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow, currentMonitor, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
@@ -28,6 +28,27 @@ export function FloatWindow() {
   const [expandDirection, setExpandDirection] = useState<"left" | "right">("right");
   const [snapSide, setSnapSide] = useState<"left" | "right" | null>(null);
   const isDraggingRef = useRef(false);
+
+  // 点击穿透控制
+  const setIgnoreCursor = useCallback(async (ignore: boolean) => {
+    const win = getCurrentWindow();
+    await win.setIgnoreCursorEvents(ignore);
+  }, []);
+
+  // 默认启用穿透
+  useEffect(() => {
+    setIgnoreCursor(true);
+  }, [setIgnoreCursor]);
+
+  // 鼠标进入 UI 区域时取消穿透
+  const handleMouseEnter = useCallback(() => {
+    setIgnoreCursor(false);
+  }, [setIgnoreCursor]);
+
+  // 鼠标离开时恢复穿透
+  const handleMouseLeave = useCallback(() => {
+    setIgnoreCursor(true);
+  }, [setIgnoreCursor]);
 
   // 磁吸到边缘
   const snapToEdge = async () => {

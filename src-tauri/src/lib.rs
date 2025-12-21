@@ -2722,7 +2722,7 @@ struct ZenmuxTestResult {
 #[tauri::command]
 async fn test_zenmux_connection(base_url: String, auth_token: String, model: String) -> Result<ZenmuxTestResult, String> {
     if auth_token.trim().is_empty() {
-        return Err("ANTHROPIC_AUTH_TOKEN is empty".to_string());
+        return Err("ZENMUX_API_KEY/ANTHROPIC_AUTH_TOKEN is empty".to_string());
     }
 
     let base = base_url.trim_end_matches('/');
@@ -2739,10 +2739,15 @@ async fn test_zenmux_connection(base_url: String, auth_token: String, model: Str
         ]
     });
 
+    println!("zenmux test request url={}", url);
+    println!("zenmux test request headers x-api-key={} anthropic-version=2023-06-01 content-type=application/json", auth_token);
+    println!("zenmux test request body={}", payload);
+
     let response = client
         .post(&url)
         .header("x-api-key", auth_token)
         .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
         .json(&payload)
         .send()
         .await

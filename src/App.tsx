@@ -3390,8 +3390,14 @@ function SettingsView({
   const [search, setSearch] = useState("");
   const [applyStatus, setApplyStatus] = useState<Record<string, "idle" | "loading" | "success" | "error">>({});
   const [applyError, setApplyError] = useState<string | null>(null);
-  const [testStatus, setTestStatus] = useState<Record<string, "idle" | "loading" | "success" | "error">>({});
-  const [testMessage, setTestMessage] = useState<Record<string, string>>({});
+  const [testStatus, setTestStatus] = usePersistedState<Record<string, "idle" | "loading" | "success" | "error">>(
+    "lovcode:settings:routerTestStatus",
+    {}
+  );
+  const [testMessage, setTestMessage] = usePersistedState<Record<string, string>>(
+    "lovcode:settings:routerTestMessage",
+    {}
+  );
   const [testMissingKeys, setTestMissingKeys] = useState<Record<string, string[]>>({});
   const [testMissingValues, setTestMissingValues] = useState<Record<string, Record<string, string>>>({});
   const [editingEnvKey, setEditingEnvKey] = useState<string | null>(null);
@@ -3518,9 +3524,9 @@ function SettingsView({
       setTestMissingKeys((prev) => ({ ...prev, [presetKey]: [] }));
 
       if (presetKey === "zenmux") {
-        const authToken = (envSource.ANTHROPIC_AUTH_TOKEN || "").trim();
+        const authToken = (envSource.ZENMUX_API_KEY || envSource.ANTHROPIC_AUTH_TOKEN || "").trim();
         const baseUrl = envSource.ANTHROPIC_BASE_URL || "https://zenmux.ai/api/anthropic";
-        const model = envSource.ANTHROPIC_DEFAULT_HAIKU_MODEL || envSource.ANTHROPIC_MODEL || "anthropic/claude-haiku-4.5";
+        const model = envSource.ANTHROPIC_DEFAULT_SONNET_MODEL || envSource.ANTHROPIC_MODEL || "anthropic/claude-sonnet-4.5";
 
         try {
           const result = await invoke<{ ok: boolean; status: number; body: string }>("test_zenmux_connection", {
@@ -3634,6 +3640,11 @@ function SettingsView({
 
   const toggleEnvReveal = (key: string) => {
     setRevealedEnvKeys((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const getMissingEnvPlaceholder = (key: string) => {
+    if (/proxy/i.test(key)) return "http://localhost:7890";
+    return "value";
   };
 
   return (
@@ -3783,10 +3794,22 @@ function SettingsView({
               const status = applyStatus[preset.key] || "idle";
               const isLoading = status === "loading";
               const isSuccess = status === "success";
+              const testState = testStatus[preset.key] || "idle";
+              const isTestSuccess = testState === "success";
+              const isTestError = testState === "error";
               const missingKeys = testMissingKeys[preset.key] || [];
               const missingValues = testMissingValues[preset.key] || {};
               return (
-                <div key={preset.key} className="rounded-lg border border-border bg-card-alt p-3 flex flex-col gap-2 w-full overflow-hidden">
+                <div
+                  key={preset.key}
+                  className={`rounded-lg border border-border bg-card-alt p-3 flex flex-col gap-2 w-full overflow-hidden relative ${isTestSuccess ? "border-green-500/60 bg-green-50/30" : ""}`}
+                >
+                  {isTestSuccess && (
+                    <span
+                      aria-label="Test passed"
+                      className="absolute left-2 top-2 h-2.5 w-2.5 rounded-full bg-green-500 shadow-[0_0_0_2px_rgba(16,185,129,0.25)]"
+                    />
+                  )}
                   <div className="flex w-full flex-nowrap items-start gap-3 overflow-hidden">
                     <div className="min-w-0 flex-1 overflow-hidden">
                       <p className="text-sm font-medium text-ink truncate">{preset.label}</p>
@@ -3810,12 +3833,12 @@ function SettingsView({
                           <Button
                             size="icon"
                             variant="outline"
-                            className="h-9 w-9"
+                            className={`h-9 w-9 ${isTestSuccess ? "border-green-500 text-green-600 hover:bg-green-50" : isTestError ? "border-red-500 text-red-600 hover:bg-red-50" : ""}`}
                             onClick={() => handleTestPreset(preset.key)}
-                            title="Test"
-                            aria-label="Test"
+                            title={isTestSuccess ? "Tested" : "Test"}
+                            aria-label={isTestSuccess ? "Tested" : "Test"}
                           >
-                            <FlaskConical className="h-4 w-4" />
+                            {isTestSuccess ? <CheckIcon /> : <FlaskConical className="h-4 w-4" />}
                           </Button>
                           <Button
                             size="icon"
@@ -3834,8 +3857,13 @@ function SettingsView({
                           <Button size="sm" variant="outline" className="max-w-[8.5rem]" onClick={() => handlePreviewPreset(preset.key)}>
                             <span className="block truncate">Preview config</span>
                           </Button>
-                          <Button size="sm" variant="outline" className="max-w-[6rem]" onClick={() => handleTestPreset(preset.key)}>
-                            <span className="block truncate">Test</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className={`max-w-[6rem] ${isTestSuccess ? "border-green-500 text-green-600 hover:bg-green-50" : isTestError ? "border-red-500 text-red-600 hover:bg-red-50" : ""}`}
+                            onClick={() => handleTestPreset(preset.key)}
+                          >
+                            <span className="block truncate">{isTestSuccess ? "Tested" : "Test"}</span>
                           </Button>
                           <Button
                             size="sm"
@@ -3861,16 +3889,26 @@ function SettingsView({
                   {missingKeys.length > 0 && (
                     <div className="rounded-lg border border-dashed border-border bg-canvas/60 p-2">
                       <p className="text-xs text-muted-foreground mb-2">Fill missing env values to continue testing.</p>
+                      <p className="text-xs text-muted-foreground mb-2">Press Tab to accept the placeholder.</p>
                       <div className="flex flex-col gap-2">
                         {missingKeys.map((key) => (
                           <div key={key} className="flex items-center gap-2">
                             <span className="text-xs text-muted-foreground font-mono min-w-[6rem]">{key}</span>
                             <input
                               className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink flex-1"
-                              placeholder="value"
+                              placeholder={getMissingEnvPlaceholder(key)}
                               value={missingValues[key] ?? ""}
                               onChange={(e) => handleMissingValueChange(preset.key, key, e.target.value)}
-                              onKeyDown={(e) => e.key === "Enter" && handleSaveMissingAndRetest(preset.key)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") handleSaveMissingAndRetest(preset.key);
+                                if (e.key === "Tab" && !(missingValues[key] ?? "").trim()) {
+                                  const placeholder = getMissingEnvPlaceholder(key);
+                                  if (placeholder !== "value") {
+                                    e.preventDefault();
+                                    handleMissingValueChange(preset.key, key, placeholder);
+                                  }
+                                }
+                              }}
                             />
                           </div>
                         ))}
