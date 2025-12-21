@@ -217,6 +217,7 @@ pub struct LocalCommand {
     pub deprecated_by: Option<String>,     // replacement command name
     pub changelog: Option<String>,         // changelog content if .changelog file exists
     pub aliases: Vec<String>,              // previous names for stats aggregation
+    pub frontmatter: Option<String>,       // raw frontmatter text (if any)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1101,7 +1102,7 @@ fn collect_commands_from_dir(base_dir: &PathBuf, current_dir: &PathBuf, commands
                     .to_string();
 
                 let content = fs::read_to_string(&path).unwrap_or_default();
-                let (frontmatter, body) = parse_frontmatter(&content);
+                let (frontmatter, raw_frontmatter, body) = parse_frontmatter(&content);
 
                 // Use "archived" status for .md.archived files, otherwise use provided status
                 let actual_status = if filename.ends_with(".md.archived") {
@@ -1139,6 +1140,7 @@ fn collect_commands_from_dir(base_dir: &PathBuf, current_dir: &PathBuf, commands
                     deprecated_by: frontmatter.get("replaced-by").cloned(),
                     changelog,
                     aliases,
+                    frontmatter: raw_frontmatter,
                 });
             }
         }
@@ -1146,13 +1148,15 @@ fn collect_commands_from_dir(base_dir: &PathBuf, current_dir: &PathBuf, commands
     Ok(())
 }
 
-fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
+fn parse_frontmatter(content: &str) -> (HashMap<String, String>, Option<String>, String) {
     let mut frontmatter = HashMap::new();
+    let mut raw_frontmatter: Option<String> = None;
     let mut body = content.to_string();
 
     if content.starts_with("---") {
         if let Some(end_idx) = content[3..].find("---") {
             let fm_content = &content[3..end_idx + 3];
+            raw_frontmatter = Some(fm_content.trim().to_string());
             body = content[end_idx + 6..].trim_start().to_string();
 
             for line in fm_content.lines() {
@@ -1167,7 +1171,7 @@ fn parse_frontmatter(content: &str) -> (HashMap<String, String>, String) {
         }
     }
 
-    (frontmatter, body)
+    (frontmatter, raw_frontmatter, body)
 }
 
 /// Rename a command file (supports path changes like /foo/bar -> /foo/baz/bar)
@@ -1596,7 +1600,7 @@ fn collect_agents(base_dir: &PathBuf, current_dir: &PathBuf, agents: &mut Vec<Lo
             collect_agents(base_dir, &path, agents)?;
         } else if path.extension().map_or(false, |e| e == "md") {
             let content = fs::read_to_string(&path).unwrap_or_default();
-            let (frontmatter, body) = parse_frontmatter(&content);
+            let (frontmatter, _, body) = parse_frontmatter(&content);
 
             // Only include if it has a 'model' field (agents have model, commands don't)
             if frontmatter.contains_key("model") {
@@ -1652,7 +1656,7 @@ fn list_local_skills() -> Result<Vec<LocalSkill>, String> {
 
             if skill_md.exists() {
                 let content = fs::read_to_string(&skill_md).unwrap_or_default();
-                let (frontmatter, body) = parse_frontmatter(&content);
+                let (frontmatter, _, body) = parse_frontmatter(&content);
 
                 skills.push(LocalSkill {
                     name: skill_name,
@@ -2668,6 +2672,46 @@ fn update_mcp_env(server_name: String, env_key: String, env_value: String) -> Re
     Ok(())
 }
 
+#[tauri::command]
+fn update_settings_env(env_key: String, env_value: String) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+
+    if !settings.get("env").and_then(|v| v.as_object()).is_some() {
+        settings["env"] = serde_json::json!({});
+    }
+    settings["env"][&env_key] = serde_json::Value::String(env_value);
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_settings_env(env_key: String) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    if !settings_path.exists() {
+        return Ok(());
+    }
+    let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+    let mut settings: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    if let Some(env) = settings.get_mut("env").and_then(|v| v.as_object_mut()) {
+        env.remove(&env_key);
+    }
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2799,6 +2843,8 @@ pub fn run() {
             get_home_dir,
             write_file,
             update_mcp_env,
+            update_settings_env,
+            delete_settings_env,
             list_distill_documents,
             get_distill_document,
             find_session_project,

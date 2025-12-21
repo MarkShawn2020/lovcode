@@ -61,18 +61,9 @@ export function FloatWindow() {
       snappedSide = "right";
     }
 
-    // 上边磁吸
-    if (windowY < SNAP_THRESHOLD) {
-      newY = 0;
-    }
-    // 下边磁吸
-    else if (screenHeight - (windowY + windowHeight) < SNAP_THRESHOLD) {
-      newY = screenHeight - windowHeight;
-    }
-
     setSnapSide(snappedSide);
 
-    if (snappedSide !== null || newY !== windowY) {
+    if (snappedSide !== null) {
       await win.setPosition(new LogicalPosition(newX, newY));
     }
   };
@@ -146,8 +137,17 @@ export function FloatWindow() {
 
         const expandedWidth = 280;
         const expandedHeight = 320;
-        const collapsedWidth = 120;
         const collapsedHeight = 48;
+        // 固定 padding + 徽章宽度，品牌名自适应
+        const paddingX = 12; // px-3
+        const badgeSize = 24; // w-6
+        const gap = 8; // gap-2
+        const brandName = "Lovnotifier";
+        const charWidth = 7; // text-xs 平均字符宽度
+        const collapsedWidth = Math.ceil(paddingX * 2 + badgeSize + gap + brandName.length * charWidth);
+
+        // 先更新状态，让样式先变化
+        setIsExpanded(prev => !prev);
 
         if (!isExpanded) {
           // 展开
@@ -178,8 +178,6 @@ export function FloatWindow() {
           }
           await win.setSize(new LogicalSize(collapsedWidth, collapsedHeight));
         }
-
-        setIsExpanded(prev => !prev);
       }
     };
 
@@ -213,7 +211,7 @@ export function FloatWindow() {
       <div className={`w-full h-full bg-primary text-primary-foreground shadow-2xl overflow-hidden transition-all ${isExpanded ? "rounded-xl" : collapsedRounding}`}>
         {/* Header - click to toggle, drag to move */}
         <div
-          className={`flex items-center gap-2 p-3 cursor-pointer select-none ${isExpanded ? "justify-center" : snapSide === "right" ? "justify-end" : "justify-start"}`}
+          className={`flex items-center gap-2 cursor-pointer select-none h-full ${isExpanded ? "justify-center p-3" : "px-3 py-2"}`}
           onMouseDown={handleMouseDown}
         >
           {isExpanded ? (
@@ -228,8 +226,8 @@ export function FloatWindow() {
             </motion.div>
           ) : (
             <div className={`flex items-center w-full ${snapSide === "right" ? "flex-row-reverse" : ""}`}>
-              <span className="font-medium text-sm flex-1 px-1">Review</span>
-              <span className="w-8 h-8 flex items-center justify-center text-sm font-bold bg-white/20 rounded-full shrink-0">
+              <span className="text-xs tracking-wide opacity-90 flex-1 px-1">Lovnotifier</span>
+              <span className="w-6 h-6 flex items-center justify-center text-xs font-bold bg-white/20 rounded-full shrink-0">
                 {items.length}
               </span>
             </div>

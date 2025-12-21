@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, ReactNode, ComponentType } from "react";
 import Markdown from "react-markdown";
-import { ExternalLink, Download, MessageCircle, MoreHorizontal, ChevronDown, type LucideProps } from "lucide-react";
+import { ExternalLink, Download, MessageCircle, MoreHorizontal, ChevronDown, Copy, type LucideProps } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -137,7 +137,8 @@ export function DetailHeader({
   onChangelogClick?: () => void;
   onRename?: (newName: string) => void;
 }) {
-  const hasMenu = (path && onOpenPath) || onNavigateSession || (menuItems && menuItems.length > 0);
+  const hasMenu = Boolean(path) || onNavigateSession || (menuItems && menuItems.length > 0);
+  const hasDefaultMenuItems = Boolean(path) || onNavigateSession;
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState(title);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -237,13 +238,19 @@ export function DetailHeader({
                   Open in Editor
                 </DropdownMenuItem>
               )}
+              {path && (
+                <DropdownMenuItem onClick={() => navigator.clipboard.writeText(path)}>
+                  <Copy className="w-4 h-4 mr-2" />
+                  Copy Path
+                </DropdownMenuItem>
+              )}
               {onNavigateSession && (
                 <DropdownMenuItem onClick={onNavigateSession}>
                   <MessageCircle className="w-4 h-4 mr-2" />
                   Go to Session
                 </DropdownMenuItem>
               )}
-              {((path && onOpenPath) || onNavigateSession) && menuItems && menuItems.length > 0 && (
+              {hasDefaultMenuItems && menuItems && menuItems.length > 0 && (
                 <DropdownMenuSeparator />
               )}
               {menuItems?.map((item, i) => {
@@ -392,7 +399,7 @@ export function ContentCard({
 // ============================================================================
 
 export function ConfigPage({ children }: { children: ReactNode }) {
-  return <div className="px-6 py-8">{children}</div>;
+  return <div className="px-6 py-8 config-page-container">{children}</div>;
 }
 
 // ============================================================================
@@ -451,6 +458,7 @@ export interface MarketplaceItem {
   path: string;
   description: string | null;
   downloads: number | null;
+  content?: string | null;
 }
 
 export function MarketplaceSection({

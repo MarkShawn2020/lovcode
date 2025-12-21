@@ -11,7 +11,13 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [
-    LovinspPlugin({ bundler: "vite" }),
+    LovinspPlugin({
+      bundler: "vite",
+      injectTo: [
+        path.resolve(__dirname, "src/main.tsx"),
+        path.resolve(__dirname, "src/float-main.tsx"),
+      ],
+    }),
     react(), tailwindcss()],
   resolve: {
     alias: {

@@ -31,6 +31,63 @@ body {
   min-height: 100vh;
 }
 
+.config-page-container {
+  container-type: inline-size;
+}
+
+.env-actions-cell {
+  position: sticky;
+  right: 0;
+  background: var(--color-canvas);
+}
+
+.env-actions-cell::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 0;
+  bottom: 0;
+  width: 8px;
+  background: linear-gradient(to left, var(--color-canvas), transparent);
+  pointer-events: none;
+}
+
+.env-actions--icon {
+  display: none;
+}
+
+.env-actions--text {
+  display: flex;
+}
+
+@container (max-width: 640px) {
+  .env-actions--icon {
+    display: flex;
+  }
+
+  .env-actions--text {
+    display: none;
+  }
+}
+
+.router-actions--icon {
+  display: none;
+}
+
+.router-actions--text {
+  display: flex;
+}
+
+@container (max-width: 640px) {
+  .router-actions--icon {
+    display: flex;
+  }
+
+  .router-actions--text {
+    display: none;
+  }
+}
+
 /* Disable Tauri window drag on input elements */
 input, button, a, select, textarea {
   -webkit-user-select: auto;
