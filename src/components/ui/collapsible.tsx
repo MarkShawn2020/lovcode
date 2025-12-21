@@ -11,13 +11,28 @@ interface CollapsibleProps {
   children: ReactNode;
   defaultOpen?: boolean;
   className?: string;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
-export function Collapsible({ children, defaultOpen = false, className = "" }: CollapsibleProps) {
-  const [open, setOpen] = useState(defaultOpen);
+export function Collapsible({
+  children,
+  defaultOpen = false,
+  className = "",
+  open,
+  onOpenChange,
+}: CollapsibleProps) {
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(defaultOpen);
+  const isControlled = open !== undefined;
+  const currentOpen = isControlled ? open : uncontrolledOpen;
+  const handleToggle = () => {
+    const nextOpen = !currentOpen;
+    if (!isControlled) setUncontrolledOpen(nextOpen);
+    onOpenChange?.(nextOpen);
+  };
   return (
-    <CollapsibleContext.Provider value={{ open, toggle: () => setOpen(!open) }}>
-      <div className={className} data-state={open ? "open" : "closed"}>
+    <CollapsibleContext.Provider value={{ open: currentOpen, toggle: handleToggle }}>
+      <div className={className} data-state={currentOpen ? "open" : "closed"}>
         {children}
       </div>
     </CollapsibleContext.Provider>

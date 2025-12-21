@@ -4,7 +4,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { version } from "../package.json";
-import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw, ChevronLeft, ChevronRight, Store, Archive, RotateCcw, List, FolderTree, Folder, Terminal, FolderInput } from "lucide-react";
+import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw, ChevronLeft, ChevronRight, Store, Archive, RotateCcw, List, FolderTree, Folder, Terminal, FolderInput, FlaskConical } from "lucide-react";
 import { EyeOpenIcon, EyeClosedIcon, Pencil1Icon, TrashIcon, CheckIcon, Cross1Icon, MagnifyingGlassIcon, RocketIcon } from "@radix-ui/react-icons";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -3392,6 +3392,8 @@ function SettingsView({
   const [applyError, setApplyError] = useState<string | null>(null);
   const [testStatus, setTestStatus] = useState<Record<string, "idle" | "loading" | "success" | "error">>({});
   const [testMessage, setTestMessage] = useState<Record<string, string>>({});
+  const [testMissingKeys, setTestMissingKeys] = useState<Record<string, string[]>>({});
+  const [testMissingValues, setTestMissingValues] = useState<Record<string, Record<string, string>>>({});
   const [editingEnvKey, setEditingEnvKey] = useState<string | null>(null);
   const [envEditValue, setEnvEditValue] = useState("");
   const [newEnvKey, setNewEnvKey] = useState("");
@@ -3423,15 +3425,16 @@ function SettingsView({
 
   // Check if settings JSON contains search term
   const settingsMatchSearch = !search || JSON.stringify(settings?.raw || {}).toLowerCase().includes(search.toLowerCase());
-  const rawEnv = (() => {
-    const envValue = settings?.raw && typeof settings.raw === "object"
-      ? (settings.raw as Record<string, unknown>).env
+  const getRawEnvFromSettings = (value: ClaudeSettings | null) => {
+    const envValue = value?.raw && typeof value.raw === "object"
+      ? (value.raw as Record<string, unknown>).env
       : null;
     if (!envValue || typeof envValue !== "object" || Array.isArray(envValue)) return {};
     return Object.fromEntries(
-      Object.entries(envValue as Record<string, unknown>).map(([key, value]) => [key, String(value ?? "")])
+      Object.entries(envValue as Record<string, unknown>).map(([key, v]) => [key, String(v ?? "")])
     );
-  })();
+  };
+  const rawEnv = getRawEnvFromSettings(settings);
   const envEntries = Object.entries(rawEnv);
   const filteredEnvEntries = !search
     ? envEntries
@@ -3484,25 +3487,61 @@ function SettingsView({
     onMarketplaceSelect(resolved.template);
   };
 
-  const handleTestPreset = (presetKey: string) => {
+  const handleTestPreset = async (presetKey: string, envOverride?: Record<string, string>) => {
     const resolved = getPresetTemplate(presetKey);
     if (!resolved?.template?.content) {
       setTestStatus((prev) => ({ ...prev, [presetKey]: "error" }));
       setTestMessage((prev) => ({ ...prev, [presetKey]: "Template not available locally." }));
+      setTestMissingKeys((prev) => ({ ...prev, [presetKey]: [] }));
       return;
     }
 
     setTestStatus((prev) => ({ ...prev, [presetKey]: "loading" }));
+    const envSource = envOverride ?? rawEnv;
 
     try {
       const parsed = JSON.parse(resolved.template.content) as { env?: Record<string, string> };
       const requiredKeys = parsed.env ? Object.keys(parsed.env) : [];
-      const missing = requiredKeys.filter((key) => isPlaceholderValue(rawEnv[key] || ""));
+      const missing = requiredKeys.filter((key) => isPlaceholderValue(envSource[key] || ""));
 
       if (missing.length > 0) {
         setTestStatus((prev) => ({ ...prev, [presetKey]: "error" }));
         setTestMessage((prev) => ({ ...prev, [presetKey]: `Missing or placeholder: ${missing.join(", ")}` }));
+        setTestMissingKeys((prev) => ({ ...prev, [presetKey]: missing }));
+        setTestMissingValues((prev) => ({
+          ...prev,
+          [presetKey]: Object.fromEntries(missing.map((key) => [key, envSource[key] || ""])),
+        }));
         return;
+      }
+
+      setTestMissingKeys((prev) => ({ ...prev, [presetKey]: [] }));
+
+      if (presetKey === "zenmux") {
+        const authToken = (envSource.ANTHROPIC_AUTH_TOKEN || "").trim();
+        const baseUrl = envSource.ANTHROPIC_BASE_URL || "https://zenmux.ai/api/anthropic";
+        const model = envSource.ANTHROPIC_DEFAULT_HAIKU_MODEL || envSource.ANTHROPIC_MODEL || "anthropic/claude-haiku-4.5";
+
+        try {
+          const result = await invoke<{ ok: boolean; status: number; body: string }>("test_zenmux_connection", {
+            baseUrl,
+            authToken,
+            model,
+          });
+
+          if (!result.ok) {
+            setTestStatus((prev) => ({ ...prev, [presetKey]: "error" }));
+            setTestMessage((prev) => ({
+              ...prev,
+              [presetKey]: `ZenMux test failed (${result.status}): ${result.body || "No response body"}`,
+            }));
+            return;
+          }
+        } catch (e) {
+          setTestStatus((prev) => ({ ...prev, [presetKey]: "error" }));
+          setTestMessage((prev) => ({ ...prev, [presetKey]: `ZenMux test error: ${String(e)}` }));
+          return;
+        }
       }
 
       setTestStatus((prev) => ({ ...prev, [presetKey]: "success" }));
@@ -3510,6 +3549,7 @@ function SettingsView({
     } catch (e) {
       setTestStatus((prev) => ({ ...prev, [presetKey]: "error" }));
       setTestMessage((prev) => ({ ...prev, [presetKey]: `Invalid template JSON: ${String(e)}` }));
+      setTestMissingKeys((prev) => ({ ...prev, [presetKey]: [] }));
     }
   };
 
@@ -3541,6 +3581,7 @@ function SettingsView({
   const refreshSettings = async () => {
     const updated = await invoke<ClaudeSettings>("get_settings");
     setSettings(updated);
+    return updated;
   };
 
   const handleEnvEdit = (key: string, value: string) => {
@@ -3570,6 +3611,27 @@ function SettingsView({
     setNewEnvValue("");
   };
 
+  const handleMissingValueChange = (presetKey: string, key: string, value: string) => {
+    setTestMissingValues((prev) => ({
+      ...prev,
+      [presetKey]: { ...(prev[presetKey] || {}), [key]: value },
+    }));
+  };
+
+  const handleSaveMissingAndRetest = async (presetKey: string) => {
+    const missingKeys = testMissingKeys[presetKey] || [];
+    if (missingKeys.length === 0) return;
+    const values = testMissingValues[presetKey] || {};
+    await Promise.all(
+      missingKeys.map((key) =>
+        invoke("update_settings_env", { envKey: key, envValue: values[key] ?? "" })
+      )
+    );
+    const updated = await refreshSettings();
+    const updatedEnv = getRawEnvFromSettings(updated);
+    await handleTestPreset(presetKey, updatedEnv);
+  };
+
   const toggleEnvReveal = (key: string) => {
     setRevealedEnvKeys((prev) => ({ ...prev, [key]: !prev[key] }));
   };
@@ -3579,153 +3641,150 @@ function SettingsView({
       <PageHeader title="Settings" subtitle="User configuration (~/.claude)" action={<BrowseMarketplaceButton onClick={onBrowseMore} />} />
       <SearchInput placeholder="Search local & marketplace..." value={search} onChange={setSearch} />
 
-      <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
-        <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-          <div>
-            <p className="text-sm font-medium text-ink">API keys (env)</p>
-            <p className="text-xs text-muted-foreground">Manage env vars used by proxy presets in ~/.claude/settings.json</p>
-          </div>
+      <CollapsibleCard
+        storageKey="lovcode:settings:envCardOpen"
+        title="API keys (env)"
+        subtitle="Manage env vars used by proxy presets in ~/.claude/settings.json"
+        bodyClassName="p-3 space-y-3"
+      >
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+          <input
+            className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink flex-1"
+            placeholder="ENV_KEY"
+            value={newEnvKey}
+            onChange={(e) => setNewEnvKey(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleEnvCreate()}
+          />
+          <input
+            className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink flex-1"
+            placeholder="value"
+            value={newEnvValue}
+            onChange={(e) => setNewEnvValue(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleEnvCreate()}
+          />
+          <Button size="sm" onClick={handleEnvCreate} disabled={!newEnvKey.trim()}>
+            Add
+          </Button>
         </div>
-        <div className="p-3 space-y-3">
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <input
-              className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink flex-1"
-              placeholder="ENV_KEY"
-              value={newEnvKey}
-              onChange={(e) => setNewEnvKey(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleEnvCreate()}
-            />
-            <input
-              className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink flex-1"
-              placeholder="value"
-              value={newEnvValue}
-              onChange={(e) => setNewEnvValue(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleEnvCreate()}
-            />
-            <Button size="sm" onClick={handleEnvCreate} disabled={!newEnvKey.trim()}>
-              Add
-            </Button>
-          </div>
 
-          {filteredEnvEntries.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-left text-muted-foreground border-b border-border">
-                    <th className="py-2 pr-2 font-medium">Key</th>
-                    <th className="py-2 pr-2 font-medium">Value</th>
-                    <th className="py-2 px-2 font-medium text-right env-actions-cell w-[1%] whitespace-nowrap">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredEnvEntries.map(([key, value]) => {
-                    const isRevealed = !!revealedEnvKeys[key];
-                    return (
-                      <tr key={key} className="border-b border-border/60 last:border-0">
-                        <td className="py-2 pr-2">
-                          <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded font-mono">{key}</span>
-                        </td>
-                        <td className="py-2 pr-2">
-                          {editingEnvKey === key ? (
-                            <input
-                              autoFocus
-                              className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink w-64"
-                              value={envEditValue}
-                              onChange={(e) => setEnvEditValue(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") handleEnvSave();
-                                if (e.key === "Escape") setEditingEnvKey(null);
-                              }}
-                            />
-                          ) : (
-                            <span className="text-xs text-muted-foreground font-mono">
-                              {isRevealed ? (value || "(empty)") : "••••••"}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap text-right env-actions-cell w-[1%]">
-                          {editingEnvKey === key ? (
-                            <ResponsiveActions
-                              variant="env"
-                              icon={(
-                                <>
-                                  <Button size="icon" variant="outline" className="h-8 w-8" onClick={handleEnvSave} title="Save" aria-label="Save">
-                                    <CheckIcon />
-                                  </Button>
-                                  <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingEnvKey(null)} title="Cancel" aria-label="Cancel">
-                                    <Cross1Icon />
-                                  </Button>
-                                </>
-                              )}
-                              text={(
-                                <>
-                                  <Button size="sm" onClick={handleEnvSave}>
-                                    Save
-                                  </Button>
-                                  <Button size="sm" variant="outline" onClick={() => setEditingEnvKey(null)}>
-                                    Cancel
-                                  </Button>
-                                </>
-                              )}
-                            />
-                          ) : (
-                            <ResponsiveActions
-                              variant="env"
-                              icon={(
-                                <>
-                                  <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => toggleEnvReveal(key)} title={isRevealed ? "Hide" : "View"} aria-label={isRevealed ? "Hide" : "View"}>
-                                    {isRevealed ? <EyeClosedIcon /> : <EyeOpenIcon />}
-                                  </Button>
-                                  <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => handleEnvEdit(key, value)} title="Edit" aria-label="Edit">
-                                    <Pencil1Icon />
-                                  </Button>
-                                  <Button size="icon" variant="outline" className="h-8 w-8 text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleEnvDelete(key)} title="Delete" aria-label="Delete">
-                                    <TrashIcon />
-                                  </Button>
-                                </>
-                              )}
-                              text={(
-                                <>
-                                  <Button size="sm" variant="outline" onClick={() => toggleEnvReveal(key)}>
-                                    {isRevealed ? "Hide" : "View"}
-                                  </Button>
-                                  <Button size="sm" variant="outline" onClick={() => handleEnvEdit(key, value)}>
-                                    Edit
-                                  </Button>
-                                  <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleEnvDelete(key)}>
-                                    Delete
-                                  </Button>
-                                </>
-                              )}
-                            />
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">No env variables configured.</p>
-          )}
-        </div>
-      </div>
+        {filteredEnvEntries.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="text-left text-muted-foreground border-b border-border">
+                  <th className="py-2 pr-2 font-medium">Key</th>
+                  <th className="py-2 pr-2 font-medium">Value</th>
+                  <th className="py-2 px-2 font-medium text-right env-actions-cell w-[1%] whitespace-nowrap">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredEnvEntries.map(([key, value]) => {
+                  const isRevealed = !!revealedEnvKeys[key];
+                  return (
+                    <tr key={key} className="border-b border-border/60 last:border-0">
+                      <td className="py-2 pr-2">
+                        <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded font-mono">{key}</span>
+                      </td>
+                      <td className="py-2 pr-2">
+                        {editingEnvKey === key ? (
+                          <input
+                            autoFocus
+                            className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink w-64"
+                            value={envEditValue}
+                            onChange={(e) => setEnvEditValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleEnvSave();
+                              if (e.key === "Escape") setEditingEnvKey(null);
+                            }}
+                          />
+                        ) : (
+                          <span className="text-xs text-muted-foreground font-mono">
+                            {isRevealed ? (value || "(empty)") : "••••••"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-2 px-2 whitespace-nowrap text-right env-actions-cell w-[1%]">
+                        {editingEnvKey === key ? (
+                          <ResponsiveActions
+                            variant="env"
+                            icon={(
+                              <>
+                                <Button size="icon" variant="outline" className="h-8 w-8" onClick={handleEnvSave} title="Save" aria-label="Save">
+                                  <CheckIcon />
+                                </Button>
+                                <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingEnvKey(null)} title="Cancel" aria-label="Cancel">
+                                  <Cross1Icon />
+                                </Button>
+                              </>
+                            )}
+                            text={(
+                              <>
+                                <Button size="sm" onClick={handleEnvSave}>
+                                  Save
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => setEditingEnvKey(null)}>
+                                  Cancel
+                                </Button>
+                              </>
+                            )}
+                          />
+                        ) : (
+                          <ResponsiveActions
+                            variant="env"
+                            icon={(
+                              <>
+                                <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => toggleEnvReveal(key)} title={isRevealed ? "Hide" : "View"} aria-label={isRevealed ? "Hide" : "View"}>
+                                  {isRevealed ? <EyeClosedIcon /> : <EyeOpenIcon />}
+                                </Button>
+                                <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => handleEnvEdit(key, value)} title="Edit" aria-label="Edit">
+                                  <Pencil1Icon />
+                                </Button>
+                                <Button size="icon" variant="outline" className="h-8 w-8 text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleEnvDelete(key)} title="Delete" aria-label="Delete">
+                                  <TrashIcon />
+                                </Button>
+                              </>
+                            )}
+                            text={(
+                              <>
+                                <Button size="sm" variant="outline" onClick={() => toggleEnvReveal(key)}>
+                                  {isRevealed ? "Hide" : "View"}
+                                </Button>
+                                <Button size="sm" variant="outline" onClick={() => handleEnvEdit(key, value)}>
+                                  Edit
+                                </Button>
+                                <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50" onClick={() => handleEnvDelete(key)}>
+                                  Delete
+                                </Button>
+                              </>
+                            )}
+                          />
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No env variables configured.</p>
+        )}
+      </CollapsibleCard>
 
       {filteredPresets.length > 0 && (
-        <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
-          <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-2">
-            <div>
-              <p className="text-sm font-medium text-ink">Router presets</p>
-              <p className="text-xs text-muted-foreground">One-click switch between direct, provider router, or corporate network routing</p>
-            </div>
-            {applyError && <p className="text-xs text-red-600">{applyError}</p>}
-          </div>
-          <div className="p-3 grid gap-3">
+        <CollapsibleCard
+          storageKey="lovcode:settings:routerPresetsOpen"
+          title="Router presets"
+          subtitle="One-click switch between direct, provider router, or corporate network routing"
+          headerRight={applyError && <p className="text-xs text-red-600">{applyError}</p>}
+          bodyClassName="p-3 grid gap-3"
+        >
             {filteredPresets.map((preset) => {
               const status = applyStatus[preset.key] || "idle";
               const isLoading = status === "loading";
               const isSuccess = status === "success";
+              const missingKeys = testMissingKeys[preset.key] || [];
+              const missingValues = testMissingValues[preset.key] || {};
               return (
                 <div key={preset.key} className="rounded-lg border border-border bg-card-alt p-3 flex flex-col gap-2 w-full overflow-hidden">
                   <div className="flex w-full flex-nowrap items-start gap-3 overflow-hidden">
@@ -3756,7 +3815,7 @@ function SettingsView({
                             title="Test"
                             aria-label="Test"
                           >
-                            <MagnifyingGlassIcon />
+                            <FlaskConical className="h-4 w-4" />
                           </Button>
                           <Button
                             size="icon"
@@ -3799,11 +3858,34 @@ function SettingsView({
                     {testStatus[preset.key] === "success" && <span className="text-xs text-green-600">{testMessage[preset.key] || "Ready"}</span>}
                     {testStatus[preset.key] === "error" && <span className="text-xs text-red-600">{testMessage[preset.key] || "Failed"}</span>}
                   </div>
+                  {missingKeys.length > 0 && (
+                    <div className="rounded-lg border border-dashed border-border bg-canvas/60 p-2">
+                      <p className="text-xs text-muted-foreground mb-2">Fill missing env values to continue testing.</p>
+                      <div className="flex flex-col gap-2">
+                        {missingKeys.map((key) => (
+                          <div key={key} className="flex items-center gap-2">
+                            <span className="text-xs text-muted-foreground font-mono min-w-[6rem]">{key}</span>
+                            <input
+                              className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink flex-1"
+                              placeholder="value"
+                              value={missingValues[key] ?? ""}
+                              onChange={(e) => handleMissingValueChange(preset.key, key, e.target.value)}
+                              onKeyDown={(e) => e.key === "Enter" && handleSaveMissingAndRetest(preset.key)}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                      <div className="mt-2 flex justify-end">
+                        <Button size="sm" variant="outline" onClick={() => handleSaveMissingAndRetest(preset.key)}>
+                          Save & Retest
+                        </Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })}
-          </div>
-        </div>
+        </CollapsibleCard>
       )}
 
       {!hasContent && !search && (
@@ -5315,6 +5397,45 @@ function MessageView({
 // ============================================================================
 // Shared Components
 // ============================================================================
+
+function CollapsibleCard({
+  storageKey,
+  title,
+  subtitle,
+  headerRight,
+  bodyClassName = "",
+  defaultOpen = true,
+  children,
+}: {
+  storageKey: string;
+  title: string;
+  subtitle?: string;
+  headerRight?: ReactNode;
+  bodyClassName?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = usePersistedState(storageKey, defaultOpen);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <div className="bg-card rounded-xl border border-border overflow-hidden mb-4">
+        <CollapsibleTrigger className="px-4 py-3 border-b border-border flex items-center justify-between gap-2 group">
+          <div>
+            <p className="text-sm font-medium text-ink">{title}</p>
+            {subtitle && <p className="text-xs text-muted-foreground">{subtitle}</p>}
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground hover:text-ink">
+            {headerRight}
+            <span className="group-data-[state=open]:hidden">Expand</span>
+            <span className="group-data-[state=closed]:hidden">Collapse</span>
+            <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+          </div>
+        </CollapsibleTrigger>
+        <CollapsibleBody className={bodyClassName}>{children}</CollapsibleBody>
+      </div>
+    </Collapsible>
+  );
+}
 
 function CollapsibleContent({ content, markdown }: { content: string; markdown: boolean }) {
   const [expanded, setExpanded] = useState(false);

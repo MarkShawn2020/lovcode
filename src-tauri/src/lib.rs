@@ -2712,6 +2712,53 @@ fn delete_settings_env(env_key: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(Serialize)]
+struct ZenmuxTestResult {
+    ok: bool,
+    status: u16,
+    body: String,
+}
+
+#[tauri::command]
+async fn test_zenmux_connection(base_url: String, auth_token: String, model: String) -> Result<ZenmuxTestResult, String> {
+    if auth_token.trim().is_empty() {
+        return Err("ANTHROPIC_AUTH_TOKEN is empty".to_string());
+    }
+
+    let base = base_url.trim_end_matches('/');
+    let url = format!("{}/v1/messages", base);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let payload = serde_json::json!({
+        "model": model,
+        "max_tokens": 1,
+        "messages": [
+            { "role": "user", "content": "ping" }
+        ]
+    });
+
+    let response = client
+        .post(&url)
+        .header("x-api-key", auth_token)
+        .header("anthropic-version", "2023-06-01")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    println!("zenmux test status={} body={}", status, body);
+
+    Ok(ZenmuxTestResult {
+        ok: status.is_success(),
+        status: status.as_u16(),
+        body,
+    })
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2845,6 +2892,7 @@ pub fn run() {
             update_mcp_env,
             update_settings_env,
             delete_settings_env,
+            test_zenmux_connection,
             list_distill_documents,
             get_distill_document,
             find_session_project,
