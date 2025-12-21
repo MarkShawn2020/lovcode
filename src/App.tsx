@@ -2156,7 +2156,7 @@ function CommandsView({
           </DialogHeader>
           <div className="space-y-4 py-4">
             <p className="text-sm text-muted-foreground">
-              This will move the file to a hidden <code>.archive/</code> folder, making it invisible to Claude Code and file browsers.
+              This will move the file to <code>~/.claude/.commands/archived/</code>, outside the commands directory so Claude Code won't load it.
             </p>
             <div>
               <Label htmlFor="replacement">Replacement command (optional)</Label>
@@ -2434,7 +2434,7 @@ function CommandDetailView({
           </DialogHeader>
           <div className="space-y-4 py-4">
             <p className="text-sm text-muted-foreground">
-              This will move the file to a hidden <code>.archive/</code> folder, making it invisible to Claude Code and file browsers.
+              This will move the file to <code>~/.claude/.commands/archived/</code>, outside the commands directory so Claude Code won't load it.
             </p>
             <div>
               <Label htmlFor="replacement">Replacement command (optional)</Label>
