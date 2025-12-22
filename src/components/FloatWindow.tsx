@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
-import { ClipboardList, X } from "lucide-react";
+import { ClipboardList, X, Terminal } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, currentMonitor, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -13,6 +14,13 @@ export interface ReviewItem {
   title: string;
   project?: string;
   timestamp: number;
+  // tmux navigation context
+  tmux_session?: string;
+  tmux_window?: string;
+  tmux_pane?: string;
+  // Claude session reference
+  session_id?: string;
+  project_path?: string;
 }
 
 // ============================================================================
@@ -22,12 +30,44 @@ export interface ReviewItem {
 // 磁吸阈值（px）
 const SNAP_THRESHOLD = 240;
 
+// 持久化存储 key
+const STORAGE_KEY = "lovnotifier-float-window";
+
+interface FloatWindowState {
+  x: number;
+  y: number;
+  isExpanded: boolean;
+  snapSide: "left" | "right" | null;
+  expandDirection: "left" | "right";
+}
+
+function loadState(): Partial<FloatWindowState> {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveState(state: Partial<FloatWindowState>) {
+  try {
+    const current = loadState();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...current, ...state }));
+  } catch (e) {
+    console.error("Failed to save float window state:", e);
+  }
+}
+
 export function FloatWindow() {
   const [items, setItems] = useState<ReviewItem[]>([]);
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [expandDirection, setExpandDirection] = useState<"left" | "right">("right");
-  const [snapSide, setSnapSide] = useState<"left" | "right" | null>(null);
+  const savedState = loadState();
+  const [isExpanded, setIsExpanded] = useState(savedState.isExpanded ?? false);
+  const [expandDirection, setExpandDirection] = useState<"left" | "right">(savedState.expandDirection ?? "right");
+  const [snapSide, setSnapSide] = useState<"left" | "right" | null>(savedState.snapSide ?? null);
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const isDraggingRef = useRef(false);
+  const initializedRef = useRef(false);
 
 
   // 磁吸到边缘
@@ -70,12 +110,17 @@ export function FloatWindow() {
     }
 
     setSnapSide(snappedSide);
+    saveState({ snapSide: snappedSide });
 
     if (snappedSide !== null) {
       console.log("DEBUG before setPosition:", { newX, windowY, targetRight: newX + windowWidth, monitorRight: monitorX + monitorWidth });
       await win.setPosition(new LogicalPosition(newX, windowY));
+      saveState({ x: newX, y: windowY });
       const posAfter = await win.outerPosition();
       console.log("DEBUG after setPosition:", { actualX: posAfter.x / scale, actualRight: posAfter.x / scale + windowWidth });
+    } else {
+      // 未磁吸时也保存位置
+      saveState({ x: windowX, y: windowY });
     }
   };
 
@@ -97,8 +142,27 @@ export function FloatWindow() {
     };
   }, []);
 
-  // 监听后端推送
+  // 组件挂载时拉取当前队列，并监听后续更新
   useEffect(() => {
+    // 拉取当前队列（热刷新后恢复数据）
+    invoke<ReviewItem[]>("get_review_queue").then((queue) => {
+      if (queue.length === 0) {
+        // 添加示例消息供测试
+        setItems([{
+          id: "example-1",
+          title: "✓ Example Project",
+          project: "example",
+          timestamp: Math.floor(Date.now() / 1000),
+          tmux_session: "main",
+          tmux_window: "1",
+          tmux_pane: "0",
+        }]);
+      } else {
+        setItems(queue);
+      }
+    }).catch(console.error);
+
+    // 监听后续更新
     const unlisten = listen<ReviewItem[]>("review-queue-update", (event) => {
       setItems(event.payload);
     });
@@ -115,23 +179,62 @@ export function FloatWindow() {
     return Math.ceil(paddingX * 2 + badgeSize + gap + brandName.length * charWidth);
   };
 
-  // 初始化窗口大小（收起状态）
+  // 初始化窗口大小和位置
   useEffect(() => {
-    const initSize = async () => {
+    if (initializedRef.current) return;
+    initializedRef.current = true;
+
+    const initWindow = async () => {
       const win = getCurrentWindow();
-      await win.setSize(new LogicalSize(getCollapsedWidth(), 48));
+      const saved = loadState();
+
+      // 设置窗口大小（根据保存的展开状态）
+      if (saved.isExpanded) {
+        await win.setSize(new LogicalSize(280, 320));
+      } else {
+        await win.setSize(new LogicalSize(getCollapsedWidth(), 48));
+      }
+
+      // 恢复保存的位置
+      if (saved.x !== undefined && saved.y !== undefined) {
+        await win.setPosition(new LogicalPosition(saved.x, saved.y));
+      }
     };
-    initSize();
+    initWindow();
   }, []);
 
-  // Demo数据
-  useEffect(() => {
-    setItems([
-      { id: "1", title: "Fix login validation bug", project: "auth-service", timestamp: Date.now() - 300000 },
-      { id: "2", title: "Add dark mode toggle", project: "frontend", timestamp: Date.now() - 600000 },
-      { id: "3", title: "Update API documentation", project: "backend", timestamp: Date.now() - 900000 },
-    ]);
-  }, []);
+  // Navigate to tmux pane and dismiss item
+  const handleItemClick = async (item: ReviewItem) => {
+    console.log('[DEBUG][FloatWindow] handleItemClick 入口:', {
+      id: item.id,
+      title: item.title,
+      tmux_session: item.tmux_session,
+      tmux_window: item.tmux_window,
+      tmux_pane: item.tmux_pane,
+    });
+
+    const hasTmuxContext = item.tmux_session && item.tmux_window && item.tmux_pane;
+    console.log('[DEBUG][FloatWindow] hasTmuxContext:', hasTmuxContext);
+
+    if (hasTmuxContext) {
+      console.log('[DEBUG][FloatWindow] 调用 navigate_to_tmux_pane...');
+      try {
+        const result = await invoke("navigate_to_tmux_pane", {
+          session: item.tmux_session,
+          window: item.tmux_window,
+          pane: item.tmux_pane,
+        });
+        console.log('[DEBUG][FloatWindow] navigate_to_tmux_pane 成功:', result);
+      } catch (e) {
+        console.error('[DEBUG][FloatWindow] navigate_to_tmux_pane 失败:', e);
+      }
+    } else {
+      console.log('[DEBUG][FloatWindow] 跳过导航 - 缺少 tmux 上下文');
+    }
+
+    console.log('[DEBUG][FloatWindow] 调用 handleDismiss:', item.id);
+    handleDismiss(item.id);
+  };
 
   // 拖拽 + 点击判断
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -182,14 +285,13 @@ export function FloatWindow() {
 
           let newX = windowX;
           let newY = windowY;
+          let newExpandDirection: "left" | "right" = "right";
 
           // 水平方向检测
           if (windowX + expandedWidth > screenLeft + screenWidth) {
-            setExpandDirection("left");
+            newExpandDirection = "left";
             newX = windowX - (expandedWidth - collapsedWidth);
             newX = Math.max(screenLeft, newX);
-          } else {
-            setExpandDirection("right");
           }
 
           // 垂直方向检测：如果底部会超出，向上调整
@@ -198,18 +300,23 @@ export function FloatWindow() {
             newY = Math.max(screenTop, newY);
           }
 
+          setExpandDirection(newExpandDirection);
           if (newX !== windowX || newY !== windowY) {
             await win.setPosition(new LogicalPosition(newX, newY));
           }
           await win.setSize(new LogicalSize(expandedWidth, expandedHeight));
           setIsExpanded(true);
+          saveState({ isExpanded: true, expandDirection: newExpandDirection, x: newX, y: newY });
         } else {
           // 收起：先改状态，再调整窗口大小
           setIsExpanded(false);
+          let newX = windowX;
           if (expandDirection === "left") {
-            await win.setPosition(new LogicalPosition(windowX + (expandedWidth - collapsedWidth), windowY));
+            newX = windowX + (expandedWidth - collapsedWidth);
+            await win.setPosition(new LogicalPosition(newX, windowY));
           }
           await win.setSize(new LogicalSize(collapsedWidth, collapsedHeight));
+          saveState({ isExpanded: false, x: newX, y: windowY });
         }
       }
     };
@@ -223,7 +330,8 @@ export function FloatWindow() {
   };
 
   const formatTime = (timestamp: number) => {
-    const diff = Date.now() - timestamp;
+    // timestamp 从后端来的是秒，Date.now() 是毫秒
+    const diff = Date.now() - timestamp * 1000;
     const minutes = Math.floor(diff / 60000);
     if (minutes < 1) return "Just now";
     if (minutes < 60) return `${minutes}m ago`;
@@ -303,31 +411,49 @@ export function FloatWindow() {
 
               {/* Items list */}
               <div className="space-y-2 max-h-56 overflow-y-auto">
-                {items.map((item, index) => (
-                  <motion.div
-                    key={item.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: index * 0.05 }}
-                    className="group flex items-center gap-2 p-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium truncate">{item.title}</p>
-                      <p className="text-xs opacity-70 truncate">
-                        {item.project && <span>{item.project} · </span>}
-                        {formatTime(item.timestamp)}
-                      </p>
-                    </div>
-                    <motion.button
-                      whileHover={{ scale: 1.1 }}
-                      whileTap={{ scale: 0.9 }}
-                      onClick={() => handleDismiss(item.id)}
-                      className="p-1 opacity-0 group-hover:opacity-100 hover:bg-white/20 rounded transition-opacity"
+                {items.map((item, index) => {
+                  const isHovered = hoveredId === item.id;
+                  return (
+                    <motion.div
+                      key={item.id}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: index * 0.05 }}
+                      onClick={() => handleItemClick(item)}
+                      onMouseEnter={() => setHoveredId(item.id)}
+                      onMouseLeave={() => setHoveredId(null)}
+                      className={`flex items-center gap-2 p-2 rounded-lg transition-colors cursor-pointer ${
+                        isHovered ? "bg-white/20" : "bg-white/10"
+                      }`}
                     >
-                      <X className="w-3.5 h-3.5" />
-                    </motion.button>
-                  </motion.div>
-                ))}
+                      {/* tmux indicator */}
+                      {item.tmux_session && (
+                        <Terminal className="w-4 h-4 shrink-0 opacity-70" />
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium truncate">{item.title}</p>
+                        <p className="text-xs opacity-70 truncate">
+                          {item.tmux_session && (
+                            <span>{item.tmux_session}:{item.tmux_window}.{item.tmux_pane} · </span>
+                          )}
+                          {formatTime(item.timestamp)}
+                        </p>
+                      </div>
+                      <motion.button
+                        whileTap={{ scale: 0.9 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDismiss(item.id);
+                        }}
+                        className={`p-1 rounded transition-opacity ${
+                          isHovered ? "opacity-100 bg-white/10" : "opacity-0"
+                        }`}
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </motion.button>
+                    </motion.div>
+                  );
+                })}
               </div>
 
               {items.length === 0 && (

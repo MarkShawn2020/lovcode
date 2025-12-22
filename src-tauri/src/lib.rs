@@ -15,6 +15,15 @@ use std::sync::LazyLock;
 use notify::{RecommendedWatcher, RecursiveMode, Watcher, Event};
 use std::sync::mpsc::channel;
 use std::time::Duration;
+use std::sync::Arc;
+use warp::Filter;
+
+#[cfg(target_os = "macos")]
+use cocoa::appkit::{NSWindow, NSWindowCollectionBehavior};
+#[cfg(target_os = "macos")]
+use cocoa::base::id;
+#[cfg(target_os = "macos")]
+use objc::runtime::YES;
 
 // Global jieba instance for Chinese tokenization
 static JIEBA: LazyLock<Jieba> = LazyLock::new(|| Jieba::new());
@@ -88,6 +97,12 @@ impl TokenStream for JiebaTokenStream {
 
 // Global search index state
 static SEARCH_INDEX: Mutex<Option<SearchIndex>> = Mutex::new(None);
+
+// Global review queue for notification server
+static REVIEW_QUEUE: LazyLock<Mutex<Vec<ReviewItem>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+// Notification server port
+const NOTIFY_SERVER_PORT: u16 = 23567;
 
 // Distill watch state
 static DISTILL_WATCH_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
@@ -239,6 +254,13 @@ pub struct ReviewItem {
     pub title: String,
     pub project: Option<String>,
     pub timestamp: u64,
+    // tmux navigation context
+    pub tmux_session: Option<String>,
+    pub tmux_window: Option<String>,
+    pub tmux_pane: Option<String>,
+    // Claude session reference
+    pub session_id: Option<String>,
+    pub project_path: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1840,6 +1862,11 @@ fn emit_review_queue(window: tauri::Window, items: Vec<ReviewItem>) -> Result<()
 }
 
 #[tauri::command]
+fn get_review_queue() -> Vec<ReviewItem> {
+    REVIEW_QUEUE.lock().unwrap().clone()
+}
+
+#[tauri::command]
 fn list_distill_documents() -> Result<Vec<DistillDocument>, String> {
     let distill_dir = get_distill_dir();
     let index_path = distill_dir.join("index.jsonl");
@@ -2764,6 +2791,201 @@ async fn test_zenmux_connection(base_url: String, auth_token: String, model: Str
     })
 }
 
+// ============================================================================
+// macOS Window Configuration
+// ============================================================================
+
+#[cfg(target_os = "macos")]
+fn setup_float_window_macos(app: &tauri::App) {
+    use tauri::Manager;
+
+    if let Some(window) = app.get_webview_window("float") {
+        // 获取原生 NSWindow 句柄
+        if let Ok(ns_window) = window.ns_window() {
+            unsafe {
+                let ns_win: id = ns_window as id;
+
+                // 设置窗口可以接收鼠标事件但不激活
+                ns_win.setAcceptsMouseMovedEvents_(YES);
+
+                // 设置窗口行为：可以出现在所有空间，且不激活
+                let behavior = NSWindowCollectionBehavior::NSWindowCollectionBehaviorCanJoinAllSpaces
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorStationary
+                    | NSWindowCollectionBehavior::NSWindowCollectionBehaviorIgnoresCycle;
+                ns_win.setCollectionBehavior_(behavior);
+
+                // 设置窗口级别为悬浮面板 (NSFloatingWindowLevel = 3)
+                ns_win.setLevel_(3);
+
+                // 关键：忽略鼠标事件不会让窗口获得焦点
+                ns_win.setIgnoresMouseEvents_(cocoa::base::NO);
+
+                println!("[DEBUG] Float window macOS properties configured");
+            }
+        }
+    }
+}
+
+// ============================================================================
+// tmux Navigation
+// ============================================================================
+
+#[tauri::command]
+fn navigate_to_tmux_pane(session: String, window: String, pane: String) -> Result<(), String> {
+    println!("[DEBUG][navigate_to_tmux_pane] 入口: session={}, window={}, pane={}", session, window, pane);
+
+    let target = format!("{}:{}.{}", session, window, pane);
+
+    // 获取 tmux pane 的 TTY
+    let pane_tty_result = std::process::Command::new("tmux")
+        .args(["display-message", "-t", &target, "-p", "#{pane_tty}"])
+        .output();
+
+    let pane_tty = match &pane_tty_result {
+        Ok(output) => {
+            let tty = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            println!("[DEBUG][navigate_to_tmux_pane] tmux pane TTY: '{}'", tty);
+            tty
+        }
+        Err(e) => {
+            println!("[DEBUG][navigate_to_tmux_pane] 获取 pane TTY 失败: {}", e);
+            String::new()
+        }
+    };
+
+    #[cfg(target_os = "macos")]
+    {
+        // 通过 TTY 匹配 iTerm2 tab
+        // 每个 iTerm2 tab 的 session 有一个 tty，对应 tmux pane 的 tty
+        let script = format!(r#"
+            tell application "iTerm"
+                activate
+                tell current window
+                    set targetTTY to "{}"
+                    set tabIndex to 1
+                    repeat with t in tabs
+                        try
+                            set sessionTTY to tty of current session of t
+                            if sessionTTY is equal to targetTTY then
+                                select tab tabIndex
+                                return "found by tty:" & tabIndex
+                            end if
+                        end try
+                        set tabIndex to tabIndex + 1
+                    end repeat
+                    return "not found, target tty: " & targetTTY
+                end tell
+            end tell
+        "#, pane_tty);
+
+        println!("[DEBUG][navigate_to_tmux_pane] iTerm2 查找 tab: tty='{}'", pane_tty);
+        let result = std::process::Command::new("osascript")
+            .args(["-e", &script])
+            .output();
+
+        match &result {
+            Ok(output) => {
+                println!("[DEBUG][navigate_to_tmux_pane] iTerm2 结果: status={}, stdout={}, stderr={}",
+                    output.status,
+                    String::from_utf8_lossy(&output.stdout).trim(),
+                    String::from_utf8_lossy(&output.stderr));
+            }
+            Err(e) => {
+                println!("[DEBUG][navigate_to_tmux_pane] iTerm2 错误: {}", e);
+            }
+        }
+    }
+
+    println!("[DEBUG][navigate_to_tmux_pane] 完成");
+    Ok(())
+}
+
+// ============================================================================
+// Notification HTTP Server
+// ============================================================================
+
+/// Incoming notification payload from shell scripts
+#[derive(Debug, Deserialize)]
+struct NotifyPayload {
+    title: String,
+    project: Option<String>,
+    project_path: Option<String>,
+    session_id: Option<String>,
+    tmux_session: Option<String>,
+    tmux_window: Option<String>,
+    tmux_pane: Option<String>,
+}
+
+/// Start the HTTP notification server
+fn start_notify_server(app_handle: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        let app_handle = Arc::new(app_handle);
+
+        // POST /notify - receive notifications from shell scripts
+        let app_for_notify = app_handle.clone();
+        let notify_route = warp::post()
+            .and(warp::path("notify"))
+            .and(warp::body::json())
+            .map(move |payload: NotifyPayload| {
+                let app = app_for_notify.clone();
+                let item = ReviewItem {
+                    id: format!("{}", std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis()),
+                    title: payload.title,
+                    project: payload.project,
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs(),
+                    tmux_session: payload.tmux_session,
+                    tmux_window: payload.tmux_window,
+                    tmux_pane: payload.tmux_pane,
+                    session_id: payload.session_id,
+                    project_path: payload.project_path,
+                };
+
+                // Add to queue
+                {
+                    let mut queue = REVIEW_QUEUE.lock().unwrap();
+                    queue.push(item.clone());
+                }
+
+                // Emit to frontend
+                let queue = REVIEW_QUEUE.lock().unwrap().clone();
+                let _ = app.emit("review-queue-update", queue);
+
+                warp::reply::json(&serde_json::json!({"ok": true, "id": item.id}))
+            });
+
+        // GET /queue - get current queue (for debugging)
+        let queue_route = warp::get()
+            .and(warp::path("queue"))
+            .map(|| {
+                let queue = REVIEW_QUEUE.lock().unwrap().clone();
+                warp::reply::json(&queue)
+            });
+
+        // DELETE /queue/:id - dismiss an item
+        let dismiss_route = warp::delete()
+            .and(warp::path("queue"))
+            .and(warp::path::param::<String>())
+            .map(move |id: String| {
+                let mut queue = REVIEW_QUEUE.lock().unwrap();
+                queue.retain(|item| item.id != id);
+                warp::reply::json(&serde_json::json!({"ok": true}))
+            });
+
+        let routes = notify_route.or(queue_route).or(dismiss_route);
+
+        println!("[Lovcode] Notification server starting on port {}", NOTIFY_SERVER_PORT);
+        warp::serve(routes)
+            .run(([127, 0, 0, 1], NOTIFY_SERVER_PORT))
+            .await;
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -2771,6 +2993,13 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder, PredefinedMenuItem};
+
+            // Start notification HTTP server
+            start_notify_server(app.handle().clone());
+
+            // Configure float window for macOS (non-activating panel)
+            #[cfg(target_os = "macos")]
+            setup_float_window_macos(app);
 
             // Start watching distill directory for changes
             let app_handle = app.handle().clone();
@@ -2907,7 +3136,9 @@ pub fn run() {
             list_reference_sources,
             list_reference_docs,
             get_reference_doc,
-            emit_review_queue
+            emit_review_queue,
+            get_review_queue,
+            navigate_to_tmux_pane
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
