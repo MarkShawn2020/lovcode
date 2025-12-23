@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.11.2
+
+### Patch Changes
+
+- fix: 修复 Windows/Linux 编译错误（macOS 专用 API 添加条件编译）
+
 ## 0.11.1
 
 ### Patch Changes
