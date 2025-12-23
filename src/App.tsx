@@ -3459,6 +3459,8 @@ function SettingsView({
   const [newEnvKey, setNewEnvKey] = useState("");
   const [newEnvValue, setNewEnvValue] = useState("");
   const [revealedEnvKeys, setRevealedEnvKeys] = useState<Record<string, boolean>>({});
+  const [editingEnvIsDisabled, setEditingEnvIsDisabled] = useState(false);
+  const [expandedPresetKey, setExpandedPresetKey] = useState<string | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -3513,14 +3515,14 @@ function SettingsView({
   const rawEnv = getRawEnvFromSettings(settings);
   const customEnvKeys = getCustomEnvKeysFromSettings(settings);
   const disabledEnv = getDisabledEnvFromSettings(settings);
-  const envEntries = Object.entries(rawEnv);
-  const disabledEnvEntries = Object.entries(disabledEnv);
+  // Merge active and disabled env entries with a disabled flag
+  const allEnvEntries: Array<[string, string, boolean]> = [
+    ...Object.entries(rawEnv).map(([k, v]) => [k, v, false] as [string, string, boolean]),
+    ...Object.entries(disabledEnv).map(([k, v]) => [k, v, true] as [string, string, boolean]),
+  ].sort((a, b) => a[0].localeCompare(b[0]));
   const filteredEnvEntries = !search
-    ? envEntries
-    : envEntries.filter(([key]) => key.toLowerCase().includes(search.toLowerCase()));
-  const filteredDisabledEnvEntries = !search
-    ? disabledEnvEntries
-    : disabledEnvEntries.filter(([key]) => key.toLowerCase().includes(search.toLowerCase()));
+    ? allEnvEntries
+    : allEnvEntries.filter(([key]) => key.toLowerCase().includes(search.toLowerCase()));
   const proxyPresets = [
     {
       key: "corporate",
@@ -3541,6 +3543,39 @@ function SettingsView({
       templateName: "zenmux-anthropic-proxy",
     },
   ];
+  const presetFallbacks: Record<string, MarketplaceItem> = {
+    native: {
+      name: "anthropic-native-endpoint",
+      path: "fallback/anthropic-native-endpoint.json",
+      description: "Direct Anthropic endpoint with official models.",
+      downloads: null,
+      content: JSON.stringify(
+        {
+          env: {
+            ANTHROPIC_API_KEY: "your_anthropic_api_key_here",
+          },
+        },
+        null,
+        2
+      ),
+    },
+    zenmux: {
+      name: "zenmux-anthropic-proxy",
+      path: "fallback/zenmux-anthropic-proxy.json",
+      description: "Route via ZenMux to unlock more model options.",
+      downloads: null,
+      content: JSON.stringify(
+        {
+          env: {
+            ZENMUX_API_KEY: "your_zenmux_api_key_here",
+            ANTHROPIC_BASE_URL: "https://zenmux.ai/api/anthropic",
+          },
+        },
+        null,
+        2
+      ),
+    },
+  };
   const filteredPresets = proxyPresets.filter((preset) =>
     preset.label.toLowerCase().includes(search.toLowerCase()) ||
     preset.description.toLowerCase().includes(search.toLowerCase())
@@ -3549,8 +3584,9 @@ function SettingsView({
   const getPresetTemplate = (presetKey: string) => {
     const preset = proxyPresets.find((p) => p.key === presetKey);
     if (!preset) return null;
-    const template = marketplaceItems.find((item) => item.name === preset.templateName) ?? null;
-    return { preset, template };
+    const marketplaceTemplate = marketplaceItems.find((item) => item.name === preset.templateName) ?? null;
+    const fallbackTemplate = presetFallbacks[presetKey] ?? null;
+    return { preset, template: marketplaceTemplate ?? fallbackTemplate };
   };
 
   const isPlaceholderValue = (value: string) => {
@@ -3559,14 +3595,42 @@ function SettingsView({
     return /(xxxxx|<.*?>|your[_\s-]?key|replace[_\s-]?me)/i.test(trimmed);
   };
 
-  const handlePreviewPreset = (presetKey: string) => {
+  const handleTogglePresetPreview = (presetKey: string) => {
+    setExpandedPresetKey((prev) => (prev === presetKey ? null : presetKey));
+  };
+
+  const getPresetPreviewConfig = (presetKey: string) => {
     const resolved = getPresetTemplate(presetKey);
-    if (!resolved?.template) {
-      setTestStatus((prev) => ({ ...prev, [presetKey]: "error" }));
-      setTestMessage((prev) => ({ ...prev, [presetKey]: "Template not available locally." }));
-      return;
+    const settingsRaw = settings?.raw && typeof settings.raw === "object" && !Array.isArray(settings.raw)
+      ? (settings.raw as Record<string, unknown>)
+      : {};
+    const templateContent = resolved?.template?.content;
+    if (!templateContent) {
+      return { settings: settingsRaw, note: "Template not available locally." };
     }
-    onMarketplaceSelect(resolved.template);
+
+    try {
+      const parsed = JSON.parse(templateContent) as Record<string, unknown>;
+      const preview: Record<string, unknown> = {};
+      const templateEnv = parsed.env && typeof parsed.env === "object" && !Array.isArray(parsed.env)
+        ? (parsed.env as Record<string, unknown>)
+        : null;
+      if (templateEnv) {
+        const currentEnv = settingsRaw.env && typeof settingsRaw.env === "object" && !Array.isArray(settingsRaw.env)
+          ? (settingsRaw.env as Record<string, unknown>)
+          : {};
+        preview.env = Object.fromEntries(
+          Object.keys(templateEnv).map((key) => [key, currentEnv[key] ?? ""])
+        );
+      }
+      Object.keys(parsed).forEach((key) => {
+        if (key === "env") return;
+        if (key in settingsRaw) preview[key] = settingsRaw[key];
+      });
+      return { settings: preview, note: null };
+    } catch {
+      return { settings: settingsRaw, note: "Template JSON invalid; showing full settings." };
+    }
   };
 
   const handleTestPreset = async (presetKey: string, envOverride?: Record<string, string>) => {
@@ -3666,16 +3730,22 @@ function SettingsView({
     return updated;
   };
 
-  const handleEnvEdit = (key: string, value: string) => {
+  const handleEnvEdit = (key: string, value: string, isDisabled = false) => {
     setEditingEnvKey(key);
     setEnvEditValue(value);
+    setEditingEnvIsDisabled(isDisabled);
   };
 
   const handleEnvSave = async () => {
     if (!editingEnvKey) return;
-    await invoke("update_settings_env", { envKey: editingEnvKey, envValue: envEditValue });
+    if (editingEnvIsDisabled) {
+      await invoke("update_disabled_settings_env", { envKey: editingEnvKey, envValue: envEditValue });
+    } else {
+      await invoke("update_settings_env", { envKey: editingEnvKey, envValue: envEditValue });
+    }
     await refreshSettings();
     setEditingEnvKey(null);
+    setEditingEnvIsDisabled(false);
   };
 
   const handleEnvDelete = async (key: string) => {
@@ -3776,13 +3846,13 @@ function SettingsView({
                 </tr>
               </thead>
               <tbody>
-                {filteredEnvEntries.map(([key, value]) => {
+                {filteredEnvEntries.map(([key, value, isDisabled]) => {
                   const isRevealed = !!revealedEnvKeys[key];
                   const isCustom = customEnvKeys.includes(key);
                   return (
-                    <tr key={key} className="border-b border-border/60 last:border-0">
+                    <tr key={key} className={`border-b border-border/60 last:border-0 ${isDisabled ? "opacity-50" : ""}`}>
                       <td className="py-2 pr-2">
-                        <span className="text-xs bg-primary/10 text-primary px-2 py-1 rounded font-mono">{key}</span>
+                        <span className={`text-xs px-2 py-1 rounded font-mono ${isDisabled ? "bg-muted/50 text-muted-foreground line-through" : "bg-primary/10 text-primary"}`}>{key}</span>
                       </td>
                       <td className="py-2 pr-2">
                         {editingEnvKey === key ? (
@@ -3832,12 +3902,60 @@ function SettingsView({
                               </>
                             )}
                           />
+                        ) : isDisabled ? (
+                          <ResponsiveActions
+                            variant="env"
+                            icon={(
+                              <>
+                                <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => handleEnvEdit(key, value, true)} title="Edit" aria-label="Edit">
+                                  <Pencil1Icon />
+                                </Button>
+                                <Button size="icon" variant="outline" className="h-8 w-8 text-green-600 border-green-200 hover:bg-green-50" onClick={() => handleEnvEnable(key)} title="Enable" aria-label="Enable">
+                                  <PlusCircledIcon />
+                                </Button>
+                                <TooltipProvider delayDuration={1000}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span>
+                                        <Button size="icon" variant="outline" className="h-8 w-8 text-red-600 border-red-200 hover:bg-red-50 disabled:opacity-40 disabled:pointer-events-none" onClick={() => handleEnvDelete(key)} aria-label="Delete" disabled={!isCustom}>
+                                          <TrashIcon />
+                                        </Button>
+                                      </span>
+                                    </TooltipTrigger>
+                                    {!isCustom && <TooltipContent>Only custom can be deleted</TooltipContent>}
+                                  </Tooltip>
+                                </TooltipProvider>
+                              </>
+                            )}
+                            text={(
+                              <>
+                                <Button size="sm" variant="outline" onClick={() => handleEnvEdit(key, value, true)}>
+                                  Edit
+                                </Button>
+                                <Button size="sm" variant="outline" className="text-green-600 border-green-200 hover:bg-green-50" onClick={() => handleEnvEnable(key)}>
+                                  Enable
+                                </Button>
+                                <TooltipProvider delayDuration={1000}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span>
+                                        <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50 disabled:opacity-40 disabled:pointer-events-none" onClick={() => handleEnvDelete(key)} disabled={!isCustom}>
+                                          Delete
+                                        </Button>
+                                      </span>
+                                    </TooltipTrigger>
+                                    {!isCustom && <TooltipContent>Only custom can be deleted</TooltipContent>}
+                                  </Tooltip>
+                                </TooltipProvider>
+                              </>
+                            )}
+                          />
                         ) : (
                           <ResponsiveActions
                             variant="env"
                             icon={(
                               <>
-                                <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => handleEnvEdit(key, value)} title="Edit" aria-label="Edit">
+                                <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => handleEnvEdit(key, value, false)} title="Edit" aria-label="Edit">
                                   <Pencil1Icon />
                                 </Button>
                                 <Button size="icon" variant="outline" className="h-8 w-8 text-amber-600 border-amber-200 hover:bg-amber-50" onClick={() => handleEnvDisable(key)} title="Disable" aria-label="Disable">
@@ -3859,7 +3977,7 @@ function SettingsView({
                             )}
                             text={(
                               <>
-                                <Button size="sm" variant="outline" onClick={() => handleEnvEdit(key, value)}>
+                                <Button size="sm" variant="outline" onClick={() => handleEnvEdit(key, value, false)}>
                                   Edit
                                 </Button>
                                 <Button size="sm" variant="outline" className="text-amber-600 border-amber-200 hover:bg-amber-50" onClick={() => handleEnvDisable(key)}>
@@ -3892,81 +4010,6 @@ function SettingsView({
           <p className="text-xs text-muted-foreground">No env variables configured.</p>
         )}
 
-        {filteredDisabledEnvEntries.length > 0 && (
-          <div className="mt-4 pt-4 border-t border-border/60">
-            <p className="text-xs font-medium text-muted-foreground mb-2">Disabled</p>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <tbody>
-                  {filteredDisabledEnvEntries.map(([key, value]) => {
-                    const isRevealed = !!revealedEnvKeys[key];
-                    const isCustom = customEnvKeys.includes(key);
-                    return (
-                      <tr key={key} className="border-b border-border/60 last:border-0 opacity-60">
-                        <td className="py-2 pr-2">
-                          <span className="text-xs bg-muted/50 text-muted-foreground px-2 py-1 rounded font-mono line-through">{key}</span>
-                        </td>
-                        <td className="py-2 pr-2">
-                          <span className="inline-flex items-center gap-1">
-                            <span className="text-xs text-muted-foreground font-mono">
-                              {isRevealed ? (value || "(empty)") : "••••••"}
-                            </span>
-                            <button onClick={() => toggleEnvReveal(key)} className="text-muted-foreground hover:text-foreground p-0.5" title={isRevealed ? "Hide" : "View"}>
-                              {isRevealed ? <EyeClosedIcon className="w-3.5 h-3.5" /> : <EyeOpenIcon className="w-3.5 h-3.5" />}
-                            </button>
-                          </span>
-                        </td>
-                        <td className="py-2 px-2 whitespace-nowrap text-right env-actions-cell w-[1%]">
-                          <ResponsiveActions
-                            variant="env"
-                            icon={(
-                              <>
-                                <Button size="icon" variant="outline" className="h-8 w-8 text-green-600 border-green-200 hover:bg-green-50" onClick={() => handleEnvEnable(key)} title="Enable" aria-label="Enable">
-                                  <PlusCircledIcon />
-                                </Button>
-                                <TooltipProvider delayDuration={1000}>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span>
-                                        <Button size="icon" variant="outline" className="h-8 w-8 text-red-600 border-red-200 hover:bg-red-50 disabled:opacity-40 disabled:pointer-events-none" onClick={() => handleEnvDelete(key)} aria-label="Delete" disabled={!isCustom}>
-                                          <TrashIcon />
-                                        </Button>
-                                      </span>
-                                    </TooltipTrigger>
-                                    {!isCustom && <TooltipContent>Only custom can be deleted</TooltipContent>}
-                                  </Tooltip>
-                                </TooltipProvider>
-                              </>
-                            )}
-                            text={(
-                              <>
-                                <Button size="sm" variant="outline" className="text-green-600 border-green-200 hover:bg-green-50" onClick={() => handleEnvEnable(key)}>
-                                  Enable
-                                </Button>
-                                <TooltipProvider delayDuration={1000}>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <span>
-                                        <Button size="sm" variant="outline" className="text-red-600 border-red-200 hover:bg-red-50 disabled:opacity-40 disabled:pointer-events-none" onClick={() => handleEnvDelete(key)} disabled={!isCustom}>
-                                          Delete
-                                        </Button>
-                                      </span>
-                                    </TooltipTrigger>
-                                    {!isCustom && <TooltipContent>Only custom can be deleted</TooltipContent>}
-                                  </Tooltip>
-                                </TooltipProvider>
-                              </>
-                            )}
-                          />
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </CollapsibleCard>
 
       {filteredPresets.length > 0 && (
@@ -4005,11 +4048,11 @@ function SettingsView({
                             size="icon"
                             variant="outline"
                             className="h-9 w-9"
-                            onClick={() => handlePreviewPreset(preset.key)}
-                            title="Preview config"
-                            aria-label="Preview config"
+                            onClick={() => handleTogglePresetPreview(preset.key)}
+                            title={expandedPresetKey === preset.key ? "Hide config" : "Show current config"}
+                            aria-label={expandedPresetKey === preset.key ? "Hide config" : "Show current config"}
                           >
-                            <EyeOpenIcon />
+                            {expandedPresetKey === preset.key ? <EyeClosedIcon /> : <EyeOpenIcon />}
                           </Button>
                           <Button
                             size="icon"
@@ -4035,8 +4078,15 @@ function SettingsView({
                       )}
                       text={(
                         <>
-                          <Button size="sm" variant="outline" className="max-w-[8.5rem]" onClick={() => handlePreviewPreset(preset.key)}>
-                            <span className="block truncate">Preview config</span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="max-w-[8.5rem]"
+                            onClick={() => handleTogglePresetPreview(preset.key)}
+                          >
+                            <span className="block truncate">
+                              {expandedPresetKey === preset.key ? "Hide config" : "Show config"}
+                            </span>
                           </Button>
                           <Button
                             size="sm"
@@ -4067,6 +4117,21 @@ function SettingsView({
                     {testStatus[preset.key] === "success" && testMessage[preset.key] && <span className="text-xs text-green-600">{testMessage[preset.key]}</span>}
                     {testStatus[preset.key] === "error" && <span className="text-xs text-red-600">{testMessage[preset.key] || "Failed"}</span>}
                   </div>
+                  {expandedPresetKey === preset.key && (
+                    <div className="rounded-lg border border-border bg-canvas/70 p-2">
+                      {(() => {
+                        const preview = getPresetPreviewConfig(preset.key);
+                        return (
+                          <>
+                            {preview.note && <p className="text-xs text-muted-foreground mb-2">{preview.note}</p>}
+                            <pre className="text-xs text-ink whitespace-pre-wrap break-words font-mono">
+                              {JSON.stringify(preview.settings, null, 2)}
+                            </pre>
+                          </>
+                        );
+                      })()}
+                    </div>
+                  )}
                   {missingKeys.length > 0 && (
                     <div className="rounded-lg border border-dashed border-border bg-canvas/60 p-2">
                       <p className="text-xs text-muted-foreground mb-2">Fill missing env values to continue testing.</p>

@@ -120,13 +120,22 @@ fn get_review_queue_path() -> PathBuf {
 // Load review queue from disk
 fn load_review_queue() {
     let path = get_review_queue_path();
+    println!("[Lovcode] Loading review queue from {:?}", path);
     if path.exists() {
         if let Ok(content) = std::fs::read_to_string(&path) {
-            if let Ok(items) = serde_json::from_str::<Vec<ReviewItem>>(&content) {
-                let mut queue = REVIEW_QUEUE.lock().unwrap();
-                *queue = items;
+            match serde_json::from_str::<Vec<ReviewItem>>(&content) {
+                Ok(items) => {
+                    println!("[Lovcode] Loaded {} items from review queue", items.len());
+                    let mut queue = REVIEW_QUEUE.lock().unwrap();
+                    *queue = items;
+                }
+                Err(e) => {
+                    println!("[Lovcode] Failed to parse review queue: {}", e);
+                }
             }
         }
+    } else {
+        println!("[Lovcode] Review queue file not found");
     }
 }
 
@@ -386,6 +395,38 @@ pub struct ClaudeSettings {
 
 fn get_claude_dir() -> PathBuf {
     dirs::home_dir().unwrap().join(".claude")
+}
+
+fn get_lovstudio_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".lovstudio")
+        .join("lovcode")
+}
+
+fn get_disabled_env_path() -> PathBuf {
+    get_lovstudio_dir().join("disabled_env.json")
+}
+
+fn load_disabled_env() -> Result<serde_json::Map<String, Value>, String> {
+    let path = get_disabled_env_path();
+    if !path.exists() {
+        return Ok(serde_json::Map::new());
+    }
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let value: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    Ok(value.as_object().cloned().unwrap_or_default())
+}
+
+fn save_disabled_env(disabled: &serde_json::Map<String, Value>) -> Result<(), String> {
+    let path = get_disabled_env_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let output = serde_json::to_string_pretty(&Value::Object(disabled.clone()))
+        .map_err(|e| e.to_string())?;
+    fs::write(&path, output).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Get path to ~/.claude.json (MCP servers config)
@@ -2870,7 +2911,7 @@ fn get_settings() -> Result<ClaudeSettings, String> {
     let claude_json_path = get_claude_json_path();
 
     // Read ~/.claude/settings.json for permissions, hooks, etc.
-    let (raw, permissions, hooks) = if settings_path.exists() {
+    let (mut raw, permissions, hooks) = if settings_path.exists() {
         let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
         let raw: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
         let permissions = raw.get("permissions").cloned();
@@ -2879,6 +2920,24 @@ fn get_settings() -> Result<ClaudeSettings, String> {
     } else {
         (Value::Null, None, None)
     };
+
+    // Overlay disabled env from ~/.lovstudio/lovcode (do not persist in settings.json)
+    if let Ok(disabled_env) = load_disabled_env() {
+        if !disabled_env.is_empty() {
+            if let Some(obj) = raw.as_object_mut() {
+                obj.insert(
+                    "_lovcode_disabled_env".to_string(),
+                    Value::Object(disabled_env),
+                );
+            } else {
+                raw = serde_json::json!({
+                    "_lovcode_disabled_env": disabled_env
+                });
+            }
+        } else if let Some(obj) = raw.as_object_mut() {
+            obj.remove("_lovcode_disabled_env");
+        }
+    }
 
     // Read ~/.claude.json for MCP servers
     let mut mcp_servers = Vec::new();
@@ -3113,6 +3172,10 @@ fn update_settings_env(
         }
     }
 
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
+
     let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     fs::write(&settings_path, output).map_err(|e| e.to_string())?;
 
@@ -3122,12 +3185,12 @@ fn update_settings_env(
 #[tauri::command]
 fn delete_settings_env(env_key: String) -> Result<(), String> {
     let settings_path = get_claude_dir().join("settings.json");
-    if !settings_path.exists() {
-        return Ok(());
-    }
-    let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-    let mut settings: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
 
     if let Some(env) = settings.get_mut("env").and_then(|v| v.as_object_mut()) {
         env.remove(&env_key);
@@ -3149,8 +3212,16 @@ fn delete_settings_env(env_key: String) -> Result<(), String> {
         disabled.remove(&env_key);
     }
 
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
+
     let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+
+    let mut disabled_env = load_disabled_env()?;
+    disabled_env.remove(&env_key);
+    save_disabled_env(&disabled_env)?;
 
     Ok(())
 }
@@ -3178,15 +3249,49 @@ fn disable_settings_env(env_key: String) -> Result<(), String> {
         env.remove(&env_key);
     }
 
-    // Store in disabled env
-    if !settings
-        .get("_lovcode_disabled_env")
-        .and_then(|v| v.as_object())
-        .is_some()
-    {
-        settings["_lovcode_disabled_env"] = serde_json::json!({});
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
     }
-    settings["_lovcode_disabled_env"][&env_key] = serde_json::Value::String(current_value);
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+
+    let mut disabled_env = load_disabled_env()?;
+    disabled_env.insert(env_key, serde_json::Value::String(current_value));
+    save_disabled_env(&disabled_env)?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn enable_settings_env(env_key: String) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: serde_json::Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+
+    // Get value from disabled env
+    let mut disabled_env = load_disabled_env()?;
+    let disabled_value = disabled_env
+        .get(&env_key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    disabled_env.remove(&env_key);
+    save_disabled_env(&disabled_env)?;
+
+    // Add back to active env
+    if !settings.get("env").and_then(|v| v.as_object()).is_some() {
+        settings["env"] = serde_json::json!({});
+    }
+    settings["env"][&env_key] = serde_json::Value::String(disabled_value);
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
 
     let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
     fs::write(&settings_path, output).map_err(|e| e.to_string())?;
@@ -3195,39 +3300,10 @@ fn disable_settings_env(env_key: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn enable_settings_env(env_key: String) -> Result<(), String> {
-    let settings_path = get_claude_dir().join("settings.json");
-    if !settings_path.exists() {
-        return Ok(());
-    }
-    let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
-    let mut settings: serde_json::Value =
-        serde_json::from_str(&content).map_err(|e| e.to_string())?;
-
-    // Get value from disabled env
-    let disabled_value = settings
-        .get("_lovcode_disabled_env")
-        .and_then(|v| v.get(&env_key))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-
-    // Remove from disabled env
-    if let Some(disabled) = settings
-        .get_mut("_lovcode_disabled_env")
-        .and_then(|v| v.as_object_mut())
-    {
-        disabled.remove(&env_key);
-    }
-
-    // Add back to active env
-    if !settings.get("env").and_then(|v| v.as_object()).is_some() {
-        settings["env"] = serde_json::json!({});
-    }
-    settings["env"][&env_key] = serde_json::Value::String(disabled_value);
-
-    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
-    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+fn update_disabled_settings_env(env_key: String, env_value: String) -> Result<(), String> {
+    let mut disabled_env = load_disabled_env()?;
+    disabled_env.insert(env_key, serde_json::Value::String(env_value));
+    save_disabled_env(&disabled_env)?;
 
     Ok(())
 }
@@ -3781,14 +3857,9 @@ fn update_tray_menu<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
         if let Ok(menu) = build_tray_menu(app) {
             let _ = tray.set_menu(Some(menu));
         }
-        // Update title to show message count
+        // Update title to show message count (always show, including 0)
         let count = REVIEW_QUEUE.lock().unwrap().len();
-        let title = if count > 0 {
-            Some(count.to_string())
-        } else {
-            None
-        };
-        let _ = tray.set_title(title);
+        let _ = tray.set_title(Some(count.to_string()));
     }
 }
 
@@ -3937,17 +4008,15 @@ pub fn run() {
 
             // Create system tray
             let app_handle = app.handle();
-            let tray_menu = build_tray_menu(app_handle)?;
             let initial_count = REVIEW_QUEUE.lock().unwrap().len();
-            let mut tray_builder = TrayIconBuilder::with_id("main-tray")
+            let tray_menu = build_tray_menu(app_handle)?;
+            println!("[Lovcode] Tray init: queue has {} messages", initial_count);
+            let _tray = TrayIconBuilder::with_id("main-tray")
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&tray_menu)
                 .show_menu_on_left_click(true)
-                .tooltip("Lovcode Messages");
-            if initial_count > 0 {
-                tray_builder = tray_builder.title(initial_count.to_string());
-            }
-            let _tray = tray_builder
+                .tooltip("Lovcode Messages")
+                .title(initial_count.to_string())
                 .on_menu_event(|app, event| {
                     let id = event.id.as_ref();
                     if id.starts_with("msg:") {
@@ -4086,6 +4155,7 @@ pub fn run() {
             delete_settings_env,
             disable_settings_env,
             enable_settings_env,
+            update_disabled_settings_env,
             test_zenmux_connection,
             list_distill_documents,
             get_distill_document,
