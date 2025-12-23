@@ -5,7 +5,7 @@ import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { version } from "../package.json";
 import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw, ChevronLeft, ChevronRight, Store, Archive, RotateCcw, List, FolderTree, Folder, Terminal, FolderInput, FlaskConical } from "lucide-react";
-import { EyeOpenIcon, EyeClosedIcon, Pencil1Icon, TrashIcon, CheckIcon, Cross1Icon, RocketIcon, MinusCircledIcon, PlusCircledIcon } from "@radix-ui/react-icons";
+import { EyeOpenIcon, EyeClosedIcon, Pencil1Icon, TrashIcon, CheckIcon, Cross1Icon, Cross2Icon, RocketIcon, MinusCircledIcon, PlusCircledIcon } from "@radix-ui/react-icons";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Markdown from "react-markdown";
@@ -3531,23 +3531,50 @@ function SettingsView({
       templateName: "corporate-proxy",
     },
     {
+      key: "anthropic-subscription",
+      label: "Anthropic Subscription",
+      description: "Use Claude Pro/Max subscription via OAuth login",
+      templateName: "anthropic-subscription",
+    },
+    {
       key: "native",
-      label: "Native Anthropic",
-      description: "Direct Anthropic endpoint with official models",
+      label: "Anthropic API",
+      description: "Direct Anthropic API with your API key",
       templateName: "anthropic-native-endpoint",
     },
     {
       key: "zenmux",
-      label: "ZenMux (Anthropic protocol)",
+      label: "ZenMux",
       description: "Route via ZenMux to unlock more model options",
       templateName: "zenmux-anthropic-proxy",
     },
+    {
+      key: "qiniu",
+      label: "Qiniu Cloud",
+      description: "Use Qiniu Cloud AI gateway for Anthropic API",
+      templateName: "qiniu-anthropic-proxy",
+    },
   ];
   const presetFallbacks: Record<string, MarketplaceItem> = {
+    "anthropic-subscription": {
+      name: "anthropic-subscription",
+      path: "fallback/anthropic-subscription.json",
+      description: "Use Claude Pro/Max subscription via OAuth login.",
+      downloads: null,
+      content: JSON.stringify(
+        {
+          env: {
+            CLAUDE_CODE_USE_OAUTH: "1",
+          },
+        },
+        null,
+        2
+      ),
+    },
     native: {
       name: "anthropic-native-endpoint",
       path: "fallback/anthropic-native-endpoint.json",
-      description: "Direct Anthropic endpoint with official models.",
+      description: "Direct Anthropic API with your API key.",
       downloads: null,
       content: JSON.stringify(
         {
@@ -3567,8 +3594,22 @@ function SettingsView({
       content: JSON.stringify(
         {
           env: {
-            ZENMUX_API_KEY: "your_zenmux_api_key_here",
-            ANTHROPIC_BASE_URL: "https://zenmux.ai/api/anthropic",
+            ZENMUX_API_KEY: "sk-ai-v1-xxxxx",
+          },
+        },
+        null,
+        2
+      ),
+    },
+    qiniu: {
+      name: "qiniu-anthropic-proxy",
+      path: "fallback/qiniu-anthropic-proxy.json",
+      description: "Use Qiniu Cloud AI gateway for Anthropic API.",
+      downloads: null,
+      content: JSON.stringify(
+        {
+          env: {
+            QINIU_API_KEY: "your_qiniu_api_key_here",
           },
         },
         null,
@@ -3699,6 +3740,28 @@ function SettingsView({
     }
   };
 
+  // Map user-friendly env keys to actual keys written to settings.json
+  const presetEnvKeyMappings: Record<string, Record<string, string>> = {
+    zenmux: {
+      ZENMUX_API_KEY: "ANTHROPIC_AUTH_TOKEN",
+    },
+    qiniu: {
+      QINIU_API_KEY: "ANTHROPIC_AUTH_TOKEN",
+    },
+  };
+
+  // Extra env vars to inject when applying a preset
+  const presetExtraEnv: Record<string, Record<string, string>> = {
+    zenmux: {
+      ANTHROPIC_BASE_URL: "https://zenmux.ai/api/anthropic",
+      ANTHROPIC_API_KEY: "",
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+    },
+    qiniu: {
+      ANTHROPIC_BASE_URL: "https://api.qnaigc.com",
+    },
+  };
+
   const handleApplyPreset = async (presetKey: string) => {
     const resolved = getPresetTemplate(presetKey);
     if (!resolved?.template || !resolved.template.content) {
@@ -3711,7 +3774,24 @@ function SettingsView({
     setApplyError(null);
 
     try {
-      await invoke("install_setting_template", { config: resolved.template.content });
+      // Parse template, apply key mappings and inject extra env
+      const parsed = JSON.parse(resolved.template.content);
+      const keyMapping = presetEnvKeyMappings[presetKey] || {};
+      const extraEnv = presetExtraEnv[presetKey] || {};
+
+      if (parsed.env) {
+        // Rename keys according to mapping
+        for (const [fromKey, toKey] of Object.entries(keyMapping)) {
+          if (fromKey in parsed.env) {
+            parsed.env[toKey] = parsed.env[fromKey];
+            delete parsed.env[fromKey];
+          }
+        }
+        // Inject extra env vars
+        Object.assign(parsed.env, extraEnv);
+      }
+
+      await invoke("install_setting_template", { config: JSON.stringify(parsed, null, 2) });
       const updated = await invoke<ClaudeSettings>("get_settings");
       setSettings(updated);
       setApplyStatus((prev) => ({ ...prev, [presetKey]: "success" }));
@@ -4114,8 +4194,24 @@ function SettingsView({
                     {isSuccess && <span className="text-xs text-green-600">Saved</span>}
                     {status === "error" && <span className="text-xs text-red-600">Failed</span>}
                     {testStatus[preset.key] === "loading" && <span className="text-xs text-muted-foreground">Testing...</span>}
-                    {testStatus[preset.key] === "success" && testMessage[preset.key] && <span className="text-xs text-green-600">{testMessage[preset.key]}</span>}
-                    {testStatus[preset.key] === "error" && <span className="text-xs text-red-600">{testMessage[preset.key] || "Failed"}</span>}
+                    {(testStatus[preset.key] === "success" || testStatus[preset.key] === "error") && (
+                      <span className="inline-flex items-center gap-1">
+                        <span className={`text-xs ${testStatus[preset.key] === "success" ? "text-green-600" : "text-red-600"}`}>
+                          {testMessage[preset.key] || (testStatus[preset.key] === "error" ? "Failed" : "")}
+                        </span>
+                        <button
+                          className="p-0.5 rounded hover:bg-muted/50 text-muted-foreground hover:text-ink"
+                          onClick={() => {
+                            setTestStatus((prev) => ({ ...prev, [preset.key]: "idle" }));
+                            setTestMessage((prev) => ({ ...prev, [preset.key]: "" }));
+                            setTestMissingKeys((prev) => ({ ...prev, [preset.key]: [] }));
+                          }}
+                          title="Clear test status"
+                        >
+                          <Cross2Icon className="w-3 h-3" />
+                        </button>
+                      </span>
+                    )}
                   </div>
                   {expandedPresetKey === preset.key && (
                     <div className="rounded-lg border border-border bg-canvas/70 p-2">
