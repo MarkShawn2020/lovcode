@@ -5,7 +5,7 @@ import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { version } from "../package.json";
 // Lucide icons (no Radix equivalent)
-import { PanelLeft } from "lucide-react";
+import { PanelLeft, FolderOpen, Folder, FolderTree, FolderInput, Terminal, Store, FlaskConical, List } from "lucide-react";
 // Radix icons
 import {
   EyeOpenIcon, EyeClosedIcon, Pencil1Icon, TrashIcon, CheckIcon, Cross1Icon, Cross2Icon,
@@ -14,8 +14,8 @@ import {
   ChevronLeftIcon, ChevronRightIcon, ArchiveIcon, ResetIcon,
   // Sidebar icons
   HomeIcon, FileIcon, ReaderIcon, BookmarkIcon, LightningBoltIcon, GearIcon, CodeIcon,
-  Component1Icon, MagicWandIcon, Link2Icon, MixerHorizontalIcon, CubeIcon, ChatBubbleIcon,
-  GlobeIcon, StarFilledIcon, TargetIcon, LayersIcon
+  Component1Icon, Link2Icon, MixerHorizontalIcon, CubeIcon, ChatBubbleIcon,
+  GlobeIcon, StarFilledIcon, TargetIcon, LayersIcon, HeartFilledIcon, ExclamationTriangleIcon
 } from "@radix-ui/react-icons";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -124,7 +124,6 @@ type FeatureType = "chat" | "projects" | "settings" | "commands" | "mcp" | "skil
 interface FeatureConfig {
   type: FeatureType;
   label: string;
-  icon: string;
   description: string;
   available: boolean;
   group: "history" | "config" | "marketplace" | "knowledge";
@@ -155,20 +154,20 @@ const FEATURE_ICONS: Record<FeatureType | "home" | "knowledge" | "features" | "m
 // Group 3: Marketplace
 const FEATURES: FeatureConfig[] = [
   // Projects (parallel development)
-  { type: "projects", label: "Projects", icon: "📁", description: "Parallel development projects", available: true, group: "history" },
+  { type: "projects", label: "Projects", description: "Parallel development projects", available: true, group: "history" },
   // Knowledge (collapsible submenu)
-  { type: "kb-reference", label: "Reference", icon: "📖", description: "Platform docs", available: true, group: "knowledge" },
-  { type: "kb-distill", label: "Distill (CC)", icon: "💡", description: "Experience summaries", available: true, group: "knowledge" },
+  { type: "kb-reference", label: "Reference", description: "Platform docs", available: true, group: "knowledge" },
+  { type: "kb-distill", label: "Distill (CC)", description: "Experience summaries", available: true, group: "knowledge" },
   // Configuration
-  { type: "settings", label: "Configuration", icon: "⚙️", description: "Permissions, context & config", available: true, group: "config" },
-  { type: "commands", label: "Commands", icon: "⚡", description: "Slash commands", available: true, group: "config" },
-  { type: "mcp", label: "MCPs", icon: "🔌", description: "MCP servers", available: true, group: "config" },
-  { type: "skills", label: "Skills", icon: "🎯", description: "Reusable skill templates", available: true, group: "config" },
-  { type: "hooks", label: "Hooks", icon: "🪝", description: "Automation triggers", available: true, group: "config" },
-  { type: "sub-agents", label: "Sub Agents", icon: "🤖", description: "AI agents with models", available: true, group: "config" },
-  { type: "output-styles", label: "Output Styles", icon: "🎨", description: "Response formatting styles", available: true, group: "config" },
+  { type: "settings", label: "Configuration", description: "Permissions, context & config", available: true, group: "config" },
+  { type: "commands", label: "Commands", description: "Slash commands", available: true, group: "config" },
+  { type: "mcp", label: "MCPs", description: "MCP servers", available: true, group: "config" },
+  { type: "skills", label: "Skills", description: "Reusable skill templates", available: true, group: "config" },
+  { type: "hooks", label: "Hooks", description: "Automation triggers", available: true, group: "config" },
+  { type: "sub-agents", label: "Sub Agents", description: "AI agents with models", available: true, group: "config" },
+  { type: "output-styles", label: "Output Styles", description: "Response formatting styles", available: true, group: "config" },
   // Marketplace
-  { type: "marketplace", label: "Marketplace", icon: "🛒", description: "Browse and install templates", available: true, group: "marketplace" },
+  { type: "marketplace", label: "Marketplace", description: "Browse and install templates", available: true, group: "marketplace" },
 ];
 
 // ============================================================================
@@ -326,24 +325,24 @@ interface TemplatesCatalog {
 
 // Source filter options
 const SOURCE_FILTERS = [
-  { id: "all", label: "All", icon: "🌐" },
-  { id: "anthropic", label: "Official", icon: "🔷" },
-  { id: "lovstudio", label: "Personal", icon: "💜" },
-  { id: "community", label: "Community", icon: "🌍" },
+  { id: "all", label: "All", icon: GlobeIcon },
+  { id: "anthropic", label: "Official", icon: StarFilledIcon },
+  { id: "lovstudio", label: "Personal", icon: HeartFilledIcon },
+  { id: "community", label: "Community", icon: GlobeIcon },
 ] as const;
 
 type SourceFilterId = typeof SOURCE_FILTERS[number]["id"];
 
 type TemplateCategory = "settings" | "commands" | "mcps" | "skills" | "hooks" | "agents" | "output-styles";
 
-const TEMPLATE_CATEGORIES: { key: TemplateCategory; label: string; icon: string }[] = [
-  { key: "settings", label: "Configuration", icon: "⚙️" },
-  { key: "commands", label: "Commands", icon: "⚡" },
-  { key: "mcps", label: "MCPs", icon: "🔌" },
-  { key: "skills", label: "Skills", icon: "🎯" },
-  { key: "hooks", label: "Hooks", icon: "🪝" },
-  { key: "agents", label: "Sub Agents", icon: "🤖" },
-  { key: "output-styles", label: "Output Styles", icon: "🎨" },
+const TEMPLATE_CATEGORIES: { key: TemplateCategory; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { key: "settings", label: "Configuration", icon: GearIcon },
+  { key: "commands", label: "Commands", icon: LightningBoltIcon },
+  { key: "mcps", label: "MCPs", icon: Component1Icon },
+  { key: "skills", label: "Skills", icon: TargetIcon },
+  { key: "hooks", label: "Hooks", icon: Link2Icon },
+  { key: "agents", label: "Sub Agents", icon: PersonIcon },
+  { key: "output-styles", label: "Output Styles", icon: MixerHorizontalIcon },
 ];
 
 // ============================================================================
@@ -753,6 +752,7 @@ function App() {
                 {TEMPLATE_CATEGORIES.map((cat) => {
                   const isActive = (view.type === "marketplace" && view.category === cat.key) ||
                     (view.type === "template-detail" && view.category === cat.key);
+                  const Icon = cat.icon;
                   return (
                     <button
                       key={cat.key}
@@ -763,7 +763,7 @@ function App() {
                           : "text-ink hover:bg-card-alt"
                       }`}
                     >
-                      <span className="text-lg">{cat.icon}</span>
+                      <Icon className="w-4 h-4" />
                       <span className="text-sm">{cat.label}</span>
                     </button>
                   );
@@ -1304,25 +1304,28 @@ function Home({ onFeatureClick }: { onFeatureClick: (feature: FeatureType) => vo
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 max-w-lg">
-        {FEATURES.map((feature) => (
-          <button
-            key={feature.type}
-            onClick={() => onFeatureClick(feature.type)}
-            className={`flex flex-col items-center p-6 rounded-2xl border transition-all duration-200 ${
-              feature.available
-                ? "bg-card border-border/60 hover:border-primary hover:shadow-sm cursor-pointer"
-                : "bg-card/40 border-border/40"
-            }`}
-          >
-            <span className="text-3xl mb-3">{feature.icon}</span>
-            <span className={`text-sm font-medium ${feature.available ? "text-ink" : "text-muted-foreground"}`}>
-              {feature.label}
-            </span>
-            {!feature.available && (
-              <span className="text-xs text-muted-foreground/70 mt-1.5 italic">Soon</span>
-            )}
-          </button>
-        ))}
+        {FEATURES.map((feature) => {
+          const Icon = FEATURE_ICONS[feature.type];
+          return (
+            <button
+              key={feature.type}
+              onClick={() => onFeatureClick(feature.type)}
+              className={`flex flex-col items-center p-6 rounded-2xl border transition-all duration-200 ${
+                feature.available
+                  ? "bg-card border-border/60 hover:border-primary hover:shadow-sm cursor-pointer"
+                  : "bg-card/40 border-border/40"
+              }`}
+            >
+              {Icon && <Icon className="w-8 h-8 mb-3" />}
+              <span className={`text-sm font-medium ${feature.available ? "text-ink" : "text-muted-foreground"}`}>
+                {feature.label}
+              </span>
+              {!feature.available && (
+                <span className="text-xs text-muted-foreground/70 mt-1.5 italic">Soon</span>
+              )}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1362,7 +1365,7 @@ function ProjectsView() {
         </header>
 
         <div className="bg-card border border-border rounded-xl p-8 text-center">
-          <span className="text-4xl mb-4 block">📁</span>
+          <FileIcon className="w-10 h-10 mx-auto mb-4 text-muted-foreground" />
           <h2 className="font-serif text-xl font-semibold text-ink mb-2">Coming Soon</h2>
           <p className="text-muted-foreground max-w-md mx-auto">
             Project management for parallel development workflows will be available in a future update.
@@ -1420,7 +1423,7 @@ function SubAgentsView({
       )}
 
       {filtered.length === 0 && !search && (
-        <EmptyState icon="🤖" message="No sub-agents found" hint="Sub-agents are commands with a model field in frontmatter" />
+        <EmptyState icon={PersonIcon} message="No sub-agents found" hint="Sub-agents are commands with a model field in frontmatter" />
       )}
 
       {filtered.length === 0 && search && (
@@ -1654,7 +1657,7 @@ function DistillView({
         </div>
       ) : !search ? (
         <EmptyState
-          icon="💡"
+          icon={LightningBoltIcon}
           message="No distill documents yet"
           hint="Use /distill in Claude Code to capture wisdom"
         />
@@ -1938,7 +1941,7 @@ function ReferenceView({
                     : "bg-card hover:bg-card-alt"
                 }`}
               >
-                <span className="text-lg">📖</span>
+                <BookmarkIcon className="w-5 h-5" />
                 <div className="flex-1 min-w-0">
                   <div className="font-medium text-sm">{source.name}</div>
                   <div className="text-xs text-muted-foreground">{source.doc_count} docs</div>
@@ -1960,7 +1963,7 @@ function ReferenceView({
           ))
         ) : (
           <EmptyState
-            icon="📖"
+            icon={BookmarkIcon}
             message="No reference sources"
             hint="Add documentation symlinks to ~/.lovstudio/docs/reference/"
           />
@@ -1978,7 +1981,7 @@ function OutputStylesView() {
   return (
     <ConfigPage>
       <PageHeader title="Output Styles" subtitle="Response formatting styles" />
-      <EmptyState icon="🎨" message="Coming soon" hint="Output styles will be available in a future update" />
+      <EmptyState icon={MixerHorizontalIcon} message="Coming soon" hint="Output styles will be available in a future update" />
     </ConfigPage>
   );
 }
@@ -2614,7 +2617,7 @@ function CommandsView({
       )}
 
       {statusFiltered.length === 0 && !search && (
-        <EmptyState icon="⚡" message="No commands found" hint="Create commands in ~/.claude/commands/" />
+        <EmptyState icon={LightningBoltIcon} message="No commands found" hint="Create commands in ~/.claude/commands/" />
       )}
 
       {statusFiltered.length === 0 && search && (
@@ -3058,18 +3061,20 @@ function CommandDetailView({
 
       {/* Deprecation warning */}
       {isDeprecated && command.deprecated_by && (
-        <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20">
+        <div className="mb-4 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center gap-2">
+          <ExclamationTriangleIcon className="w-4 h-4 text-amber-600 shrink-0" />
           <p className="text-sm text-amber-600">
-            ⚠️ This command is deprecated. Use <span className="font-mono font-medium">{command.deprecated_by}</span> instead.
+            This command is deprecated. Use <span className="font-mono font-medium">{command.deprecated_by}</span> instead.
           </p>
         </div>
       )}
 
       {/* Archive notice */}
       {isArchived && (
-        <div className="mb-4 p-3 rounded-lg bg-card-alt border border-border">
+        <div className="mb-4 p-3 rounded-lg bg-card-alt border border-border flex items-center gap-2">
+          <ArchiveIcon className="w-4 h-4 text-muted-foreground shrink-0" />
           <p className="text-sm text-muted-foreground">
-            📦 This is an archived version. It is not loaded by Claude Code.
+            This is an archived version. It is not loaded by Claude Code.
           </p>
         </div>
       )}
@@ -3354,7 +3359,7 @@ function McpView({
       )}
 
       {filtered.length === 0 && !search && (
-        <EmptyState icon="🔌" message="No MCP servers configured" hint="Add servers to mcpServers in ~/.claude/settings.json" />
+        <EmptyState icon={Component1Icon} message="No MCP servers configured" hint="Add servers to mcpServers in ~/.claude/settings.json" />
       )}
 
       {filtered.length === 0 && search && (
@@ -3407,7 +3412,7 @@ function SkillsView({
       )}
 
       {filtered.length === 0 && !search && (
-        <EmptyState icon="🎯" message="No skills found" hint="Skills are stored as SKILL.md in ~/.claude/skills/" />
+        <EmptyState icon={TargetIcon} message="No skills found" hint="Skills are stored as SKILL.md in ~/.claude/skills/" />
       )}
 
       {filtered.length === 0 && search && (
@@ -3491,7 +3496,7 @@ function HooksView({
       )}
 
       {filtered.length === 0 && !search && (
-        <EmptyState icon="🪝" message="No hooks configured" hint="Add hooks to ~/.claude/settings.json" />
+        <EmptyState icon={Link2Icon} message="No hooks configured" hint="Add hooks to ~/.claude/settings.json" />
       )}
 
       {filtered.length === 0 && search && (
@@ -4471,7 +4476,7 @@ function SettingsView({
       )}
 
       {!hasContent && !search && (
-        <EmptyState icon="⚙️" message="No configuration found" hint="Create ~/.claude/settings.json or CLAUDE.md" />
+        <EmptyState icon={GearIcon} message="No configuration found" hint="Create ~/.claude/settings.json or CLAUDE.md" />
       )}
 
       {(filteredContextFiles.length > 0 || (settingsMatchSearch && settings?.raw)) && (
@@ -4493,8 +4498,9 @@ function SettingsView({
           {/* Configuration Section */}
           {settingsMatchSearch && settings?.raw && (
             <div className="bg-card rounded-xl border border-border overflow-hidden">
-              <div className="px-4 py-2 border-b border-border">
-                <span className="text-sm font-medium text-ink">⚙️ Configuration</span>
+              <div className="px-4 py-2 border-b border-border flex items-center gap-2">
+                <GearIcon className="w-4 h-4" />
+                <span className="text-sm font-medium text-ink">Configuration</span>
               </div>
               <div className="p-3">
                 <ConfigFileItem
@@ -4609,7 +4615,7 @@ function MarketplaceView({
                 : "bg-card border border-border text-muted-foreground hover:text-ink hover:border-primary/50"
             }`}
           >
-            <span>{sf.icon}</span>
+            <sf.icon className="w-4 h-4" />
             <span>{sf.label}</span>
             {sf.count > 0 && (
               <span className={`text-xs px-1.5 py-0.5 rounded ${
@@ -4641,12 +4647,8 @@ function MarketplaceView({
                 <p className="font-medium text-ink truncate">{template.name}</p>
                 {/* Source badge */}
                 {template.source_id && template.source_id !== "community" && (
-                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
-                    template.source_id === "anthropic"
-                      ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                      : "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
-                  }`}>
-                    {template.source_icon}
+                  <span className="text-xs px-1.5 py-0.5 rounded shrink-0 flex items-center gap-1 bg-primary/10 text-primary">
+                    {template.source_id === "anthropic" ? <StarFilledIcon className="w-3 h-3" /> : <HeartFilledIcon className="w-3 h-3" />}
                   </span>
                 )}
               </div>
@@ -4665,7 +4667,7 @@ function MarketplaceView({
         ))}
       </div>
 
-      {sorted.length === 0 && <EmptyState icon="📦" message="No templates found" />}
+      {sorted.length === 0 && <EmptyState icon={CubeIcon} message="No templates found" />}
     </ConfigPage>
   );
 }
@@ -4760,21 +4762,16 @@ function TemplateDetailView({
               <h1 className="text-2xl font-semibold text-ink">{template.name}</h1>
               {/* Source badge */}
               {template.source_id && template.source_name && (
-                <span className={`text-xs px-2 py-1 rounded-lg ${
-                  template.source_id === "anthropic"
-                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
-                    : template.source_id === "lovstudio"
-                    ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
-                    : "bg-card-alt text-muted-foreground"
-                }`}>
-                  {template.source_icon} {template.source_name}
+                <span className="text-xs px-2 py-1 rounded-lg flex items-center gap-1.5 bg-primary/10 text-primary">
+                  {template.source_id === "anthropic" ? <StarFilledIcon className="w-3.5 h-3.5" /> : template.source_id === "lovstudio" ? <HeartFilledIcon className="w-3.5 h-3.5" /> : <GlobeIcon className="w-3.5 h-3.5" />}
+                  {template.source_name}
                 </span>
               )}
             </div>
             {template.description && <p className="text-muted-foreground mt-2">{template.description}</p>}
             <p className="font-mono text-xs text-muted-foreground mt-2">{template.path}</p>
             <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground flex-wrap">
-              <span>{categoryInfo?.icon} {categoryInfo?.label}</span>
+              <span className="flex items-center gap-1.5">{categoryInfo?.icon && <categoryInfo.icon className="w-4 h-4" />} {categoryInfo?.label}</span>
               <span>•</span>
               <span>{template.category}</span>
               {template.author && (
@@ -4853,10 +4850,11 @@ function TemplateDetailView({
 
 function FeatureTodo({ feature }: { feature: FeatureType }) {
   const feat = FEATURES.find(f => f.type === feature);
+  const Icon = FEATURE_ICONS[feature];
 
   return (
     <div className="flex flex-col items-center justify-center min-h-full px-6">
-      <span className="text-6xl mb-4">{feat?.icon || "🚧"}</span>
+      {Icon ? <Icon className="w-16 h-16 mb-4 text-muted-foreground" /> : <span className="text-6xl mb-4">🚧</span>}
       <h1 className="font-serif text-2xl font-semibold text-ink mb-2">
         {feat?.label}
       </h1>
@@ -5161,7 +5159,8 @@ function ProjectList({
               : "text-muted-foreground hover:text-ink"
           }`}
         >
-          📁 Projects
+          <FileIcon className="w-4 h-4 inline mr-1.5" />
+          Projects
         </button>
         <button
           onClick={() => setViewMode("sessions")}
@@ -5171,7 +5170,8 @@ function ProjectList({
               : "text-muted-foreground hover:text-ink"
           }`}
         >
-          💬 Sessions
+          <ChatBubbleIcon className="w-4 h-4 inline mr-1.5" />
+          Sessions
         </button>
         <button
           onClick={() => setViewMode("chats")}
@@ -5181,7 +5181,8 @@ function ProjectList({
               : "text-muted-foreground hover:text-ink"
           }`}
         >
-          🗨️ Chats
+          <ChatBubbleIcon className="w-4 h-4 inline mr-1.5" />
+          Chats
         </button>
       </div>
 
@@ -5492,7 +5493,8 @@ generator: "Lovcode"
                   : "text-muted-foreground hover:text-ink"
               }`}
             >
-              📁 Project ({projectContext.length})
+              <FileIcon className="w-4 h-4 inline mr-1.5" />
+              Project ({projectContext.length})
             </button>
             <button
               onClick={() => setContextTab("global")}
@@ -5502,7 +5504,8 @@ generator: "Lovcode"
                   : "text-muted-foreground hover:text-ink"
               }`}
             >
-              🌐 Global ({globalContext.length})
+              <GlobeIcon className="w-4 h-4 inline mr-1.5" />
+              Global ({globalContext.length})
             </button>
           </div>
 
@@ -5555,8 +5558,9 @@ generator: "Lovcode"
       {!(searchQuery.trim() && searchResults !== null) && (
       <>
       <div className="mb-4 flex items-center justify-between">
-        <p className="text-xs text-muted-foreground uppercase tracking-wide">
-          💬 Sessions ({hideEmptySessions ? `${filteredSessions.length}/${sessions.length}` : sessions.length})
+        <p className="text-xs text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+          <ChatBubbleIcon className="w-3.5 h-3.5" />
+          Sessions ({hideEmptySessions ? `${filteredSessions.length}/${sessions.length}` : sessions.length})
         </p>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">

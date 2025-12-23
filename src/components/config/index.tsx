@@ -41,17 +41,17 @@ export function LoadingState({ message }: { message: string }) {
 }
 
 export function EmptyState({
-  icon,
+  icon: Icon,
   message,
   hint,
 }: {
-  icon: string;
+  icon: ComponentType<{ className?: string }>;
   message: string;
   hint?: string;
 }) {
   return (
     <div className="text-center py-12">
-      <span className="text-4xl mb-4 block">{icon}</span>
+      <Icon className="w-10 h-10 mx-auto mb-4 text-muted-foreground" />
       <p className="text-muted-foreground">{message}</p>
       {hint && <p className="text-sm text-muted-foreground mt-1">{hint}</p>}
     </div>
