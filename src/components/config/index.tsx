@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, ReactNode, ComponentType } from "react";
 import Markdown from "react-markdown";
-import { ExternalLink, Download, MessageCircle, MoreHorizontal, ChevronDown, Copy, type LucideProps } from "lucide-react";
+// Radix icons
+import { ExternalLinkIcon, DownloadIcon, ChatBubbleIcon, DotsHorizontalIcon, ChevronDownIcon, CopyIcon } from "@radix-ui/react-icons";
+import type { IconProps } from "@radix-ui/react-icons/dist/types";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -103,7 +105,7 @@ export function PageHeader({
 export interface DetailHeaderMenuItem {
   label: string;
   onClick: () => void;
-  icon?: ComponentType<LucideProps>;
+  icon?: ComponentType<IconProps>;
   variant?: "default" | "danger";
   disabled?: boolean;
 }
@@ -228,25 +230,25 @@ export function DetailHeader({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="sm">
-                <MoreHorizontal className="w-4 h-4" />
+                <DotsHorizontalIcon className="w-4 h-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               {path && onOpenPath && (
                 <DropdownMenuItem onClick={() => onOpenPath(path)}>
-                  <ExternalLink className="w-4 h-4 mr-2" />
+                  <ExternalLinkIcon className="w-4 h-4 mr-2" />
                   Open in Editor
                 </DropdownMenuItem>
               )}
               {path && (
                 <DropdownMenuItem onClick={() => navigator.clipboard.writeText(path)}>
-                  <Copy className="w-4 h-4 mr-2" />
+                  <CopyIcon className="w-4 h-4 mr-2" />
                   Copy Path
                 </DropdownMenuItem>
               )}
               {onNavigateSession && (
                 <DropdownMenuItem onClick={onNavigateSession}>
-                  <MessageCircle className="w-4 h-4 mr-2" />
+                  <ChatBubbleIcon className="w-4 h-4 mr-2" />
                   Go to Session
                 </DropdownMenuItem>
               )}
@@ -385,7 +387,7 @@ export function ContentCard({
             className="pointer-events-auto p-3 bg-background border border-border rounded-full shadow-lg hover:bg-card-alt transition-colors"
             title="Go to top"
           >
-            <ChevronDown className="w-5 h-5 rotate-180" />
+            <ChevronDownIcon className="w-5 h-5 rotate-180" />
           </button>
         </div>
       )}
@@ -506,7 +508,7 @@ export function MarketplaceSection({
                   <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{item.description}</p>
                 )}
               </div>
-              <Download className="w-4 h-4 text-primary shrink-0" />
+              <DownloadIcon className="w-4 h-4 text-primary shrink-0" />
             </div>
           </button>
         ))}

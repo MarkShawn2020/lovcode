@@ -1,5 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Check, Trash2 } from "lucide-react";
+// Lucide icons (no Radix equivalent)
+import { Trash2 } from "lucide-react";
+// Radix icons
+import { Cross2Icon, CheckIcon } from "@radix-ui/react-icons";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow, currentMonitor, LogicalSize, LogicalPosition } from "@tauri-apps/api/window";
@@ -711,13 +714,14 @@ export function FloatWindow() {
                 onChange={setShowOnlyPending}
               />
               <button
+                onMouseDown={(e) => e.stopPropagation()}
                 onClick={(e) => {
                   e.stopPropagation();
                   getCurrentWindow().hide();
                 }}
                 className="p-1 hover:bg-white/20 rounded transition-colors"
               >
-                <X className="w-4 h-4" />
+                <Cross2Icon className="w-4 h-4" />
               </button>
             </motion.div>
           ) : (
@@ -824,11 +828,11 @@ export function FloatWindow() {
                                   isHovered ? "opacity-100 bg-white/10" : "opacity-0"
                                 }`}
                               >
-                                <X className="w-3.5 h-3.5" />
+                                <Cross2Icon className="w-3.5 h-3.5" />
                               </motion.button>
                             )}
                             {isCompleted && (
-                              <Check className="w-4 h-4 text-green-400/70" />
+                              <CheckIcon className="w-4 h-4 text-primary-foreground/70" />
                             )}
                           </div>
                         </div>

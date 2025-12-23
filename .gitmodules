@@ -1,3 +1,6 @@
 [submodule "third-parties/claude-code-templates"]
 	path = third-parties/claude-code-templates
 	url = git@github.com:MarkShawn2020/claude-code-templates.git
+[submodule "third-parties/claude-plugins-official"]
+	path = third-parties/claude-plugins-official
+	url = git@github.com:anthropics/claude-plugins-official.git

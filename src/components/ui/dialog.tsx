@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from "react";
-import { X } from "lucide-react";
+import { Cross2Icon } from "@radix-ui/react-icons";
 
 interface DialogContextValue {
   open: boolean;
@@ -78,7 +78,7 @@ export function DialogContent({ children, className = "" }: DialogContentProps) 
             transition-opacity hover:opacity-100 focus:outline-none focus:ring-2
             focus:ring-ring focus:ring-offset-2"
         >
-          <X className="h-4 w-4" />
+          <Cross2Icon className="h-4 w-4" />
           <span className="sr-only">Close</span>
         </button>
       </div>

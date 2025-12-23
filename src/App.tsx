@@ -4,8 +4,19 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";
 import { version } from "../package.json";
-import { PanelLeft, User, ExternalLink, FolderOpen, ChevronDown, HelpCircle, Copy, Download, Check, MoreHorizontal, RefreshCw, ChevronLeft, ChevronRight, Store, Archive, RotateCcw, List, FolderTree, Folder, Terminal, FolderInput, FlaskConical } from "lucide-react";
-import { EyeOpenIcon, EyeClosedIcon, Pencil1Icon, TrashIcon, CheckIcon, Cross1Icon, Cross2Icon, RocketIcon, MinusCircledIcon, PlusCircledIcon } from "@radix-ui/react-icons";
+// Lucide icons (no Radix equivalent)
+import { PanelLeft } from "lucide-react";
+// Radix icons
+import {
+  EyeOpenIcon, EyeClosedIcon, Pencil1Icon, TrashIcon, CheckIcon, Cross1Icon, Cross2Icon,
+  RocketIcon, MinusCircledIcon, PlusCircledIcon, PersonIcon, ExternalLinkIcon, ChevronDownIcon,
+  QuestionMarkCircledIcon, CopyIcon, DownloadIcon, DotsHorizontalIcon, ReloadIcon,
+  ChevronLeftIcon, ChevronRightIcon, ArchiveIcon, ResetIcon,
+  // Sidebar icons
+  HomeIcon, FileIcon, ReaderIcon, BookmarkIcon, LightningBoltIcon, GearIcon, CodeIcon,
+  Component1Icon, MagicWandIcon, Link2Icon, MixerHorizontalIcon, CubeIcon, ChatBubbleIcon,
+  GlobeIcon, StarFilledIcon, TargetIcon, LayersIcon
+} from "@radix-ui/react-icons";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import Markdown from "react-markdown";
@@ -118,6 +129,26 @@ interface FeatureConfig {
   available: boolean;
   group: "history" | "config" | "marketplace" | "knowledge";
 }
+
+// Feature type to Radix Icon mapping
+const FEATURE_ICONS: Record<FeatureType | "home" | "knowledge" | "features" | "marketplace-menu" | "chat", React.ComponentType<{ className?: string }>> = {
+  "home": HomeIcon,
+  "projects": FileIcon,
+  "knowledge": ReaderIcon,
+  "kb-reference": BookmarkIcon,
+  "kb-distill": LightningBoltIcon,
+  "settings": GearIcon,
+  "commands": CodeIcon,
+  "mcp": Component1Icon,
+  "skills": TargetIcon,
+  "hooks": Link2Icon,
+  "sub-agents": PersonIcon,
+  "output-styles": MixerHorizontalIcon,
+  "marketplace": CubeIcon,
+  "marketplace-menu": CubeIcon,
+  "features": LayersIcon,
+  "chat": ChatBubbleIcon,
+};
 
 // Group 1: History & Projects
 // Group 2: Configuration
@@ -267,6 +298,19 @@ interface TemplateComponent {
   description: string | null;
   downloads: number | null;
   content: string | null;
+  // Source attribution
+  source_id?: string | null;
+  source_name?: string | null;
+  source_icon?: string | null;
+  plugin_name?: string | null;
+  author?: string | null;
+}
+
+interface SourceInfo {
+  id: string;
+  name: string;
+  icon: string;
+  count: number;
 }
 
 interface TemplatesCatalog {
@@ -277,7 +321,18 @@ interface TemplatesCatalog {
   hooks: TemplateComponent[];
   agents: TemplateComponent[];
   "output-styles": TemplateComponent[];
+  sources?: SourceInfo[];
 }
+
+// Source filter options
+const SOURCE_FILTERS = [
+  { id: "all", label: "All", icon: "🌐" },
+  { id: "anthropic", label: "Official", icon: "🔷" },
+  { id: "lovstudio", label: "Personal", icon: "💜" },
+  { id: "community", label: "Community", icon: "🌍" },
+] as const;
+
+type SourceFilterId = typeof SOURCE_FILTERS[number]["id"];
 
 type TemplateCategory = "settings" | "commands" | "mcps" | "skills" | "hooks" | "agents" | "output-styles";
 
@@ -582,7 +637,7 @@ function App() {
                   : "text-ink hover:bg-card-alt"
               }`}
             >
-              <span className="text-lg">🏠</span>
+              <HomeIcon className="w-5 h-5" />
               <span className="text-sm">Home</span>
             </button>
           </div>
@@ -606,9 +661,9 @@ function App() {
                     ? "text-primary"
                     : "text-ink hover:bg-card-alt"
                 }`}>
-                  <span className="text-lg">📚</span>
+                  <ReaderIcon className="w-5 h-5" />
                   <span className="text-sm flex-1">Knowledge</span>
-                  <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+                  <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
                 </div>
               </CollapsibleTrigger>
               <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
@@ -638,7 +693,7 @@ function App() {
                   : "text-ink hover:bg-card-alt"
               }`}
             >
-              <span className="text-lg">⚙️</span>
+              <GearIcon className="w-5 h-5" />
               <span className="text-sm">Configuration</span>
             </button>
             <Collapsible defaultOpen={FEATURES.some(f => f.group === "config" && f.type !== "settings" && currentFeature === f.type)}>
@@ -648,9 +703,9 @@ function App() {
                     ? "text-primary"
                     : "text-ink hover:bg-card-alt"
                 }`}>
-                  <span className="text-lg">🧩</span>
+                  <LayersIcon className="w-5 h-5" />
                   <span className="text-sm flex-1">Features</span>
-                  <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+                  <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
                 </div>
               </CollapsibleTrigger>
               <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
@@ -673,7 +728,7 @@ function App() {
                   : "text-ink hover:bg-card-alt"
               }`}
             >
-              <span className="text-lg">💬</span>
+              <ChatBubbleIcon className="w-5 h-5" />
               <span className="text-sm">Chats</span>
             </button>
           </div>
@@ -689,9 +744,9 @@ function App() {
                     ? "text-primary"
                     : "text-ink hover:bg-card-alt"
                 }`}>
-                  <span className="text-lg">🛒</span>
+                  <CubeIcon className="w-5 h-5" />
                   <span className="text-sm flex-1">Marketplace</span>
-                  <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+                  <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
                 </div>
               </CollapsibleTrigger>
               <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
@@ -747,7 +802,7 @@ function App() {
                 className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
                 title="Go back"
               >
-                <ChevronLeft className="w-5 h-5" />
+                <ChevronLeftIcon className="w-5 h-5" />
               </button>
               <button
                 onClick={goForward}
@@ -755,7 +810,7 @@ function App() {
                 className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
                 title="Go forward"
               >
-                <ChevronRight className="w-5 h-5" />
+                <ChevronRightIcon className="w-5 h-5" />
               </button>
             </div>
           </div>
@@ -769,7 +824,7 @@ function App() {
                     <AvatarImage src={profile.avatarUrl} alt={profile.nickname || "User"} />
                   ) : null}
                   <AvatarFallback className="bg-primary/10 text-primary text-sm">
-                    {profile.nickname ? profile.nickname.charAt(0).toUpperCase() : <User className="w-4 h-4" />}
+                    {profile.nickname ? profile.nickname.charAt(0).toUpperCase() : <PersonIcon className="w-4 h-4" />}
                   </AvatarFallback>
                 </Avatar>
               </PopoverTrigger>
@@ -1130,7 +1185,7 @@ function ProfileDialog({
                   <AvatarImage src={avatarUrl} alt={nickname || "User"} />
                 ) : null}
                 <AvatarFallback className="bg-primary/10 text-primary text-2xl">
-                  {nickname ? nickname.charAt(0).toUpperCase() : <User className="w-8 h-8" />}
+                  {nickname ? nickname.charAt(0).toUpperCase() : <PersonIcon className="w-8 h-8" />}
                 </AvatarFallback>
               </Avatar>
               <div className="absolute inset-0 flex items-center justify-center bg-black/50 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1184,6 +1239,7 @@ function FeatureButton({
   statusIndicator?: "on" | "off";
   compact?: boolean;
 }) {
+  const Icon = FEATURE_ICONS[feature.type];
   return (
     <button
       onClick={onClick}
@@ -1195,13 +1251,13 @@ function FeatureButton({
             : "text-muted-foreground/60 hover:bg-card-alt"
       }`}
     >
-      <span className="text-lg">{feature.icon}</span>
+      {Icon && <Icon className="w-5 h-5" />}
       <span className="text-sm flex-1">
         {feature.label}
         {!feature.available && <span className="ml-1.5 text-xs opacity-60">(TODO)</span>}
       </span>
       {statusIndicator !== undefined && (
-        <span className={`w-1.5 h-1.5 rounded-full ${statusIndicator === "on" ? "bg-green-500" : "bg-muted-foreground/40"}`} />
+        <span className={`w-1.5 h-1.5 rounded-full ${statusIndicator === "on" ? "bg-primary" : "bg-muted-foreground/40"}`} />
       )}
     </button>
   );
@@ -1455,12 +1511,12 @@ function DistillMenu({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button className="p-2 rounded-lg text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors">
-            <MoreHorizontal className="w-5 h-5" />
+            <DotsHorizontalIcon className="w-5 h-5" />
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-48">
           <DropdownMenuItem onClick={() => setHelpOpen(true)}>
-            <HelpCircle className="w-4 h-4 mr-2" />
+            <QuestionMarkCircledIcon className="w-4 h-4 mr-2" />
             Help
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => invoke("open_in_editor", { path: `${homeDir}/.lovstudio/docs/distill` })}>
@@ -1469,7 +1525,7 @@ function DistillMenu({
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onRefresh} disabled={watchEnabled}>
-            <RefreshCw className="w-4 h-4 mr-2" />
+            <ReloadIcon className="w-4 h-4 mr-2" />
             Refresh
           </DropdownMenuItem>
           <DropdownMenuCheckboxItem checked={watchEnabled} onCheckedChange={onWatchToggle}>
@@ -1512,14 +1568,14 @@ function DistillMenu({
                       className="p-1.5 rounded text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors"
                       title="Copy to clipboard"
                     >
-                      {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                      {copied ? <CheckIcon className="w-4 h-4 text-primary" /> : <CopyIcon className="w-4 h-4" />}
                     </button>
                     <button
                       onClick={handleDownload}
                       className="p-1.5 rounded text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors"
                       title="Download file"
                     >
-                      <Download className="w-4 h-4" />
+                      <DownloadIcon className="w-4 h-4" />
                     </button>
                   </div>
                 </div>
@@ -1747,7 +1803,7 @@ function ReferenceDocTree({
               onClick={() => toggleGroup(group.name!)}
               className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-muted-foreground hover:text-ink transition-colors"
             >
-              <ChevronDown className={`w-3 h-3 transition-transform ${collapsedGroups.has(group.name) ? "-rotate-90" : ""}`} />
+              <ChevronDownIcon className={`w-3 h-3 transition-transform ${collapsedGroups.has(group.name) ? "-rotate-90" : ""}`} />
               <span className="font-medium">{group.name}</span>
               <span className="text-muted-foreground/60">({group.docs.length})</span>
             </button>
@@ -1887,7 +1943,7 @@ function ReferenceView({
                   <div className="font-medium text-sm">{source.name}</div>
                   <div className="text-xs text-muted-foreground">{source.doc_count} docs</div>
                 </div>
-                <ChevronDown className={`w-4 h-4 transition-transform ${expandedSource === source.name ? "rotate-180" : ""}`} />
+                <ChevronDownIcon className={`w-4 h-4 transition-transform ${expandedSource === source.name ? "rotate-180" : ""}`} />
               </button>
               {expandedSource === source.name && (
                 <div className="ml-4 mt-1 space-y-1">
@@ -2029,20 +2085,20 @@ function DraggableCommandItem({
             className="w-4 h-4 flex items-center justify-center cursor-pointer hover:text-primary"
             onClick={(e) => e.stopPropagation()}
           >
-            <MoreHorizontal className="w-4 h-4" />
+            <DotsHorizontalIcon className="w-4 h-4" />
           </span>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
           <DropdownMenuItem onClick={onClick}>
-            <HelpCircle className="w-4 h-4 mr-2" />
+            <QuestionMarkCircledIcon className="w-4 h-4 mr-2" />
             View Details
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onOpenInEditor}>
-            <ExternalLink className="w-4 h-4 mr-2" />
+            <ExternalLinkIcon className="w-4 h-4 mr-2" />
             Open in Editor
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => navigator.clipboard.writeText(cmd.path)}>
-            <Copy className="w-4 h-4 mr-2" />
+            <CopyIcon className="w-4 h-4 mr-2" />
             Copy Path
           </DropdownMenuItem>
           {!isInactive && (
@@ -2054,12 +2110,12 @@ function DraggableCommandItem({
           <DropdownMenuSeparator />
           {isInactive ? (
             <DropdownMenuItem onClick={onRestore}>
-              <RotateCcw className="w-4 h-4 mr-2" />
+              <ResetIcon className="w-4 h-4 mr-2" />
               Restore
             </DropdownMenuItem>
           ) : (
             <DropdownMenuItem onClick={onDeprecate} className="text-amber-600">
-              <Archive className="w-4 h-4 mr-2" />
+              <ArchiveIcon className="w-4 h-4 mr-2" />
               Deprecate
             </DropdownMenuItem>
           )}
@@ -2490,7 +2546,7 @@ function CommandsView({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="sm" className="shrink-0">
-              <MoreHorizontal className="w-4 h-4" />
+              <DotsHorizontalIcon className="w-4 h-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
@@ -2506,12 +2562,12 @@ function CommandsView({
             <DropdownMenuSeparator />
             <DropdownMenuLabel className="text-xs">Sort</DropdownMenuLabel>
             <DropdownMenuItem onClick={() => toggleSort("usage")}>
-              {sortKey === "usage" && <Check className="w-4 h-4 mr-2" />}
+              {sortKey === "usage" && <CheckIcon className="w-4 h-4 mr-2" />}
               {sortKey !== "usage" && <span className="w-4 mr-2" />}
               Usage {sortKey === "usage" && (sortDir === "desc" ? "↓" : "↑")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => toggleSort("name")}>
-              {sortKey === "name" && <Check className="w-4 h-4 mr-2" />}
+              {sortKey === "name" && <CheckIcon className="w-4 h-4 mr-2" />}
               {sortKey !== "name" && <span className="w-4 mr-2" />}
               Name {sortKey === "name" && (sortDir === "desc" ? "↓" : "↑")}
             </DropdownMenuItem>
@@ -2800,34 +2856,34 @@ function CommandItemCard({
       <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 p-0" onClick={(e) => e.stopPropagation()}>
-              <MoreHorizontal className="w-4 h-4" />
+              <DotsHorizontalIcon className="w-4 h-4" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuItem onClick={onClick}>
-              <HelpCircle className="w-4 h-4 mr-2" />
+              <QuestionMarkCircledIcon className="w-4 h-4 mr-2" />
               View Details
             </DropdownMenuItem>
             {onOpenInEditor && (
               <DropdownMenuItem onClick={onOpenInEditor}>
-                <ExternalLink className="w-4 h-4 mr-2" />
+                <ExternalLinkIcon className="w-4 h-4 mr-2" />
                 Open in Editor
               </DropdownMenuItem>
             )}
             <DropdownMenuItem onClick={handleCopyPath}>
-              {copied ? <Check className="w-4 h-4 mr-2 text-green-500" /> : <Copy className="w-4 h-4 mr-2" />}
+              {copied ? <CheckIcon className="w-4 h-4 mr-2 text-primary" /> : <CopyIcon className="w-4 h-4 mr-2" />}
               {copied ? "Copied!" : "Copy Path"}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             {isInactive && onRestore && (
               <DropdownMenuItem onClick={onRestore}>
-                <RotateCcw className="w-4 h-4 mr-2" />
+                <ResetIcon className="w-4 h-4 mr-2" />
                 Restore
               </DropdownMenuItem>
             )}
             {!isInactive && onDeprecate && (
               <DropdownMenuItem onClick={onDeprecate} className="text-amber-600">
-                <Archive className="w-4 h-4 mr-2" />
+                <ArchiveIcon className="w-4 h-4 mr-2" />
                 Deprecate
               </DropdownMenuItem>
             )}
@@ -2992,8 +3048,8 @@ function CommandDetailView({
         }
         menuItems={
           isInactive
-            ? [{ label: "Restore", onClick: handleRestore, icon: RotateCcw, disabled: loading }]
-            : [{ label: "Deprecate", onClick: () => setDeprecateDialogOpen(true), icon: Archive, variant: "danger" as const }]
+            ? [{ label: "Restore", onClick: handleRestore, icon: ResetIcon, disabled: loading }]
+            : [{ label: "Deprecate", onClick: () => setDeprecateDialogOpen(true), icon: ArchiveIcon, variant: "danger" as const }]
         }
         hasChangelog={!!command.changelog}
         onChangelogClick={scrollToChangelog}
@@ -3248,7 +3304,7 @@ function McpView({
                         className="text-muted-foreground hover:text-primary transition-colors"
                         title="Open in npm"
                       >
-                        <ExternalLink className="w-3.5 h-3.5" />
+                        <ExternalLinkIcon className="w-3.5 h-3.5" />
                       </button>
                     )}
                   </p>
@@ -4477,6 +4533,7 @@ function MarketplaceView({
   const [error, setError] = useState<string | null>(null);
   const activeCategory = initialCategory || "commands";
   const [search, setSearch] = useState("");
+  const [sourceFilter, setSourceFilter] = useState<SourceFilterId>("all");
 
   useEffect(() => {
     invoke<TemplatesCatalog>("get_templates_catalog")
@@ -4500,14 +4557,38 @@ function MarketplaceView({
   if (!catalog) return null;
 
   const components = catalog[activeCategory] || [];
-  const filtered = components.filter((c) =>
+
+  // Apply source filter
+  const sourceFiltered = sourceFilter === "all"
+    ? components
+    : components.filter((c) => c.source_id === sourceFilter);
+
+  // Apply search filter
+  const filtered = sourceFiltered.filter((c) =>
     c.name.toLowerCase().includes(search.toLowerCase()) ||
     c.description?.toLowerCase().includes(search.toLowerCase()) ||
     c.category.toLowerCase().includes(search.toLowerCase())
   );
-  const sorted = [...filtered].sort((a, b) => (b.downloads || 0) - (a.downloads || 0));
+
+  // Sort: official sources first, then by downloads
+  const sorted = [...filtered].sort((a, b) => {
+    // Priority: anthropic > lovstudio > community
+    const priorityMap: Record<string, number> = { anthropic: 1, lovstudio: 2, community: 3 };
+    const aPriority = priorityMap[a.source_id || "community"] || 3;
+    const bPriority = priorityMap[b.source_id || "community"] || 3;
+    if (aPriority !== bPriority) return aPriority - bPriority;
+    return (b.downloads || 0) - (a.downloads || 0);
+  });
 
   const categoryInfo = TEMPLATE_CATEGORIES.find(c => c.key === activeCategory);
+
+  // Count components per source for this category
+  const sourceCounts = SOURCE_FILTERS.map((sf) => ({
+    ...sf,
+    count: sf.id === "all"
+      ? components.length
+      : components.filter((c) => c.source_id === sf.id).length,
+  }));
 
   return (
     <ConfigPage>
@@ -4515,6 +4596,31 @@ function MarketplaceView({
         title={categoryInfo?.label || "Marketplace"}
         subtitle={`Browse and install ${categoryInfo?.label.toLowerCase()} templates`}
       />
+
+      {/* Source filter tabs */}
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {sourceCounts.map((sf) => (
+          <button
+            key={sf.id}
+            onClick={() => setSourceFilter(sf.id as SourceFilterId)}
+            className={`px-3 py-1.5 rounded-lg text-sm transition-colors flex items-center gap-1.5 ${
+              sourceFilter === sf.id
+                ? "bg-primary text-primary-foreground"
+                : "bg-card border border-border text-muted-foreground hover:text-ink hover:border-primary/50"
+            }`}
+          >
+            <span>{sf.icon}</span>
+            <span>{sf.label}</span>
+            {sf.count > 0 && (
+              <span className={`text-xs px-1.5 py-0.5 rounded ${
+                sourceFilter === sf.id ? "bg-primary-foreground/20" : "bg-card-alt"
+              }`}>
+                {sf.count}
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
 
       <SearchInput
         placeholder={`Search ${categoryInfo?.label.toLowerCase()}...`}
@@ -4526,18 +4632,35 @@ function MarketplaceView({
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {sorted.map((template) => (
           <button
-            key={template.path}
+            key={`${template.source_id}-${template.path}`}
             onClick={() => onSelectTemplate(template, activeCategory)}
             className="text-left bg-card rounded-xl p-4 border border-border hover:border-primary transition-colors"
           >
             <div className="flex items-start justify-between gap-2 mb-2">
-              <p className="font-medium text-ink truncate">{template.name}</p>
+              <div className="flex items-center gap-2 min-w-0">
+                <p className="font-medium text-ink truncate">{template.name}</p>
+                {/* Source badge */}
+                {template.source_id && template.source_id !== "community" && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded shrink-0 ${
+                    template.source_id === "anthropic"
+                      ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                      : "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
+                  }`}>
+                    {template.source_icon}
+                  </span>
+                )}
+              </div>
               {template.downloads != null && (
                 <span className="text-xs text-muted-foreground shrink-0">↓{template.downloads}</span>
               )}
             </div>
             {template.description && <p className="text-sm text-muted-foreground line-clamp-2">{template.description}</p>}
-            <p className="text-xs text-muted-foreground/60 mt-2">{template.category}</p>
+            <div className="flex items-center justify-between mt-2">
+              <p className="text-xs text-muted-foreground/60">{template.category}</p>
+              {template.plugin_name && template.plugin_name !== template.category && (
+                <p className="text-xs text-muted-foreground/60">from {template.plugin_name}</p>
+              )}
+            </div>
           </button>
         ))}
       </div>
@@ -4633,13 +4756,33 @@ function TemplateDetailView({
         </button>
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-semibold text-ink">{template.name}</h1>
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-semibold text-ink">{template.name}</h1>
+              {/* Source badge */}
+              {template.source_id && template.source_name && (
+                <span className={`text-xs px-2 py-1 rounded-lg ${
+                  template.source_id === "anthropic"
+                    ? "bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400"
+                    : template.source_id === "lovstudio"
+                    ? "bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400"
+                    : "bg-card-alt text-muted-foreground"
+                }`}>
+                  {template.source_icon} {template.source_name}
+                </span>
+              )}
+            </div>
             {template.description && <p className="text-muted-foreground mt-2">{template.description}</p>}
             <p className="font-mono text-xs text-muted-foreground mt-2">{template.path}</p>
-            <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground">
+            <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground flex-wrap">
               <span>{categoryInfo?.icon} {categoryInfo?.label}</span>
               <span>•</span>
               <span>{template.category}</span>
+              {template.author && (
+                <>
+                  <span>•</span>
+                  <span>by {template.author}</span>
+                </>
+              )}
               {template.downloads != null && (
                 <>
                   <span>•</span>
@@ -5095,7 +5238,7 @@ function ProjectList({
               className="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-card-alt text-muted-foreground hover:text-ink border border-border transition-colors disabled:opacity-50"
               title="Rebuild search index"
             >
-              <RefreshCw className={`w-4 h-4 ${indexBuilding ? "animate-spin" : ""}`} />
+              <ReloadIcon className={`w-4 h-4 ${indexBuilding ? "animate-spin" : ""}`} />
               {indexBuilding ? "Building..." : "Rebuild"}
             </button>
           </div>
@@ -5825,7 +5968,7 @@ function MessageView({
                 Reveal in Finder
               </ContextMenuItem>
               <ContextMenuItem onClick={() => invoke("open_session_in_editor", { projectId, sessionId })}>
-                <ExternalLink size={14} />
+                <ExternalLinkIcon width={14} />
                 Open in Editor
               </ContextMenuItem>
               <ContextMenuSeparator />
@@ -5843,7 +5986,7 @@ function MessageView({
               </ContextMenuCheckboxItem>
               <ContextMenuSeparator />
               <ContextMenuItem onClick={() => setExportDialogOpen(true)}>
-                <Download size={14} />
+                <DownloadIcon width={14} />
                 Export
               </ContextMenuItem>
             </ContextMenuContent>
@@ -5851,7 +5994,7 @@ function MessageView({
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="text-muted-foreground-foreground p-1 rounded hover:bg-card-alt shrink-0">
-                <MoreHorizontal size={18} />
+                <DotsHorizontalIcon width={18} />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
@@ -5860,7 +6003,7 @@ function MessageView({
                 Reveal in Finder
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => invoke("open_session_in_editor", { projectId, sessionId })}>
-                <ExternalLink size={14} />
+                <ExternalLinkIcon width={14} />
                 Open in Editor
               </DropdownMenuItem>
               <DropdownMenuSeparator />
@@ -5878,7 +6021,7 @@ function MessageView({
               </DropdownMenuCheckboxItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setExportDialogOpen(true)}>
-                <Download size={14} />
+                <DownloadIcon width={14} />
                 Export
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -5954,7 +6097,7 @@ function CollapsibleCard({
             {headerRight}
             <span className="group-data-[state=open]:hidden">Expand</span>
             <span className="group-data-[state=closed]:hidden">Collapse</span>
-            <ChevronDown className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+            <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
           </div>
         </CollapsibleTrigger>
         <CollapsibleBody className={bodyClassName}>{children}</CollapsibleBody>

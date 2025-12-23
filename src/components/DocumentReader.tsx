@@ -57,7 +57,10 @@ const warmAcademicTheme: { [key: string]: CSSProperties } = {
   important: { color: "#CC785C", fontWeight: "bold" },
   variable: { color: "#CC785C" },
 };
-import { ChevronLeft, ChevronDown, PanelLeftClose, PanelLeft, PanelRightClose, PanelRight, Copy, Check } from "lucide-react";
+// Lucide icons (no Radix equivalent)
+import { PanelLeftClose, PanelLeft, PanelRightClose, PanelRight } from "lucide-react";
+// Radix icons
+import { ChevronLeftIcon, ChevronDownIcon, CopyIcon, CheckIcon } from "@radix-ui/react-icons";
 import { startCase } from "lodash-es";
 
 function slugify(text: string): string {
@@ -350,7 +353,7 @@ function DocumentListSidebar({
           className="shrink-0 p-1.5 rounded-lg hover:bg-card-alt transition-colors"
           title="Back (Esc)"
         >
-          <ChevronLeft className="w-4 h-4" />
+          <ChevronLeftIcon className="w-4 h-4" />
         </button>
         <div className="min-w-0 flex-1">
           <h3 className="font-serif font-semibold text-sm truncate">{startCase(sourceName)}</h3>
@@ -374,7 +377,7 @@ function DocumentListSidebar({
                 onClick={() => toggleGroup(group.name!)}
                 className="w-full flex items-center gap-2 px-4 py-1.5 text-xs text-muted-foreground hover:text-ink transition-colors"
               >
-                <ChevronDown
+                <ChevronDownIcon
                   className={`w-3 h-3 transition-transform ${
                     collapsedGroups.has(group.name) ? "-rotate-90" : ""
                   }`}
@@ -512,12 +515,12 @@ function CodeBlock({
         >
           {copied ? (
             <>
-              <Check className="w-3.5 h-3.5 text-primary" />
+              <CheckIcon className="w-3.5 h-3.5 text-primary" />
               <span className="text-primary">Copied!</span>
             </>
           ) : (
             <>
-              <Copy className="w-3.5 h-3.5" />
+              <CopyIcon className="w-3.5 h-3.5" />
               <span>Copy</span>
             </>
           )}
@@ -581,7 +584,7 @@ function BookCover({
       {/* Decorative bottom element */}
       <div className="mt-12 w-16 h-16 rounded-full border-2 border-primary/20 flex items-center justify-center">
         <div className="w-8 h-8 rounded-full border border-primary/40 flex items-center justify-center">
-          <ChevronDown className="w-4 h-4 text-primary/60 animate-bounce" />
+          <ChevronDownIcon className="w-4 h-4 text-primary/60 animate-bounce" />
         </div>
       </div>
 
@@ -995,7 +998,7 @@ export function DocumentReader({
                   }`}
                 >
                   <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <ChevronLeft className="w-3 h-3" />
+                    <ChevronLeftIcon className="w-3 h-3" />
                     Previous
                   </span>
                   <span className="text-sm font-medium text-ink group-hover:text-primary transition-colors line-clamp-1">
@@ -1015,7 +1018,7 @@ export function DocumentReader({
                 >
                   <span className="text-xs text-muted-foreground flex items-center gap-1">
                     Next
-                    <ChevronLeft className="w-3 h-3 rotate-180" />
+                    <ChevronLeftIcon className="w-3 h-3 rotate-180" />
                   </span>
                   <span className="text-sm font-medium text-ink group-hover:text-primary transition-colors line-clamp-1">
                     {documents[currentIndex + 1]?.name}

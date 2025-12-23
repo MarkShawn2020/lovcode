@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import Markdown from "react-markdown";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, useCollapsible } from "./ui/collapsible";
-import { ExternalLink, Copy, Check } from "lucide-react";
+// Radix icons
+import { ExternalLinkIcon, CopyIcon, CheckIcon } from "@radix-ui/react-icons";
 import { useState, ReactNode } from "react";
 import { useAppConfig } from "../App";
 
@@ -46,14 +47,14 @@ export function CollapsibleItem({ name, path, content, variant = "card-alt", ren
           className="text-muted-foreground hover:text-primary shrink-0"
           title="Copy content"
         >
-          {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+          {copied ? <CheckIcon className="w-3.5 h-3.5" /> : <CopyIcon className="w-3.5 h-3.5" />}
         </button>
         <button
           onClick={(e) => { e.stopPropagation(); invoke("open_in_editor", { path }); }}
           className="text-muted-foreground hover:text-primary shrink-0"
           title={formatPath(path)}
         >
-          <ExternalLink className="w-3.5 h-3.5" />
+          <ExternalLinkIcon className="w-3.5 h-3.5" />
         </button>
       </CollapsibleTrigger>
       <CollapsibleContent className="px-3 pb-2 border-t border-border/50 pt-2">
