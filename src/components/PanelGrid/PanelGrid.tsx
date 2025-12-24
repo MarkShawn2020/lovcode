@@ -52,6 +52,7 @@ export function PanelGrid({
   direction = "horizontal",
   autoSaveId,
 }: PanelGridProps) {
+  console.log('[DEBUG][PanelGrid] render, autoSaveId:', autoSaveId, 'panels:', panels.map(p => p.ptyId));
   const handleTitleChange = useCallback(
     (panelId: string) => (title: string) => {
       onPanelTitleChange(panelId, title);

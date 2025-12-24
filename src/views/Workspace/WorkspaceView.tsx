@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -123,6 +123,21 @@ export function WorkspaceView() {
   // Remove project handler
   const handleRemoveProject = useCallback(
     async (id: string) => {
+      // Kill all PTY sessions for this project
+      const projectToRemove = workspace?.projects.find((p) => p.id === id);
+      if (projectToRemove) {
+        // Kill shared panels
+        for (const panel of projectToRemove.shared_panels) {
+          invoke("pty_kill", { id: panel.pty_id }).catch(console.error);
+        }
+        // Kill feature panels
+        for (const feature of projectToRemove.features) {
+          for (const panel of feature.panels) {
+            invoke("pty_kill", { id: panel.pty_id }).catch(console.error);
+          }
+        }
+      }
+
       try {
         await invoke("workspace_remove_project", { id });
         if (workspace) {
@@ -205,6 +220,14 @@ export function WorkspaceView() {
   const handleRemoveFeature = useCallback(
     async (featureId: string) => {
       if (!activeProject) return;
+
+      // Kill all PTY sessions for this feature's panels
+      const featureToRemove = activeProject.features.find((f) => f.id === featureId);
+      if (featureToRemove) {
+        for (const panel of featureToRemove.panels) {
+          invoke("pty_kill", { id: panel.pty_id }).catch(console.error);
+        }
+      }
 
       try {
         await invoke("workspace_delete_feature", {
@@ -297,19 +320,35 @@ export function WorkspaceView() {
   // Close panel handler
   const handlePanelClose = useCallback(
     (panelId: string) => {
-      if (!activeProject || !activeFeature || !workspace) return;
+      if (!activeProject || !workspace) return;
+
+      // Find the panel to get its pty_id before removing
+      let ptyIdToKill: string | null = null;
+      for (const feature of activeProject.features) {
+        const panel = feature.panels.find((p) => p.id === panelId);
+        if (panel) {
+          ptyIdToKill = panel.pty_id;
+          break;
+        }
+      }
+      if (!ptyIdToKill) {
+        const sharedPanel = activeProject.shared_panels.find((p) => p.id === panelId);
+        if (sharedPanel) ptyIdToKill = sharedPanel.pty_id;
+      }
+
+      // Kill the PTY session
+      if (ptyIdToKill) {
+        invoke("pty_kill", { id: ptyIdToKill }).catch(console.error);
+      }
 
       const newProjects = workspace.projects.map((p) => {
         if (p.id !== activeProject.id) return p;
         return {
           ...p,
-          features: p.features.map((f) => {
-            if (f.id !== activeFeature.id) return f;
-            return {
-              ...f,
-              panels: f.panels.filter((panel) => panel.id !== panelId),
-            };
-          }),
+          features: p.features.map((f) => ({
+            ...f,
+            panels: f.panels.filter((panel) => panel.id !== panelId),
+          })),
           shared_panels: p.shared_panels.filter((panel) => panel.id !== panelId),
         };
       });
@@ -319,7 +358,7 @@ export function WorkspaceView() {
         projects: newProjects,
       });
     },
-    [activeProject, activeFeature, workspace, saveWorkspace]
+    [activeProject, workspace, saveWorkspace]
   );
 
   // Toggle panel shared handler
@@ -377,10 +416,27 @@ export function WorkspaceView() {
     [activeProject, workspace, saveWorkspace]
   );
 
-  // Reload panel handler (creates new PTY)
+  // Reload panel handler (kills old PTY and creates new one)
   const handlePanelReload = useCallback(
     (panelId: string) => {
       if (!activeProject || !workspace) return;
+
+      // Find and kill the old PTY session
+      let oldPtyId: string | null = null;
+      for (const feature of activeProject.features) {
+        const panel = feature.panels.find((p) => p.id === panelId);
+        if (panel) {
+          oldPtyId = panel.pty_id;
+          break;
+        }
+      }
+      if (!oldPtyId) {
+        const sharedPanel = activeProject.shared_panels.find((p) => p.id === panelId);
+        if (sharedPanel) oldPtyId = sharedPanel.pty_id;
+      }
+      if (oldPtyId) {
+        invoke("pty_kill", { id: oldPtyId }).catch(console.error);
+      }
 
       const newPtyId = crypto.randomUUID();
 
@@ -437,26 +493,38 @@ export function WorkspaceView() {
     [activeProject, workspace, saveWorkspace]
   );
 
-  // Convert workspace panels to PanelGrid format
-  const featurePanels: PanelState[] =
-    activeFeature?.panels.map((p) => ({
-      id: p.id,
-      ptyId: p.pty_id,
-      title: p.title,
-      isShared: p.is_shared,
-      cwd: activeProject?.path || "",
-      command: p.command ?? undefined,
-    })) || [];
+  // Convert workspace panels to PanelGrid format for ALL features (to keep PTY alive)
+  // Memoize to prevent unnecessary re-renders during resize
+  const allFeaturePanels = useMemo(() => {
+    const map = new Map<string, PanelState[]>();
+    activeProject?.features.forEach((feature) => {
+      map.set(
+        feature.id,
+        feature.panels.map((p) => ({
+          id: p.id,
+          ptyId: p.pty_id,
+          title: p.title,
+          isShared: p.is_shared,
+          cwd: activeProject?.path || "",
+          command: p.command ?? undefined,
+        }))
+      );
+    });
+    return map;
+  }, [activeProject?.features, activeProject?.path]);
 
-  const sharedPanels: PanelState[] =
-    activeProject?.shared_panels.map((p) => ({
-      id: p.id,
-      ptyId: p.pty_id,
-      title: p.title,
-      isShared: true,
-      cwd: activeProject?.path || "",
-      command: p.command ?? undefined,
-    })) || [];
+  const sharedPanels = useMemo<PanelState[]>(
+    () =>
+      activeProject?.shared_panels.map((p) => ({
+        id: p.id,
+        ptyId: p.pty_id,
+        title: p.title,
+        isShared: true,
+        cwd: activeProject?.path || "",
+        command: p.command ?? undefined,
+      })) || [],
+    [activeProject?.shared_panels, activeProject?.path]
+  );
 
   if (loading) {
     return (
@@ -516,18 +584,29 @@ export function WorkspaceView() {
                       </>
                     )}
 
-                    {/* Feature panels */}
+                    {/* Feature panels - render ALL features but hide inactive ones to keep PTY alive */}
                     <Panel minSize={30}>
-                      <PanelGrid
-                        panels={featurePanels}
-                        onPanelClose={handlePanelClose}
-                        onPanelAdd={handlePanelAdd}
-                        onPanelToggleShared={handlePanelToggleShared}
-                        onPanelReload={handlePanelReload}
-                        onPanelTitleChange={handlePanelTitleChange}
-                        direction={activeFeature.layout_direction || "horizontal"}
-                        autoSaveId={activeFeature.id}
-                      />
+                      <div className="relative h-full">
+                        {activeProject?.features.map((feature) => (
+                          <div
+                            key={feature.id}
+                            className={`absolute inset-0 ${
+                              feature.id === activeFeature.id ? "" : "invisible pointer-events-none"
+                            }`}
+                          >
+                            <PanelGrid
+                              panels={allFeaturePanels.get(feature.id) || []}
+                              onPanelClose={handlePanelClose}
+                              onPanelAdd={handlePanelAdd}
+                              onPanelToggleShared={handlePanelToggleShared}
+                              onPanelReload={handlePanelReload}
+                              onPanelTitleChange={handlePanelTitleChange}
+                              direction={feature.layout_direction || "horizontal"}
+                              autoSaveId={feature.id}
+                            />
+                          </div>
+                        ))}
+                      </div>
                     </Panel>
                   </PanelGroup>
                 ) : (

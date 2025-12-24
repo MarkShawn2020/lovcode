@@ -47,8 +47,8 @@ export function TerminalPane({
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
   const onTitleChangeRef = useRef(onTitleChange);
-  // Generate fresh pty_id on each mount (ptyId prop is just a stable key for React)
-  const sessionIdRef = useRef<string>(crypto.randomUUID());
+  // Use ptyId prop as session ID to support PTY reuse across remounts
+  const sessionIdRef = useRef<string>(ptyId);
 
   useEffect(() => {
     onReadyRef.current = onReady;
@@ -64,7 +64,10 @@ export function TerminalPane({
 
   // Initialize terminal and PTY
   useEffect(() => {
+    console.log('[DEBUG][TerminalPane] useEffect 触发, ptyId:', ptyId);
     if (!containerRef.current) return;
+    // Update sessionIdRef when ptyId changes (e.g., on reload)
+    sessionIdRef.current = ptyId;
     const sessionId = sessionIdRef.current;
 
     // Create terminal instance
@@ -116,13 +119,41 @@ export function TerminalPane({
       fitAddon.fit();
     });
 
-    // Track cleanup state
-    let isMounted = true;
+    // Track cleanup state - use object to avoid closure stale value
+    const mountState = { isMounted: true };
 
-    // Create PTY session
+    // Initialize PTY session (create if not exists, reuse if exists)
     const initPty = async () => {
       try {
-        await invoke("pty_create", { id: sessionId, cwd, command });
+        // Check mount state before async operation
+        if (!mountState.isMounted) {
+          console.log('[DEBUG][TerminalPane] initPty 取消 - 组件已卸载');
+          return;
+        }
+
+        // Check if PTY session already exists (supports remounting without killing process)
+        const exists = await invoke<boolean>("pty_exists", { id: sessionId });
+        console.log('[DEBUG][TerminalPane] initPty - sessionId:', sessionId, 'exists:', exists, 'isMounted:', mountState.isMounted);
+
+        // Check mount state after async operation
+        if (!mountState.isMounted) {
+          console.log('[DEBUG][TerminalPane] initPty 取消 - 组件已卸载 (after exists check)');
+          return;
+        }
+
+        if (!exists) {
+          // Create new PTY session only if it doesn't exist
+          console.log('[DEBUG][TerminalPane] 创建新 PTY session');
+          await invoke("pty_create", { id: sessionId, cwd, command });
+        } else {
+          console.log('[DEBUG][TerminalPane] 复用已存在的 PTY session');
+        }
+
+        // Check mount state after PTY creation
+        if (!mountState.isMounted) {
+          console.log('[DEBUG][TerminalPane] initPty 取消 - 组件已卸载 (after create)');
+          return;
+        }
 
         // Resize PTY to match terminal dimensions (ignore if session already exited)
         await invoke("pty_resize", {
@@ -133,8 +164,10 @@ export function TerminalPane({
 
         onReadyRef.current?.();
       } catch (err) {
-        console.error("Failed to create PTY:", err);
-        term.writeln(`\r\n\x1b[31mFailed to create terminal: ${err}\x1b[0m`);
+        if (mountState.isMounted) {
+          console.error("Failed to initialize PTY:", err);
+          term.writeln(`\r\n\x1b[31mFailed to create terminal: ${err}\x1b[0m`);
+        }
       }
     };
 
@@ -152,7 +185,7 @@ export function TerminalPane({
 
     // Listen for PTY data events
     const unlistenData = listen<PtyDataEvent>("pty-data", (event) => {
-      if (event.payload.id === sessionId && isMounted && terminalRef.current) {
+      if (event.payload.id === sessionId && mountState.isMounted && terminalRef.current) {
         const bytes = new Uint8Array(event.payload.data);
         const text = new TextDecoder().decode(bytes);
         terminalRef.current.write(text);
@@ -161,16 +194,18 @@ export function TerminalPane({
 
     // Listen for PTY exit events
     const unlistenExit = listen<PtyExitEvent>("pty-exit", (event) => {
-      if (event.payload.id === sessionId && isMounted) {
+      if (event.payload.id === sessionId && mountState.isMounted) {
         onExitRef.current?.();
       }
     });
 
     initPty();
 
-    // Cleanup
+    // Cleanup - DO NOT kill PTY session on unmount (allows process to survive tab switches)
+    // PTY is killed explicitly via handlePanelClose or handlePanelReload in WorkspaceView
     return () => {
-      isMounted = false;
+      console.log('[DEBUG][TerminalPane] cleanup 触发, ptyId:', ptyId, 'sessionId:', sessionId);
+      mountState.isMounted = false;
       onDataDisposable.dispose();
       onTitleDisposable.dispose();
 
@@ -178,15 +213,12 @@ export function TerminalPane({
       unlistenData.then((fn) => fn());
       unlistenExit.then((fn) => fn());
 
-      // Kill PTY session
-      invoke("pty_kill", { id: sessionId }).catch(() => {});
-
-      // Dispose terminal
+      // Dispose terminal UI only, keep PTY alive
       term.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
     };
-  }, [cwd, command]);
+  }, [ptyId]); // Only re-run when ptyId changes (reload), not cwd/command
 
   // Handle resize
   const handleResize = useCallback(() => {
