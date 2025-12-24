@@ -218,7 +218,7 @@ export function SharedPanelZone({
       {panels.map((panel) => (
         <div
           key={panel.id}
-          className="flex-1 min-h-0 flex flex-col bg-terminal border border-border rounded-lg overflow-hidden"
+          className="flex-1 min-h-0 flex flex-col bg-terminal border border-border overflow-hidden"
         >
           <Tabs
             value={panel.activeSessionId}
