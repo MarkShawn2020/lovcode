@@ -12,7 +12,6 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronDownIcon,
-  ReloadIcon,
 } from "@radix-ui/react-icons";
 import {
   ContextMenu,
@@ -28,7 +27,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from "../../components/ui/dialog";
-import { TerminalPane } from "../../components/Terminal";
+import { SessionPanel } from "../../components/PanelGrid/SessionPanel";
 import type { Feature, FeatureStatus } from "./types";
 import type { PanelState } from "../../components/PanelGrid";
 
@@ -39,7 +38,7 @@ interface FeatureSidebarProps {
   features: Feature[];
   activeFeatureId?: string;
   onSelectFeature: (id: string) => void;
-  onAddFeature: (name: string) => void;
+  onAddFeature: () => void;
   onRenameFeature: (id: string, name: string) => void;
   onUpdateFeatureStatus: (id: string, status: FeatureStatus, note?: string) => void;
   onArchiveFeature: (id: string, note?: string) => void;
@@ -67,7 +66,7 @@ const STATUS_OPTIONS: { value: FeatureStatus; label: string; icon: React.ReactNo
 ];
 
 type ArchiveAction = { type: "complete"; featureId: string } | { type: "cancel"; featureId: string };
-type NameDialogState = { type: "add" } | { type: "rename"; featureId: string; currentName: string } | null;
+type RenameDialogState = { featureId: string; currentName: string } | null;
 
 export function FeatureSidebar({
   projectName,
@@ -93,14 +92,24 @@ export function FeatureSidebar({
 }: FeatureSidebarProps) {
   const [archiveAction, setArchiveAction] = useState<ArchiveAction | null>(null);
   const [archiveNote, setArchiveNote] = useState("");
-  const [nameDialog, setNameDialog] = useState<NameDialogState>(null);
+  const [renameDialog, setRenameDialog] = useState<RenameDialogState>(null);
   const [featureName, setFeatureName] = useState("");
-  const [expandedPanels, setExpandedPanels] = useState<Set<string>>(() => new Set());
+  const [expandedPanels, setExpandedPanels] = useState<Set<string>>(() => new Set(pinnedPanels.map(p => p.id)));
+  const [featuresExpanded, setFeaturesExpanded] = useState(true);
+  const [pinnedExpanded, setPinnedExpanded] = useState(true);
   const [width, setWidth] = useState(() => {
     const saved = localStorage.getItem("feature-sidebar-width");
     return saved ? Number(saved) : 256;
   });
   const sidebarRef = useRef<HTMLDivElement>(null);
+  const archiveNoteRef = useRef<HTMLTextAreaElement>(null);
+
+  // Auto-focus archive note textarea
+  useEffect(() => {
+    if (archiveAction) {
+      requestAnimationFrame(() => archiveNoteRef.current?.focus());
+    }
+  }, [archiveAction]);
 
   // Persist width
   useEffect(() => {
@@ -178,30 +187,21 @@ export function FeatureSidebar({
     setArchiveNote("");
   };
 
-  const handleOpenAddDialog = () => {
-    setNameDialog({ type: "add" });
-    setFeatureName("");
-  };
-
   const handleOpenRenameDialog = (featureId: string, currentName: string) => {
-    setNameDialog({ type: "rename", featureId, currentName });
+    setRenameDialog({ featureId, currentName });
     setFeatureName(currentName);
   };
 
-  const handleConfirmName = () => {
+  const handleConfirmRename = () => {
     const name = featureName.trim();
-    if (!name || !nameDialog) return;
-    if (nameDialog.type === "add") {
-      onAddFeature(name);
-    } else {
-      onRenameFeature(nameDialog.featureId, name);
-    }
-    setNameDialog(null);
+    if (!name || !renameDialog) return;
+    onRenameFeature(renameDialog.featureId, name);
+    setRenameDialog(null);
     setFeatureName("");
   };
 
-  const handleCancelNameDialog = () => {
-    setNameDialog(null);
+  const handleCancelRenameDialog = () => {
+    setRenameDialog(null);
     setFeatureName("");
   };
 
@@ -231,11 +231,12 @@ export function FeatureSidebar({
             <>
               <div className="w-4 border-t border-border my-1" />
               {pinnedPanels.map((panel) => (
-                <DrawingPinFilledIcon
+                <span
                   key={panel.id}
-                  className="w-3 h-3 text-primary/70"
                   title={panel.sessions.find(s => s.id === panel.activeSessionId)?.title || "Pinned"}
-                />
+                >
+                  <DrawingPinFilledIcon className="w-3 h-3 text-primary/70" />
+                </span>
               ))}
             </>
           )}
@@ -270,25 +271,19 @@ export function FeatureSidebar({
             <ChevronLeftIcon className="w-4 h-4" />
           </button>
           <span className="flex-1 text-sm font-medium text-ink px-1 truncate capitalize">{projectName}</span>
-          <button
-            onClick={handleOpenAddDialog}
-            className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
-            title="New feature"
-          >
-            <PlusIcon className="w-4 h-4" />
-          </button>
-          <button
-            onClick={onAddPinnedPanel}
-            className="p-1 text-muted-foreground hover:text-primary hover:bg-card-alt transition-colors rounded"
-            title="New pinned terminal"
-          >
-            <DrawingPinIcon className="w-4 h-4" />
-          </button>
         </div>
 
-        {/* Features list */}
-        <div className="flex-shrink-0 max-h-48 overflow-y-auto">
-          {activeFeatures.map((feature) => {
+        {/* Features section */}
+        <div className="flex-shrink-0 flex flex-col">
+          <SectionHeader
+            title="Features"
+            count={activeFeatures.length}
+            expanded={featuresExpanded}
+            onToggle={() => setFeaturesExpanded(!featuresExpanded)}
+            onAdd={onAddFeature}
+          />
+          {featuresExpanded && <div className="max-h-48 overflow-y-auto">
+            {activeFeatures.map((feature) => {
             const isActive = feature.id === activeFeatureId;
             return (
               <ContextMenu key={feature.id}>
@@ -354,92 +349,48 @@ export function FeatureSidebar({
               </ContextMenu>
             );
           })}
+          </div>}
         </div>
 
         {/* Pinned sessions */}
         {pinnedPanels.length > 0 && (
           <div className="flex-1 min-h-0 flex flex-col border-t border-border">
-            <div className="flex items-center gap-2 px-3 py-1.5 flex-shrink-0">
-              <DrawingPinFilledIcon className="w-3.5 h-3.5 text-primary/70" />
-              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
-                Pinned
-              </span>
-            </div>
-            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            <SectionHeader
+              title="Pinned Sessions"
+              count={pinnedPanels.length > 1 ? pinnedPanels.length : undefined}
+              expanded={pinnedExpanded}
+              onToggle={() => setPinnedExpanded(!pinnedExpanded)}
+              onAdd={onAddPinnedPanel}
+            />
+            {pinnedExpanded && <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
               {pinnedPanels.map((panel) => {
                 const isExpanded = expandedPanels.has(panel.id);
-                const activeSession = panel.sessions.find(s => s.id === panel.activeSessionId);
                 return (
                   <div
                     key={panel.id}
-                    className={`flex flex-col overflow-hidden ${
+                    className={`flex flex-col bg-terminal border border-border overflow-hidden ${
                       isExpanded ? (expandedCount > 0 ? "flex-1 min-h-0" : "flex-1") : "flex-shrink-0"
                     }`}
                   >
-                    {/* Panel header - same style as feature items */}
-                    <ContextMenu>
-                      <ContextMenuTrigger asChild>
-                        <div
-                          className="flex items-center gap-2 px-3 py-1.5 cursor-pointer transition-colors text-muted-foreground hover:text-ink hover:bg-card-alt border-l-2 border-transparent"
-                          onClick={() => togglePanelExpanded(panel.id)}
-                        >
-                          {isExpanded ? (
-                            <ChevronDownIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                          ) : (
-                            <ChevronRightIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                          )}
-                          <span className="text-sm truncate">{activeSession?.title || "Pinned"}</span>
-                          {panel.sessions.length > 1 && (
-                            <span className="text-xs text-muted-foreground/60">+{panel.sessions.length - 1}</span>
-                          )}
-                        </div>
-                      </ContextMenuTrigger>
-                      <ContextMenuContent className="min-w-[160px]">
-                        <ContextMenuItem onClick={() => onSessionAdd(panel.id)} className="gap-2 cursor-pointer">
-                          <PlusIcon className="w-3.5 h-3.5" />
-                          <span>New Tab</span>
-                        </ContextMenuItem>
-                        <ContextMenuItem onClick={() => onPanelReload(panel.id)} className="gap-2 cursor-pointer">
-                          <ReloadIcon className="w-3.5 h-3.5" />
-                          <span>Reload</span>
-                        </ContextMenuItem>
-                        <ContextMenuSeparator />
-                        <ContextMenuItem onClick={() => onPanelToggleShared(panel.id)} className="gap-2 cursor-pointer">
-                          <DrawingPinIcon className="w-3.5 h-3.5" />
-                          <span>Unpin</span>
-                        </ContextMenuItem>
-                        <ContextMenuItem
-                          onClick={() => onPanelClose(panel.id)}
-                          className="gap-2 cursor-pointer text-red-500 focus:text-red-500"
-                        >
-                          <Cross2Icon className="w-3.5 h-3.5" />
-                          <span>Close</span>
-                        </ContextMenuItem>
-                      </ContextMenuContent>
-                    </ContextMenu>
-
-                    {/* Terminal content */}
-                    {isExpanded && (
-                      <div className="flex-1 min-h-0 relative bg-terminal border-l-2 border-transparent ml-0">
-                        {panel.sessions.map((session) => (
-                          <div
-                            key={session.id}
-                            className={`absolute inset-0 ${session.id === panel.activeSessionId ? "" : "hidden"}`}
-                          >
-                            <TerminalPane
-                              ptyId={session.ptyId}
-                              cwd={panel.cwd}
-                              command={session.command}
-                              onTitleChange={(title) => onSessionTitleChange(panel.id, session.id, title)}
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <SessionPanel
+                      panel={panel}
+                      collapsible
+                      isExpanded={isExpanded}
+                      onToggleExpand={() => togglePanelExpanded(panel.id)}
+                      onPanelClose={() => onPanelClose(panel.id)}
+                      onPanelToggleShared={() => onPanelToggleShared(panel.id)}
+                      onPanelReload={() => onPanelReload(panel.id)}
+                      onSessionAdd={() => onSessionAdd(panel.id)}
+                      onSessionClose={(sessionId) => onSessionClose(panel.id, sessionId)}
+                      onSessionSelect={(sessionId) => onSessionSelect(panel.id, sessionId)}
+                      onSessionTitleChange={(sessionId, title) => onSessionTitleChange(panel.id, sessionId, title)}
+                      headerBg="bg-canvas-alt"
+                      titleFallback="Pinned"
+                    />
                   </div>
                 );
               })}
-            </div>
+            </div>}
           </div>
         )}
       </div>
@@ -453,6 +404,7 @@ export function FeatureSidebar({
             </DialogTitle>
           </DialogHeader>
           <textarea
+            ref={archiveNoteRef}
             value={archiveNote}
             onChange={(e) => setArchiveNote(e.target.value)}
             onKeyDown={(e) => {
@@ -463,7 +415,6 @@ export function FeatureSidebar({
             }}
             placeholder="Add a note (optional)"
             className="w-full h-24 px-3 py-2 text-sm border border-border rounded-lg bg-card text-ink resize-none focus:outline-none focus:ring-1 focus:ring-primary"
-            autoFocus
           />
           <DialogFooter>
             <button
@@ -482,21 +433,19 @@ export function FeatureSidebar({
         </DialogContent>
       </Dialog>
 
-      {/* Name dialog for add/rename */}
-      <Dialog open={nameDialog !== null} onOpenChange={(open) => !open && handleCancelNameDialog()}>
+      {/* Rename dialog */}
+      <Dialog open={renameDialog !== null} onOpenChange={(open) => !open && handleCancelRenameDialog()}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>
-              {nameDialog?.type === "add" ? "New Feature" : "Rename Feature"}
-            </DialogTitle>
+            <DialogTitle>Rename Feature</DialogTitle>
           </DialogHeader>
           <input
             type="text"
             value={featureName}
             onChange={(e) => setFeatureName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleConfirmName();
-              if (e.key === "Escape") handleCancelNameDialog();
+              if (e.key === "Enter") handleConfirmRename();
+              if (e.key === "Escape") handleCancelRenameDialog();
             }}
             placeholder="Feature name"
             className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card text-ink focus:outline-none focus:ring-1 focus:ring-primary"
@@ -504,22 +453,64 @@ export function FeatureSidebar({
           />
           <DialogFooter>
             <button
-              onClick={handleCancelNameDialog}
+              onClick={handleCancelRenameDialog}
               className="px-4 py-2 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-lg transition-colors"
             >
               Cancel
             </button>
             <button
-              onClick={handleConfirmName}
+              onClick={handleConfirmRename}
               disabled={!featureName.trim()}
               className="px-4 py-2 text-sm bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors disabled:opacity-50"
             >
-              {nameDialog?.type === "add" ? "Create" : "Rename"}
+              Rename
             </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+function SectionHeader({
+  title,
+  count,
+  expanded,
+  onToggle,
+  onAdd,
+}: {
+  title: string;
+  count?: number;
+  expanded: boolean;
+  onToggle: () => void;
+  onAdd: () => void;
+}) {
+  return (
+    <div className="flex items-center px-3 py-1.5 flex-shrink-0">
+      <div
+        className="flex items-center flex-1 cursor-pointer hover:bg-card-alt transition-colors rounded -ml-1 pl-1"
+        onClick={onToggle}
+      >
+        {expanded ? (
+          <ChevronDownIcon className="w-3.5 h-3.5 text-muted-foreground" />
+        ) : (
+          <ChevronRightIcon className="w-3.5 h-3.5 text-muted-foreground" />
+        )}
+        <span className="flex-1 text-center text-xs font-medium text-muted-foreground uppercase tracking-wide">
+          {title}
+        </span>
+        {count !== undefined && count > 0 && (
+          <span className="text-xs text-muted-foreground/60">({count})</span>
+        )}
+      </div>
+      <button
+        onClick={(e) => { e.stopPropagation(); onAdd(); }}
+        className="p-0.5 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
+        title={`New ${title.toLowerCase().slice(0, -1)}`}
+      >
+        <PlusIcon className="w-3.5 h-3.5" />
+      </button>
+    </div>
   );
 }
 

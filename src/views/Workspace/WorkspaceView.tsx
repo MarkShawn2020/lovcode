@@ -8,20 +8,11 @@ import { FeatureSidebar } from "./FeatureSidebar";
 import { PanelGrid } from "../../components/PanelGrid";
 import type { PanelState } from "../../components/PanelGrid";
 import { disposeTerminal } from "../../components/Terminal";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "../../components/ui/dialog";
 import type { WorkspaceData, WorkspaceProject, Feature, FeatureStatus, PanelState as StoredPanelState, SessionState as StoredSessionState } from "./types";
 
 export function WorkspaceView() {
   const [workspace, setWorkspace] = useState<WorkspaceData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [showNewFeatureDialog, setShowNewFeatureDialog] = useState(false);
-  const [newFeatureName, setNewFeatureName] = useState("");
   const [sharedPanelCollapsed, setSharedPanelCollapsed] = useState(false);
 
   // Load workspace data and reset running features (PTY sessions don't survive restarts)
@@ -179,9 +170,12 @@ export function WorkspaceView() {
     [workspace, saveWorkspace]
   );
 
-  // Add new feature with given name
-  const handleAddFeature = useCallback(async (name: string) => {
-    if (!activeProject) return;
+  // Add new feature with auto-generated name
+  const handleAddFeature = useCallback(async () => {
+    if (!activeProject || !workspace) return;
+
+    const counter = (activeProject.feature_counter ?? 0) + 1;
+    const name = `#${counter}`;
 
     try {
       const feature = await invoke<Feature>("workspace_create_feature", {
@@ -189,21 +183,20 @@ export function WorkspaceView() {
         name,
       });
 
-      if (workspace) {
-        const newProjects = workspace.projects.map((p) =>
-          p.id === activeProject.id
-            ? {
-                ...p,
-                features: [...p.features, feature],
-                active_feature_id: feature.id,
-              }
-            : p
-        );
-        saveWorkspace({
-          ...workspace,
-          projects: newProjects,
-        });
-      }
+      const newProjects = workspace.projects.map((p) =>
+        p.id === activeProject.id
+          ? {
+              ...p,
+              features: [...p.features, feature],
+              active_feature_id: feature.id,
+              feature_counter: counter,
+            }
+          : p
+      );
+      saveWorkspace({
+        ...workspace,
+        projects: newProjects,
+      });
     } catch (err) {
       console.error("Failed to create feature:", err);
     }
@@ -1006,10 +999,7 @@ export function WorkspaceView() {
                         No features yet
                       </p>
                       <button
-                        onClick={() => {
-                          setNewFeatureName("");
-                          setShowNewFeatureDialog(true);
-                        }}
+                        onClick={handleAddFeature}
                         className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
                       >
                         Create First Feature
@@ -1040,53 +1030,6 @@ export function WorkspaceView() {
         </div>
       </div>
 
-      {/* New feature dialog for empty state */}
-      <Dialog open={showNewFeatureDialog} onOpenChange={setShowNewFeatureDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>New Feature</DialogTitle>
-          </DialogHeader>
-          <input
-            type="text"
-            value={newFeatureName}
-            onChange={(e) => setNewFeatureName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && newFeatureName.trim()) {
-                handleAddFeature(newFeatureName.trim());
-                setShowNewFeatureDialog(false);
-                setNewFeatureName("");
-              }
-              if (e.key === "Escape") {
-                setShowNewFeatureDialog(false);
-              }
-            }}
-            placeholder="Feature name"
-            className="w-full px-3 py-2 text-sm border border-border rounded-lg bg-card text-ink focus:outline-none focus:ring-1 focus:ring-primary"
-            autoFocus
-          />
-          <DialogFooter>
-            <button
-              onClick={() => setShowNewFeatureDialog(false)}
-              className="px-4 py-2 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-lg transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={() => {
-                if (newFeatureName.trim()) {
-                  handleAddFeature(newFeatureName.trim());
-                  setShowNewFeatureDialog(false);
-                  setNewFeatureName("");
-                }
-              }}
-              disabled={!newFeatureName.trim()}
-              className="px-4 py-2 text-sm bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg transition-colors disabled:opacity-50"
-            >
-              Create
-            </button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

@@ -42,6 +42,7 @@ export interface WorkspaceProject {
   features: Feature[];
   shared_panels: PanelState[];
   active_feature_id?: string;
+  feature_counter?: number;
   created_at: number;
 }
 

@@ -1,70 +1,8 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
-import { Cross2Icon, PlusIcon, RowsIcon, ColumnsIcon, PinLeftIcon, DotsVerticalIcon, ReloadIcon, ChevronLeftIcon, ChevronRightIcon, ChevronDownIcon, DrawingPinFilledIcon } from "@radix-ui/react-icons";
-import { TerminalPane } from "../Terminal";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
-
-/** Editable tab title - double click to rename */
-function EditableTabTitle({
-  title,
-  fallback,
-  onRename,
-}: {
-  title: string;
-  fallback: string;
-  onRename: (newTitle: string) => void;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(title);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (editing) inputRef.current?.select();
-  }, [editing]);
-
-  const handleConfirm = () => {
-    const trimmed = value.trim();
-    if (trimmed && trimmed !== title) onRename(trimmed);
-    else setValue(title);
-    setEditing(false);
-  };
-
-  if (editing) {
-    return (
-      <input
-        ref={inputRef}
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onBlur={handleConfirm}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") handleConfirm();
-          if (e.key === "Escape") { setValue(title); setEditing(false); }
-          e.stopPropagation();
-        }}
-        onClick={(e) => e.stopPropagation()}
-        className="w-20 px-0.5 text-xs bg-card border border-primary rounded outline-none"
-        autoFocus
-      />
-    );
-  }
-
-  return (
-    <span
-      className="truncate max-w-20 pr-4"
-      onDoubleClick={(e) => { e.stopPropagation(); setValue(title); setEditing(true); }}
-    >
-      {title || fallback}
-    </span>
-  );
-}
+import { ChevronLeftIcon, ChevronRightIcon, DrawingPinFilledIcon } from "@radix-ui/react-icons";
+import { SessionPanel } from "./SessionPanel";
 
 export interface SessionState {
   id: string;
@@ -106,13 +44,6 @@ export function PanelGrid({
   onSessionTitleChange,
   direction = "horizontal",
 }: PanelGridProps) {
-  const handleTitleChange = useCallback(
-    (panelId: string, sessionId: string) => (title: string) => {
-      onSessionTitleChange(panelId, sessionId, title);
-    },
-    [onSessionTitleChange]
-  );
-
   // Auto-create terminal when empty
   useEffect(() => {
     if (panels.length === 0) {
@@ -132,111 +63,19 @@ export function PanelGrid({
       {panels.map((panel) => (
         <Allotment.Pane key={panel.id} minSize={150}>
           <div className="h-full flex flex-col bg-terminal border border-border overflow-hidden">
-              {/* Panel header with session tabs */}
-              <Tabs
-                value={panel.activeSessionId}
-                onValueChange={(sessionId) => onSessionSelect(panel.id, sessionId)}
-                className="flex flex-col h-full gap-0"
-              >
-                <div className="flex items-center bg-muted border-b border-border">
-                  <TabsList className="flex-1 h-8 p-0 rounded-none justify-start gap-0">
-                    {panel.sessions.map((session) => (
-                      <TabsTrigger
-                        key={session.id}
-                        value={session.id}
-                        className="relative h-8 px-3 text-xs rounded-none border-r border-border data-[state=active]:bg-card data-[state=active]:shadow-none group"
-                      >
-                        <EditableTabTitle
-                          title={session.title}
-                          fallback="Terminal"
-                          onRename={(t) => onSessionTitleChange(panel.id, session.id, t)}
-                        />
-                        {panel.sessions.length > 1 && (
-                          <span
-                            role="button"
-                            tabIndex={-1}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              e.preventDefault();
-                              onSessionClose(panel.id, session.id);
-                            }}
-                            className="absolute right-1 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-card-alt transition-opacity cursor-pointer"
-                          >
-                            <Cross2Icon className="w-3 h-3" />
-                          </span>
-                        )}
-                      </TabsTrigger>
-                    ))}
-                  </TabsList>
-                  <div className="flex items-center px-1 flex-shrink-0">
-                    <button
-                      onClick={() => onSessionAdd(panel.id)}
-                      className="p-1 rounded text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors"
-                      title="New tab"
-                    >
-                      <PlusIcon className="w-3.5 h-3.5" />
-                    </button>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <button className="p-1 rounded text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors">
-                          <DotsVerticalIcon className="w-3.5 h-3.5" />
-                        </button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem onClick={() => onSessionAdd(panel.id)}>
-                          <PlusIcon className="w-4 h-4 mr-2" />
-                          New tab
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => onPanelReload(panel.id)}>
-                          <ReloadIcon className="w-4 h-4 mr-2" />
-                          Reload
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => onPanelToggleShared(panel.id)}>
-                          <PinLeftIcon className="w-4 h-4 mr-2" />
-                          {panel.isShared ? "Unpin" : "Pin to shared"}
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => onPanelAdd("horizontal")}>
-                          <ColumnsIcon className="w-4 h-4 mr-2" />
-                          Split horizontal
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onClick={() => onPanelAdd("vertical")}>
-                          <RowsIcon className="w-4 h-4 mr-2" />
-                          Split vertical
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          onClick={() => onPanelClose(panel.id)}
-                          className="text-red-500 focus:text-red-500"
-                        >
-                          <Cross2Icon className="w-4 h-4 mr-2" />
-                          Close panel
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </div>
-                </div>
-                {/* Terminal content for each session */}
-                {/* forceMount keeps TabsContent in DOM so PTY stays alive when tab is inactive */}
-                <div className="flex-1 min-h-0 relative">
-                  {panel.sessions.map((session) => (
-                    <TabsContent
-                      key={session.id}
-                      value={session.id}
-                      forceMount
-                      className="absolute inset-0 m-0 data-[state=inactive]:hidden"
-                    >
-                      <TerminalPane
-                        ptyId={session.ptyId}
-                        cwd={panel.cwd}
-                        command={session.command}
-                        onTitleChange={handleTitleChange(panel.id, session.id)}
-                      />
-                    </TabsContent>
-                  ))}
-                </div>
-              </Tabs>
-            </div>
+            <SessionPanel
+              panel={panel}
+              showSplitActions
+              onPanelAdd={onPanelAdd}
+              onPanelClose={() => onPanelClose(panel.id)}
+              onPanelToggleShared={() => onPanelToggleShared(panel.id)}
+              onPanelReload={() => onPanelReload(panel.id)}
+              onSessionAdd={() => onSessionAdd(panel.id)}
+              onSessionClose={(sessionId) => onSessionClose(panel.id, sessionId)}
+              onSessionSelect={(sessionId) => onSessionSelect(panel.id, sessionId)}
+              onSessionTitleChange={(sessionId, title) => onSessionTitleChange(panel.id, sessionId, title)}
+            />
+          </div>
         </Allotment.Pane>
       ))}
     </Allotment>
@@ -274,7 +113,6 @@ export function SharedPanelZone({
 
   // Auto-expand newly pinned panels
   useEffect(() => {
-    const currentIds = new Set(panels.map(p => p.id));
     const newIds = panels.filter(p => !expandedPanels.has(p.id)).map(p => p.id);
     if (newIds.length > 0) {
       setExpandedPanels(prev => new Set([...prev, ...newIds]));
@@ -292,13 +130,6 @@ export function SharedPanelZone({
       return next;
     });
   }, []);
-
-  const handleTitleChange = useCallback(
-    (panelId: string, sessionId: string) => (title: string) => {
-      onSessionTitleChange(panelId, sessionId, title);
-    },
-    [onSessionTitleChange]
-  );
 
   if (panels.length === 0) {
     return null;
@@ -352,115 +183,31 @@ export function SharedPanelZone({
       {/* Panels */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
         {panels.map((panel) => {
-        const isExpanded = expandedPanels.has(panel.id);
-        return (
-          <div
-            key={panel.id}
-            className={`flex flex-col bg-terminal border border-border overflow-hidden ${
-              isExpanded ? (expandedCount > 0 ? "flex-1 min-h-0" : "flex-1") : "flex-shrink-0"
-            }`}
-          >
-            <Tabs
-              value={panel.activeSessionId}
-              onValueChange={(sessionId) => onSessionSelect(panel.id, sessionId)}
-              className="flex flex-col h-full gap-0"
+          const isExpanded = expandedPanels.has(panel.id);
+          return (
+            <div
+              key={panel.id}
+              className={`flex flex-col bg-terminal border border-border overflow-hidden ${
+                isExpanded ? (expandedCount > 0 ? "flex-1 min-h-0" : "flex-1") : "flex-shrink-0"
+              }`}
             >
-              <div className="flex items-center bg-canvas-alt border-b border-border flex-shrink-0">
-                <TabsList className="flex-1 h-8 p-0 ml-1 rounded-none justify-start gap-0">
-                  {panel.sessions.map((session) => (
-                    <TabsTrigger
-                      key={session.id}
-                      value={session.id}
-                      className="relative h-8 px-3 text-xs rounded-none border-r border-border data-[state=active]:bg-card data-[state=active]:shadow-none group"
-                    >
-                      <EditableTabTitle
-                        title={session.title}
-                        fallback="Shared"
-                        onRename={(t) => onSessionTitleChange(panel.id, session.id, t)}
-                      />
-                      {panel.sessions.length > 1 && (
-                        <span
-                          role="button"
-                          tabIndex={-1}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                            onSessionClose(panel.id, session.id);
-                          }}
-                          className="absolute right-1 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-card-alt transition-opacity cursor-pointer"
-                        >
-                          <Cross2Icon className="w-3 h-3" />
-                        </span>
-                      )}
-                    </TabsTrigger>
-                  ))}
-                </TabsList>
-                <div className="flex items-center px-1 flex-shrink-0">
-                  <button
-                    onClick={() => togglePanelExpanded(panel.id)}
-                    className="p-1 rounded text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors"
-                    title={isExpanded ? "Collapse panel" : "Expand panel"}
-                  >
-                    {isExpanded ? (
-                      <ChevronDownIcon className="w-3.5 h-3.5" />
-                    ) : (
-                      <ChevronRightIcon className="w-3.5 h-3.5" />
-                    )}
-                  </button>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <button className="p-1 rounded text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors">
-                        <DotsVerticalIcon className="w-3.5 h-3.5" />
-                      </button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => onSessionAdd(panel.id)}>
-                        <PlusIcon className="w-4 h-4 mr-2" />
-                        New tab
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onPanelReload(panel.id)}>
-                        <ReloadIcon className="w-4 h-4 mr-2" />
-                        Reload
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={() => onPanelToggleShared(panel.id)}>
-                        <PinLeftIcon className="w-4 h-4 mr-2" />
-                        Unpin
-                      </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onClick={() => onPanelClose(panel.id)}
-                        className="text-red-500 focus:text-red-500"
-                      >
-                        <Cross2Icon className="w-4 h-4 mr-2" />
-                        Close panel
-                      </DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
-              </div>
-              {/* forceMount keeps TabsContent in DOM so PTY stays alive when tab is inactive */}
-              {isExpanded && (
-                <div className="flex-1 min-h-0 relative">
-                  {panel.sessions.map((session) => (
-                    <TabsContent
-                      key={session.id}
-                      value={session.id}
-                      forceMount
-                      className="absolute inset-0 m-0 data-[state=inactive]:hidden"
-                    >
-                      <TerminalPane
-                        ptyId={session.ptyId}
-                        cwd={panel.cwd}
-                        command={session.command}
-                        onTitleChange={handleTitleChange(panel.id, session.id)}
-                      />
-                    </TabsContent>
-                  ))}
-                </div>
-              )}
-            </Tabs>
-          </div>
-        );
+              <SessionPanel
+                panel={panel}
+                collapsible
+                isExpanded={isExpanded}
+                onToggleExpand={() => togglePanelExpanded(panel.id)}
+                onPanelClose={() => onPanelClose(panel.id)}
+                onPanelToggleShared={() => onPanelToggleShared(panel.id)}
+                onPanelReload={() => onPanelReload(panel.id)}
+                onSessionAdd={() => onSessionAdd(panel.id)}
+                onSessionClose={(sessionId) => onSessionClose(panel.id, sessionId)}
+                onSessionSelect={(sessionId) => onSessionSelect(panel.id, sessionId)}
+                onSessionTitleChange={(sessionId, title) => onSessionTitleChange(panel.id, sessionId, title)}
+                headerBg="bg-canvas-alt"
+                titleFallback="Shared"
+              />
+            </div>
+          );
         })}
       </div>
     </div>
