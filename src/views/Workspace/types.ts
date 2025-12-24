@@ -26,6 +26,8 @@ export type LayoutNode =
 /** Feature within a project */
 export interface Feature {
   id: string;
+  /** Immutable sequence number (like database auto-increment ID) */
+  seq: number;
   name: string;
   status: FeatureStatus;
   pinned?: boolean;
@@ -41,6 +43,9 @@ export interface Feature {
   created_at: number;
 }
 
+/** Project view mode */
+export type ProjectViewMode = "features" | "home";
+
 /** Project in the workspace */
 export interface WorkspaceProject {
   id: string;
@@ -51,6 +56,7 @@ export interface WorkspaceProject {
   shared_panels: PanelState[];
   active_feature_id?: string;
   feature_counter?: number;
+  view_mode?: ProjectViewMode;
   created_at: number;
 }
 

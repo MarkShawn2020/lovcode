@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { ProjectSidebar } from "./ProjectSidebar";
 import { FeatureSidebar } from "./FeatureSidebar";
+import { ProjectHomeView } from "./ProjectHomeView";
 import { PanelGrid } from "../../components/PanelGrid";
 import type { PanelState } from "../../components/PanelGrid";
 import { disposeTerminal } from "../../components/Terminal";
@@ -187,7 +188,7 @@ export function WorkspaceView() {
         p.id === activeProject.id
           ? {
               ...p,
-              features: [...p.features, feature],
+              features: [...p.features, { ...feature, seq: counter }],
               active_feature_id: feature.id,
               feature_counter: counter,
             }
@@ -231,7 +232,7 @@ export function WorkspaceView() {
 
       const newProjects = workspace.projects.map((p) =>
         p.id === activeProject.id
-          ? { ...p, active_feature_id: featureId }
+          ? { ...p, active_feature_id: featureId, view_mode: "features" as const }
           : p
       );
       saveWorkspace({
@@ -325,6 +326,44 @@ export function WorkspaceView() {
           active_feature_id: featureId,
         };
       });
+      saveWorkspace({
+        ...workspace,
+        projects: newProjects,
+        active_project_id: projectId,
+      });
+    },
+    [workspace, saveWorkspace]
+  );
+
+  // Open project home (README view)
+  const handleOpenProjectHome = useCallback(
+    (projectId: string) => {
+      if (!workspace) return;
+      const newProjects = workspace.projects.map((p) =>
+        p.id === projectId ? { ...p, view_mode: "home" as const } : p
+      );
+      saveWorkspace({
+        ...workspace,
+        projects: newProjects,
+        active_project_id: projectId,
+      });
+    },
+    [workspace, saveWorkspace]
+  );
+
+  // Open feature panel (select project and its first feature)
+  const handleOpenFeaturePanel = useCallback(
+    (projectId: string) => {
+      if (!workspace) return;
+      const project = workspace.projects.find((p) => p.id === projectId);
+      if (!project) return;
+
+      const firstActiveFeature = project.features.find((f) => !f.archived);
+      const newProjects = workspace.projects.map((p) =>
+        p.id === projectId
+          ? { ...p, active_feature_id: firstActiveFeature?.id || p.active_feature_id, view_mode: "features" as const }
+          : p
+      );
       saveWorkspace({
         ...workspace,
         projects: newProjects,
@@ -1041,7 +1080,7 @@ export function WorkspaceView() {
           onSelectFeature={(projectId, featureId) => {
             if (!workspace) return;
             const newProjects = workspace.projects.map((p) =>
-              p.id === projectId ? { ...p, active_feature_id: featureId } : p
+              p.id === projectId ? { ...p, active_feature_id: featureId, view_mode: "features" as const } : p
             );
             saveWorkspace({
               ...workspace,
@@ -1053,6 +1092,8 @@ export function WorkspaceView() {
           onArchiveProject={handleArchiveProject}
           onUnarchiveProject={handleUnarchiveProject}
           onUnarchiveFeature={handleUnarchiveFeature}
+          onOpenProjectHome={handleOpenProjectHome}
+          onOpenFeaturePanel={handleOpenFeaturePanel}
         />
 
         {/* Main content area */}
@@ -1083,9 +1124,14 @@ export function WorkspaceView() {
                 onCollapsedChange={setSharedPanelCollapsed}
               />
 
-              {/* Feature panels area */}
+              {/* Main content area */}
               <div className="flex-1 min-w-0 h-full">
-                {activeFeature ? (
+                {activeProject.view_mode === "home" ? (
+                  <ProjectHomeView
+                    projectPath={activeProject.path}
+                    projectName={activeProject.name}
+                  />
+                ) : activeFeature ? (
                   <div className="h-full relative">
                     {/* Render ALL features but hide inactive ones to keep PTY alive */}
                     {activeProject?.features.map((feature) => {

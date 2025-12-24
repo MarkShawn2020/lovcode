@@ -298,6 +298,7 @@ export function FeatureSidebar({
                   >
                     {feature.pinned && <DrawingPinFilledIcon className="w-3 h-3 text-primary/70 flex-shrink-0" />}
                     <StatusIcon status={feature.status} />
+                    {feature.seq > 0 && <span className="text-xs text-muted-foreground/60 flex-shrink-0">#{feature.seq}</span>}
                     <span className="text-sm truncate">{feature.name}</span>
                   </div>
                 </ContextMenuTrigger>
@@ -353,46 +354,44 @@ export function FeatureSidebar({
         </div>
 
         {/* Pinned sessions */}
-        {pinnedPanels.length > 0 && (
-          <div className="flex-1 min-h-0 flex flex-col border-t border-border">
-            <SectionHeader
-              title="Pinned Sessions"
-              count={pinnedPanels.length > 1 ? pinnedPanels.length : undefined}
-              expanded={pinnedExpanded}
-              onToggle={() => setPinnedExpanded(!pinnedExpanded)}
-              onAdd={onAddPinnedPanel}
-            />
-            {pinnedExpanded && <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              {pinnedPanels.map((panel) => {
-                const isExpanded = expandedPanels.has(panel.id);
-                return (
-                  <div
-                    key={panel.id}
-                    className={`flex flex-col bg-terminal border border-border overflow-hidden ${
-                      isExpanded ? (expandedCount > 0 ? "flex-1 min-h-0" : "flex-1") : "flex-shrink-0"
-                    }`}
-                  >
-                    <SessionPanel
-                      panel={panel}
-                      collapsible
-                      isExpanded={isExpanded}
-                      onToggleExpand={() => togglePanelExpanded(panel.id)}
-                      onPanelClose={() => onPanelClose(panel.id)}
-                      onPanelToggleShared={() => onPanelToggleShared(panel.id)}
-                      onPanelReload={() => onPanelReload(panel.id)}
-                      onSessionAdd={() => onSessionAdd(panel.id)}
-                      onSessionClose={(sessionId) => onSessionClose(panel.id, sessionId)}
-                      onSessionSelect={(sessionId) => onSessionSelect(panel.id, sessionId)}
-                      onSessionTitleChange={(sessionId, title) => onSessionTitleChange(panel.id, sessionId, title)}
-                      headerBg="bg-canvas-alt"
-                      titleFallback="Pinned"
-                    />
-                  </div>
-                );
-              })}
-            </div>}
-          </div>
-        )}
+        <div className="flex-1 min-h-0 flex flex-col border-t border-border">
+          <SectionHeader
+            title="Pinned Sessions"
+            count={pinnedPanels.length > 1 ? pinnedPanels.length : undefined}
+            expanded={pinnedExpanded}
+            onToggle={() => setPinnedExpanded(!pinnedExpanded)}
+            onAdd={onAddPinnedPanel}
+          />
+          {pinnedExpanded && pinnedPanels.length > 0 && <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {pinnedPanels.map((panel) => {
+              const isExpanded = expandedPanels.has(panel.id);
+              return (
+                <div
+                  key={panel.id}
+                  className={`flex flex-col bg-terminal border border-border overflow-hidden ${
+                    isExpanded ? (expandedCount > 0 ? "flex-1 min-h-0" : "flex-1") : "flex-shrink-0"
+                  }`}
+                >
+                  <SessionPanel
+                    panel={panel}
+                    collapsible
+                    isExpanded={isExpanded}
+                    onToggleExpand={() => togglePanelExpanded(panel.id)}
+                    onPanelClose={() => onPanelClose(panel.id)}
+                    onPanelToggleShared={() => onPanelToggleShared(panel.id)}
+                    onPanelReload={() => onPanelReload(panel.id)}
+                    onSessionAdd={() => onSessionAdd(panel.id)}
+                    onSessionClose={(sessionId) => onSessionClose(panel.id, sessionId)}
+                    onSessionSelect={(sessionId) => onSessionSelect(panel.id, sessionId)}
+                    onSessionTitleChange={(sessionId, title) => onSessionTitleChange(panel.id, sessionId, title)}
+                    headerBg="bg-canvas-alt"
+                    titleFallback="Pinned"
+                  />
+                </div>
+              );
+            })}
+          </div>}
+        </div>
       </div>
 
       {/* Archive confirmation dialog */}

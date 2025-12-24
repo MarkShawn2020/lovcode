@@ -57,6 +57,9 @@ pub struct PanelState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Feature {
     pub id: String,
+    /// Immutable sequence number (like database auto-increment ID)
+    #[serde(default)]
+    pub seq: u32,
     pub name: String,
     pub status: FeatureStatus,
     #[serde(default)]
@@ -214,6 +217,7 @@ pub fn create_feature(project_id: &str, name: String) -> Result<Feature, String>
 
     let feature = Feature {
         id: uuid::Uuid::new_v4().to_string(),
+        seq: 0, // Will be set by frontend using feature_counter
         name,
         status: FeatureStatus::Pending,
         pinned: None,

@@ -4067,6 +4067,50 @@ fn hook_notify_complete(app_handle: tauri::AppHandle, project_id: String, featur
 }
 
 // ============================================================================
+// Project Logo
+// ============================================================================
+
+/// Find project logo from common locations and return as base64 data URL
+#[tauri::command]
+fn get_project_logo(project_path: String) -> Option<String> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+
+    let logo_paths = [
+        "assets/logo.svg",
+        "assets/logo.png",
+        "assets/icon.svg",
+        "assets/icon.png",
+        "public/logo.svg",
+        "public/logo.png",
+        "logo.svg",
+        "logo.png",
+        "icon.svg",
+        "icon.png",
+    ];
+
+    let project = PathBuf::from(&project_path);
+
+    for rel_path in logo_paths {
+        let full_path = project.join(rel_path);
+        if full_path.exists() {
+            if let Ok(data) = fs::read(&full_path) {
+                let mime = if rel_path.ends_with(".svg") {
+                    "image/svg+xml"
+                } else if rel_path.ends_with(".png") {
+                    "image/png"
+                } else {
+                    "application/octet-stream"
+                };
+                let b64 = STANDARD.encode(&data);
+                return Some(format!("data:{};base64,{}", mime, b64));
+            }
+        }
+    }
+
+    None
+}
+
+// ============================================================================
 // macOS Window Configuration
 // ============================================================================
 
@@ -4345,6 +4389,8 @@ pub fn run() {
             hook_start_monitoring,
             hook_stop_monitoring,
             hook_is_monitoring,
+            // Project logo
+            get_project_logo,
             hook_get_monitored,
             hook_notify_complete
         ])

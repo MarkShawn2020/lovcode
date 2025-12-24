@@ -1,5 +1,6 @@
-import { useState } from "react";
-import { PlusIcon, CheckCircledIcon, UpdateIcon, ExclamationTriangleIcon, TimerIcon, ArchiveIcon } from "@radix-ui/react-icons";
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { PlusIcon, CheckCircledIcon, UpdateIcon, ExclamationTriangleIcon, TimerIcon, ArchiveIcon, HomeIcon, DashboardIcon, CubeIcon } from "@radix-ui/react-icons";
 import {
   ContextMenu,
   ContextMenuContent,
@@ -18,6 +19,28 @@ import {
 } from "../../components/ui/dropdown-menu";
 import type { WorkspaceProject, FeatureStatus, Feature } from "./types";
 
+function ProjectLogo({ projectPath }: { projectPath: string }) {
+  const [logoSrc, setLogoSrc] = useState<string | null>(null);
+
+  useEffect(() => {
+    invoke<string | null>("get_project_logo", { projectPath })
+      .then(setLogoSrc)
+      .catch(() => setLogoSrc(null));
+  }, [projectPath]);
+
+  if (!logoSrc) {
+    return <CubeIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />;
+  }
+
+  return (
+    <img
+      src={logoSrc}
+      alt="Project logo"
+      className="w-5 h-5 rounded object-contain flex-shrink-0"
+    />
+  );
+}
+
 type ViewMode = "projects" | "features";
 
 interface ProjectSidebarProps {
@@ -30,6 +53,8 @@ interface ProjectSidebarProps {
   onArchiveProject: (id: string) => void;
   onUnarchiveProject: (id: string) => void;
   onUnarchiveFeature: (projectId: string, featureId: string) => void;
+  onOpenProjectHome: (id: string) => void;
+  onOpenFeaturePanel: (id: string) => void;
 }
 
 export function ProjectSidebar({
@@ -42,6 +67,8 @@ export function ProjectSidebar({
   onArchiveProject,
   onUnarchiveProject,
   onUnarchiveFeature,
+  onOpenProjectHome,
+  onOpenFeaturePanel,
 }: ProjectSidebarProps) {
   const [viewMode, setViewMode] = useState<ViewMode>("projects");
 
@@ -100,15 +127,18 @@ export function ProjectSidebar({
                     }`}
                     onClick={() => onSelectProject(project.id)}
                   >
-                    <span
-                      className={`text-sm truncate ${
-                        isActive ? "text-primary font-medium" : "text-ink"
-                      }`}
-                    >
-                      {project.name}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <ProjectLogo projectPath={project.path} />
+                      <span
+                        className={`text-sm truncate ${
+                          isActive ? "text-primary font-medium" : "text-ink"
+                        }`}
+                      >
+                        {project.name.split(/[-_]/).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ')}
+                      </span>
+                    </div>
                     {/* Status indicators */}
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex items-center gap-2 mt-1 ml-6">
                       {statusCounts.running > 0 && (
                         <span className="flex items-center gap-0.5 text-xs text-blue-500">
                           <UpdateIcon className="w-3 h-3 animate-spin" />
@@ -137,6 +167,21 @@ export function ProjectSidebar({
                   </div>
                 </ContextMenuTrigger>
                 <ContextMenuContent className="min-w-[160px]">
+                  <ContextMenuItem
+                    onClick={() => onOpenFeaturePanel(project.id)}
+                    className="gap-2 cursor-pointer"
+                  >
+                    <DashboardIcon className="w-3.5 h-3.5" />
+                    <span>Open Features</span>
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    onClick={() => onOpenProjectHome(project.id)}
+                    className="gap-2 cursor-pointer"
+                  >
+                    <HomeIcon className="w-3.5 h-3.5" />
+                    <span>Project Home</span>
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
                   {archivedFeatures.length > 0 && (
                     <>
                       <ContextMenuSub>
