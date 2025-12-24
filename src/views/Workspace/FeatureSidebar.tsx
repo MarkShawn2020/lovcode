@@ -519,7 +519,7 @@ function StatusIcon({ status }: { status: FeatureStatus }) {
     case "pending":
       return <TimerIcon className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />;
     case "running":
-      return <UpdateIcon className="w-3.5 h-3.5 text-blue-500 animate-spin flex-shrink-0" />;
+      return <UpdateIcon className="w-3.5 h-3.5 text-primary animate-spin flex-shrink-0" />;
     case "completed":
       return <CheckCircledIcon className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />;
     case "needs-review":
