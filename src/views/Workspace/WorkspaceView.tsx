@@ -2,8 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Allotment } from "allotment";
-import "allotment/dist/style.css";
+import { motion } from "framer-motion";
 
 import { ProjectSidebar } from "./ProjectSidebar";
 import { FeatureTabs } from "./FeatureTabs";
@@ -866,13 +865,14 @@ export function WorkspaceView() {
               {/* Panel area */}
               <div className="flex-1 min-h-0 h-full">
                 {activeFeature ? (
-                  <Allotment key={sharedPanelCollapsed ? "collapsed" : "expanded"} className="h-full">
-                    {/* Shared panels zone */}
+                  <div className="flex h-full">
+                    {/* Shared panels zone with smooth animation */}
                     {sharedPanels.length > 0 && (
-                      <Allotment.Pane
-                        minSize={32}
-                        preferredSize={sharedPanelCollapsed ? 32 : 300}
-                        maxSize={sharedPanelCollapsed ? 32 : undefined}
+                      <motion.div
+                        initial={false}
+                        animate={{ width: sharedPanelCollapsed ? 32 : 300 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 30 }}
+                        className="h-full flex-shrink-0 overflow-hidden"
                       >
                         <SharedPanelZone
                           panels={sharedPanels}
@@ -886,42 +886,40 @@ export function WorkspaceView() {
                           onSessionSelect={handleSessionSelect}
                           onSessionTitleChange={handleSessionTitleChange}
                         />
-                      </Allotment.Pane>
+                      </motion.div>
                     )}
 
                     {/* Feature panels - render ALL features but hide inactive ones to keep PTY alive */}
-                    <Allotment.Pane minSize={300}>
-                      <div className="relative h-full">
-                        {activeProject?.features.map((feature) => {
-                          const isActive = feature.id === activeFeature.id;
-                          const featurePanels = allFeaturePanels.get(feature.id) || [];
-                          // Only render if active OR has panels (to keep PTY alive)
-                          if (!isActive && featurePanels.length === 0) return null;
-                          return (
-                            <div
-                              key={feature.id}
-                              className={`absolute inset-0 ${
-                                isActive ? "" : "invisible pointer-events-none"
-                              }`}
-                            >
-                              <PanelGrid
-                                panels={featurePanels}
-                                onPanelClose={handlePanelClose}
-                                onPanelAdd={handlePanelAdd}
-                                onPanelToggleShared={handlePanelToggleShared}
-                                onPanelReload={handlePanelReload}
-                                onSessionAdd={handleSessionAdd}
-                                onSessionClose={handleSessionClose}
-                                onSessionSelect={handleSessionSelect}
-                                onSessionTitleChange={handleSessionTitleChange}
-                                direction={feature.layout_direction || "horizontal"}
-                              />
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </Allotment.Pane>
-                  </Allotment>
+                    <div className="flex-1 min-w-0 relative h-full">
+                      {activeProject?.features.map((feature) => {
+                        const isActive = feature.id === activeFeature.id;
+                        const featurePanels = allFeaturePanels.get(feature.id) || [];
+                        // Only render if active OR has panels (to keep PTY alive)
+                        if (!isActive && featurePanels.length === 0) return null;
+                        return (
+                          <div
+                            key={feature.id}
+                            className={`absolute inset-0 ${
+                              isActive ? "" : "invisible pointer-events-none"
+                            }`}
+                          >
+                            <PanelGrid
+                              panels={featurePanels}
+                              onPanelClose={handlePanelClose}
+                              onPanelAdd={handlePanelAdd}
+                              onPanelToggleShared={handlePanelToggleShared}
+                              onPanelReload={handlePanelReload}
+                              onSessionAdd={handleSessionAdd}
+                              onSessionClose={handleSessionClose}
+                              onSessionSelect={handleSessionSelect}
+                              onSessionTitleChange={handleSessionTitleChange}
+                              direction={feature.layout_direction || "horizontal"}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 ) : (
                   <div className="h-full flex items-center justify-center">
                     <div className="text-center">
