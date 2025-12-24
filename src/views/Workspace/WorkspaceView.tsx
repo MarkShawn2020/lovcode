@@ -236,7 +236,7 @@ export function WorkspaceView() {
 
   // Update feature status handler (completed = auto archive)
   const handleUpdateFeatureStatus = useCallback(
-    (featureId: string, status: FeatureStatus) => {
+    (featureId: string, status: FeatureStatus, note?: string) => {
       if (!activeProject || !workspace) return;
 
       const shouldArchive = status === "completed";
@@ -250,11 +250,46 @@ export function WorkspaceView() {
           ...p,
           features: p.features.map((f) =>
             f.id === featureId
-              ? { ...f, status, archived: shouldArchive ? true : f.archived }
+              ? {
+                  ...f,
+                  status,
+                  archived: shouldArchive ? true : f.archived,
+                  archived_note: shouldArchive ? note : f.archived_note,
+                }
               : f
           ),
           active_feature_id:
             shouldArchive && p.active_feature_id === featureId
+              ? nonArchivedFeatures[0]?.id
+              : p.active_feature_id,
+        };
+      });
+      saveWorkspace({
+        ...workspace,
+        projects: newProjects,
+      });
+    },
+    [activeProject, workspace, saveWorkspace]
+  );
+
+  // Archive feature handler (cancel without completing)
+  const handleArchiveFeature = useCallback(
+    (featureId: string, note?: string) => {
+      if (!activeProject || !workspace) return;
+
+      const nonArchivedFeatures = activeProject.features.filter(
+        (f) => f.id !== featureId && !f.archived
+      );
+
+      const newProjects = workspace.projects.map((p) => {
+        if (p.id !== activeProject.id) return p;
+        return {
+          ...p,
+          features: p.features.map((f) =>
+            f.id === featureId ? { ...f, archived: true, archived_note: note } : f
+          ),
+          active_feature_id:
+            p.active_feature_id === featureId
               ? nonArchivedFeatures[0]?.id
               : p.active_feature_id,
         };
@@ -289,6 +324,28 @@ export function WorkspaceView() {
       });
     },
     [workspace, saveWorkspace]
+  );
+
+  // Pin/unpin feature handler
+  const handlePinFeature = useCallback(
+    (featureId: string, pinned: boolean) => {
+      if (!activeProject || !workspace) return;
+
+      const newProjects = workspace.projects.map((p) => {
+        if (p.id !== activeProject.id) return p;
+        return {
+          ...p,
+          features: p.features.map((f) =>
+            f.id === featureId ? { ...f, pinned } : f
+          ),
+        };
+      });
+      saveWorkspace({
+        ...workspace,
+        projects: newProjects,
+      });
+    },
+    [activeProject, workspace, saveWorkspace]
   );
 
   // Add panel handler
@@ -739,6 +796,8 @@ export function WorkspaceView() {
                 onSelectFeature={handleSelectFeature}
                 onAddFeature={handleStartAddFeature}
                 onUpdateFeatureStatus={handleUpdateFeatureStatus}
+                onArchiveFeature={handleArchiveFeature}
+                onPinFeature={handlePinFeature}
                 isAddingFeature={isAddingFeature}
                 newFeatureName={newFeatureName}
                 onNewFeatureNameChange={setNewFeatureName}

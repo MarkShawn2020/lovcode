@@ -60,7 +60,10 @@ pub struct Feature {
     pub name: String,
     pub status: FeatureStatus,
     #[serde(default)]
+    pub pinned: Option<bool>,
+    #[serde(default)]
     pub archived: Option<bool>,
+    pub archived_note: Option<String>,
     pub git_branch: Option<String>,
     pub chat_session_id: Option<String>,
     pub panels: Vec<PanelState>,
@@ -213,7 +216,9 @@ pub fn create_feature(project_id: &str, name: String) -> Result<Feature, String>
         id: uuid::Uuid::new_v4().to_string(),
         name,
         status: FeatureStatus::Pending,
+        pinned: None,
         archived: None,
+        archived_note: None,
         git_branch: None,
         chat_session_id: None,
         panels: Vec::new(),

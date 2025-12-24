@@ -104,22 +104,22 @@ export function PanelGrid({
                 onValueChange={(sessionId) => onSessionSelect(panel.id, sessionId)}
                 className="flex flex-col h-full gap-0"
               >
-                <div className="flex items-center bg-canvas-alt border-b border-border">
-                  <TabsList className="flex-1 h-8 !bg-transparent p-0 rounded-none justify-start gap-0">
+                <div className="flex items-center bg-muted border-b border-border">
+                  <TabsList className="flex-1 h-8 p-0 rounded-none justify-start gap-0">
                     {panel.sessions.map((session) => (
                       <TabsTrigger
                         key={session.id}
                         value={session.id}
-                        className="relative h-8 px-3 text-xs rounded-none border-r border-border data-[state=active]:bg-terminal data-[state=active]:shadow-none group"
+                        className="relative h-8 px-3 text-xs rounded-none border-r border-border data-[state=active]:bg-card data-[state=active]:shadow-none group"
                       >
-                        <span className="truncate max-w-24">{session.title || "Terminal"}</span>
+                        <span className="truncate max-w-20 pr-4">{session.title || "Terminal"}</span>
                         {panel.sessions.length > 1 && (
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
                               onSessionClose(panel.id, session.id);
                             }}
-                            className="ml-2 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-card-alt transition-opacity"
+                            className="absolute right-1 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-card-alt transition-opacity"
                           >
                             <Cross2Icon className="w-3 h-3" />
                           </button>
@@ -248,21 +248,21 @@ export function SharedPanelZone({
           >
             <div className="flex items-center bg-canvas-alt border-b border-border">
               <PinLeftIcon className="w-3.5 h-3.5 text-primary ml-2" />
-              <TabsList className="flex-1 h-8 !bg-transparent p-0 rounded-none justify-start gap-0">
+              <TabsList className="flex-1 h-8 p-0 rounded-none justify-start gap-0">
                 {panel.sessions.map((session) => (
                   <TabsTrigger
                     key={session.id}
                     value={session.id}
-                    className="relative h-8 px-3 text-xs rounded-none border-r border-border data-[state=active]:bg-terminal data-[state=active]:shadow-none group"
+                    className="relative h-8 px-3 text-xs rounded-none border-r border-border data-[state=active]:bg-card data-[state=active]:shadow-none group"
                   >
-                    <span className="truncate max-w-24">{session.title || "Shared"}</span>
+                    <span className="truncate max-w-20 pr-4">{session.title || "Shared"}</span>
                     {panel.sessions.length > 1 && (
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
                           onSessionClose(panel.id, session.id);
                         }}
-                        className="ml-2 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-card-alt transition-opacity"
+                        className="absolute right-1 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-card-alt transition-opacity"
                       >
                         <Cross2Icon className="w-3 h-3" />
                       </button>

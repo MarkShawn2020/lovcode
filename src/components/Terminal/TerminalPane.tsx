@@ -114,6 +114,14 @@ export function TerminalPane({
     term.open(containerRef.current);
     terminalRef.current = term;
 
+    // Debug: track key events to diagnose shift+symbol issue
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.shiftKey || event.key === 'Shift') {
+        console.log('[DEBUG] keyEvent:', event.type, 'key:', event.key, 'code:', event.code, 'shift:', event.shiftKey, 'isComposing:', event.isComposing);
+      }
+      return true;
+    });
+
     // Fit terminal to container
     requestAnimationFrame(() => {
       fitAddon.fit();
@@ -121,8 +129,6 @@ export function TerminalPane({
 
     // Track cleanup state - use object to avoid closure stale value
     const mountState = { isMounted: true };
-
-    const textarea = term.textarea;
 
     // Initialize PTY session (create if not exists, reuse if exists)
     const initPty = async () => {
@@ -175,17 +181,10 @@ export function TerminalPane({
 
     // Handle user input
     const onDataDisposable = term.onData((data) => {
+      console.log('[DEBUG] onData:', JSON.stringify(data), 'length:', data.length);
       const encoder = new TextEncoder();
       const bytes = Array.from(encoder.encode(data));
       invoke("pty_write", { id: sessionId, data: bytes }).catch(console.error);
-      // Fix: xterm.js doesn't clear textarea for CJK - clear only what was sent
-      if (textarea && textarea.value) {
-        if (textarea.value.startsWith(data)) {
-          textarea.value = textarea.value.slice(data.length);
-        } else {
-          textarea.value = "";
-        }
-      }
     });
 
     // Handle title changes

@@ -23,7 +23,9 @@ export interface Feature {
   id: string;
   name: string;
   status: FeatureStatus;
+  pinned?: boolean;
   archived?: boolean;
+  archived_note?: string;
   git_branch?: string;
   chat_session_id?: string;
   panels: PanelState[];
