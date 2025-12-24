@@ -1,3 +1,7 @@
+mod hook_watcher;
+mod pty_manager;
+mod workspace_store;
+
 use jieba_rs::Jieba;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
@@ -3900,6 +3904,157 @@ fn set_claude_code_autoupdater(disabled: bool) -> Result<(), String> {
 }
 
 // ============================================================================
+// PTY Terminal Commands
+// ============================================================================
+
+#[tauri::command]
+fn pty_create(id: String, cwd: String, shell: Option<String>) -> Result<String, String> {
+    pty_manager::create_session(id.clone(), cwd, shell)?;
+    Ok(id)
+}
+
+#[tauri::command]
+fn pty_write(id: String, data: Vec<u8>) -> Result<(), String> {
+    pty_manager::write_to_session(&id, &data)
+}
+
+#[tauri::command]
+fn pty_read(id: String) -> Result<Vec<u8>, String> {
+    pty_manager::read_from_session(&id)
+}
+
+#[tauri::command]
+fn pty_resize(id: String, cols: u16, rows: u16) -> Result<(), String> {
+    pty_manager::resize_session(&id, cols, rows)
+}
+
+#[tauri::command]
+fn pty_kill(id: String) -> Result<(), String> {
+    pty_manager::kill_session(&id)
+}
+
+#[tauri::command]
+fn pty_list() -> Vec<String> {
+    pty_manager::list_sessions()
+}
+
+#[tauri::command]
+fn pty_exists(id: String) -> bool {
+    pty_manager::session_exists(&id)
+}
+
+// ============================================================================
+// Workspace Commands
+// ============================================================================
+
+#[tauri::command]
+fn workspace_load() -> Result<workspace_store::WorkspaceData, String> {
+    workspace_store::load_workspace()
+}
+
+#[tauri::command]
+fn workspace_save(data: workspace_store::WorkspaceData) -> Result<(), String> {
+    workspace_store::save_workspace(&data)
+}
+
+#[tauri::command]
+fn workspace_add_project(path: String) -> Result<workspace_store::WorkspaceProject, String> {
+    workspace_store::add_project(path)
+}
+
+#[tauri::command]
+fn workspace_list_projects() -> Result<Vec<workspace_store::WorkspaceProject>, String> {
+    workspace_store::load_workspace().map(|d| d.projects)
+}
+
+#[tauri::command]
+fn workspace_remove_project(id: String) -> Result<(), String> {
+    workspace_store::remove_project(&id)
+}
+
+#[tauri::command]
+fn workspace_set_active_project(id: String) -> Result<(), String> {
+    workspace_store::set_active_project(&id)
+}
+
+#[tauri::command]
+fn workspace_create_feature(project_id: String, name: String) -> Result<workspace_store::Feature, String> {
+    workspace_store::create_feature(&project_id, name)
+}
+
+#[tauri::command]
+fn workspace_update_feature_status(
+    project_id: String,
+    feature_id: String,
+    status: workspace_store::FeatureStatus,
+) -> Result<(), String> {
+    workspace_store::update_feature_status(&project_id, &feature_id, status)
+}
+
+#[tauri::command]
+fn workspace_delete_feature(project_id: String, feature_id: String) -> Result<(), String> {
+    workspace_store::delete_feature(&project_id, &feature_id)
+}
+
+#[tauri::command]
+fn workspace_set_active_feature(project_id: String, feature_id: String) -> Result<(), String> {
+    workspace_store::set_active_feature(&project_id, &feature_id)
+}
+
+#[tauri::command]
+fn workspace_add_panel(
+    project_id: String,
+    feature_id: String,
+    panel: workspace_store::PanelState,
+) -> Result<(), String> {
+    workspace_store::add_panel_to_feature(&project_id, &feature_id, panel)
+}
+
+#[tauri::command]
+fn workspace_remove_panel(project_id: String, feature_id: String, panel_id: String) -> Result<(), String> {
+    workspace_store::remove_panel_from_feature(&project_id, &feature_id, &panel_id)
+}
+
+#[tauri::command]
+fn workspace_toggle_panel_shared(project_id: String, panel_id: String) -> Result<bool, String> {
+    workspace_store::toggle_panel_shared(&project_id, &panel_id)
+}
+
+#[tauri::command]
+fn workspace_get_pending_reviews() -> Result<Vec<(String, String, String)>, String> {
+    workspace_store::get_pending_reviews()
+}
+
+// ============================================================================
+// Hook Watcher Commands
+// ============================================================================
+
+#[tauri::command]
+fn hook_start_monitoring(project_id: String, feature_id: String) {
+    hook_watcher::start_monitoring(&project_id, &feature_id);
+}
+
+#[tauri::command]
+fn hook_stop_monitoring(project_id: String, feature_id: String) {
+    hook_watcher::stop_monitoring(&project_id, &feature_id);
+}
+
+#[tauri::command]
+fn hook_is_monitoring(project_id: String, feature_id: String) -> bool {
+    hook_watcher::is_monitoring(&project_id, &feature_id)
+}
+
+#[tauri::command]
+fn hook_get_monitored() -> Vec<String> {
+    hook_watcher::get_monitored_features()
+}
+
+#[tauri::command]
+fn hook_notify_complete(app_handle: tauri::AppHandle, project_id: String, feature_id: String, feature_name: String) {
+    hook_watcher::notify_feature_complete(&app_handle, &project_id, &feature_id, &feature_name);
+}
+
+// ============================================================================
 // macOS Window Configuration
 // ============================================================================
 
@@ -4146,7 +4301,36 @@ pub fn run() {
             get_reference_doc,
             get_claude_code_version_info,
             install_claude_code_version,
-            set_claude_code_autoupdater
+            set_claude_code_autoupdater,
+            // PTY commands
+            pty_create,
+            pty_write,
+            pty_read,
+            pty_resize,
+            pty_kill,
+            pty_list,
+            pty_exists,
+            // Workspace commands
+            workspace_load,
+            workspace_save,
+            workspace_add_project,
+            workspace_list_projects,
+            workspace_remove_project,
+            workspace_set_active_project,
+            workspace_create_feature,
+            workspace_update_feature_status,
+            workspace_delete_feature,
+            workspace_set_active_feature,
+            workspace_add_panel,
+            workspace_remove_panel,
+            workspace_toggle_panel_shared,
+            workspace_get_pending_reviews,
+            // Hook watcher commands
+            hook_start_monitoring,
+            hook_stop_monitoring,
+            hook_is_monitoring,
+            hook_get_monitored,
+            hook_notify_complete
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

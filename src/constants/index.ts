@@ -1,6 +1,5 @@
 import {
   HomeIcon,
-  FileIcon,
   ReaderIcon,
   BookmarkIcon,
   LightningBoltIcon,
@@ -14,6 +13,7 @@ import {
   TargetIcon,
   LayersIcon,
   PersonIcon,
+  DesktopIcon,
 } from "@radix-ui/react-icons";
 import type { FeatureType, FeatureConfig, TemplateCategory } from "../types";
 
@@ -26,7 +26,7 @@ export const FEATURE_ICONS: Record<
   React.ComponentType<{ className?: string }>
 > = {
   home: HomeIcon,
-  projects: FileIcon,
+  workspace: DesktopIcon,
   knowledge: ReaderIcon,
   "kb-reference": BookmarkIcon,
   "kb-distill": LightningBoltIcon,
@@ -48,11 +48,11 @@ export const FEATURE_ICONS: Record<
 // ============================================================================
 
 export const FEATURES: FeatureConfig[] = [
-  // Projects (parallel development)
+  // Workspace (parallel vibe coding)
   {
-    type: "projects",
-    label: "Projects",
-    description: "Parallel development projects",
+    type: "workspace",
+    label: "Workspace",
+    description: "Parallel vibe coding workspace",
     available: true,
     group: "history",
   },

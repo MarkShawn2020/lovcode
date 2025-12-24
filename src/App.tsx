@@ -25,11 +25,11 @@ import type {
 } from "./types";
 import { usePersistedState } from "./hooks";
 import { AppConfigContext, useAppConfig, type AppConfig } from "./context";
-import { FEATURES, FEATURE_ICONS, TEMPLATE_CATEGORIES } from "./constants";
+import { FEATURES, FEATURE_ICONS } from "./constants";
 // Modular views
 import {
   Home,
-  ProjectsView,
+  WorkspaceView,
   OutputStylesView,
   SubAgentsView,
   SubAgentDetailView,
@@ -162,8 +162,8 @@ function App() {
   const currentFeature: FeatureType | null =
     view.type === "chat-projects" || view.type === "chat-sessions" || view.type === "chat-messages"
       ? "chat"
-      : view.type === "projects"
-        ? "projects"
+      : view.type === "workspace"
+        ? "workspace"
         : view.type === "settings"
         ? "settings"
         : view.type === "commands" || view.type === "command-detail"
@@ -192,9 +192,6 @@ function App() {
     switch (feature) {
       case "chat":
         navigate({ type: "chat-projects" });
-        break;
-      case "projects":
-        navigate({ type: "projects" });
         break;
       case "settings":
         navigate({ type: "settings" });
@@ -225,6 +222,9 @@ function App() {
         break;
       case "marketplace":
         navigate({ type: "marketplace", category: marketplaceCategory });
+        break;
+      case "workspace":
+        navigate({ type: "workspace" });
         break;
       default:
         navigate({ type: "feature-todo", feature });
@@ -261,7 +261,7 @@ function App() {
 
           <div className="mx-4 border-t border-border" />
 
-          <div className="px-2 py-2">
+          <div className="px-2 py-2 flex flex-col gap-0.5">
             {FEATURES.filter(f => f.group === "history").map((feature) => (
               <FeatureButton
                 key={feature.type}
@@ -270,6 +270,15 @@ function App() {
                 onClick={() => handleFeatureClick(feature.type)}
               />
             ))}
+            <button
+              onClick={() => handleFeatureClick("chat")}
+              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                currentFeature === "chat" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
+              }`}
+            >
+              <ChatBubbleIcon className="w-5 h-5" />
+              <span className="text-sm">Chat History</span>
+            </button>
             <Collapsible defaultOpen={currentFeature?.startsWith("kb-")}>
               <CollapsibleTrigger className="w-full group">
                 <div className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
@@ -297,7 +306,7 @@ function App() {
 
           <div className="mx-4 border-t border-border" />
 
-          <div className="px-2 py-2">
+          <div className="px-2 py-2 flex flex-col gap-0.5">
             <button
               onClick={() => handleFeatureClick("settings")}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
@@ -331,49 +340,14 @@ function App() {
               </CollapsibleBody>
             </Collapsible>
             <button
-              onClick={() => handleFeatureClick("chat")}
+              onClick={() => handleFeatureClick("marketplace")}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-                currentFeature === "chat" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
+                currentFeature === "marketplace" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
               }`}
             >
-              <ChatBubbleIcon className="w-5 h-5" />
-              <span className="text-sm">Chats</span>
+              <CubeIcon className="w-5 h-5" />
+              <span className="text-sm">Marketplace</span>
             </button>
-          </div>
-
-          <div className="mx-4 border-t border-border" />
-
-          <div className="px-2 py-2">
-            <Collapsible defaultOpen={view.type === "marketplace" || view.type === "template-detail"}>
-              <CollapsibleTrigger className="w-full group">
-                <div className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-                  view.type === "marketplace" || view.type === "template-detail" ? "text-primary" : "text-ink hover:bg-card-alt"
-                }`}>
-                  <CubeIcon className="w-5 h-5" />
-                  <span className="text-sm flex-1">Marketplace</span>
-                  <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
-                </div>
-              </CollapsibleTrigger>
-              <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
-                {TEMPLATE_CATEGORIES.map((cat) => {
-                  const isActive = (view.type === "marketplace" && view.category === cat.key) ||
-                    (view.type === "template-detail" && view.category === cat.key);
-                  const Icon = cat.icon;
-                  return (
-                    <button
-                      key={cat.key}
-                      onClick={() => navigate({ type: "marketplace", category: cat.key })}
-                      className={`w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-left transition-colors ${
-                        isActive ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
-                      }`}
-                    >
-                      <Icon className="w-4 h-4" />
-                      <span className="text-sm">{cat.label}</span>
-                    </button>
-                  );
-                })}
-              </CollapsibleBody>
-            </Collapsible>
           </div>
         </div>
 
@@ -452,7 +426,7 @@ function App() {
 
         <main className="flex-1 overflow-auto">
         {view.type === "home" && <Home onFeatureClick={handleFeatureClick} />}
-        {view.type === "projects" && <ProjectsView />}
+        {view.type === "workspace" && <WorkspaceView />}
 
         {view.type === "chat-projects" && (
           <ProjectList

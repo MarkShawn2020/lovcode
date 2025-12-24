@@ -72,8 +72,8 @@ export function useNavigation(
         case "chat":
           navigate({ type: "chat-projects" });
           break;
-        case "projects":
-          navigate({ type: "projects" });
+        case "workspace":
+          navigate({ type: "workspace" });
           break;
         case "settings":
           navigate({ type: "settings" });
@@ -118,8 +118,8 @@ export function useNavigation(
     view.type === "chat-sessions" ||
     view.type === "chat-messages"
       ? "chat"
-      : view.type === "projects"
-        ? "projects"
+      : view.type === "workspace"
+        ? "workspace"
         : view.type === "settings"
           ? "settings"
           : view.type === "commands" || view.type === "command-detail"

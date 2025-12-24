@@ -11,6 +11,7 @@ export { CommandsView, CommandDetailView, CommandItemCard } from "./Commands";
 export { MarketplaceView, TemplateDetailView } from "./Marketplace";
 export { DistillMenu, DistillView, DistillDetailView, ReferenceView } from "./Knowledge";
 export { SettingsView, ClaudeCodeVersionSection } from "./Settings";
+export { WorkspaceView } from "./Workspace";
 export {
   VirtualChatList,
   ProjectList,
