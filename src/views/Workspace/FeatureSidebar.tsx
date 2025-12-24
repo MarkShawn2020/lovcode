@@ -5,13 +5,16 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronDownIcon,
+  FileIcon,
 } from "@radix-ui/react-icons";
 import { SessionPanel } from "../../components/PanelGrid/SessionPanel";
+import { FileTree } from "../../components/FileTree/FileTree";
 import type { PanelState } from "../../components/PanelGrid";
 
 interface FeatureSidebarProps {
   // Project & Feature
   projectName: string;
+  projectPath: string;
   featureName?: string;
   // Pinned panels
   pinnedPanels: PanelState[];
@@ -29,10 +32,13 @@ interface FeatureSidebarProps {
   // Global focus
   activePanelId?: string;
   onPanelFocus?: (id: string) => void;
+  // File actions
+  onFileClick?: (path: string) => void;
 }
 
 export function FeatureSidebar({
   projectName,
+  projectPath,
   featureName,
   pinnedPanels,
   onAddPinnedPanel,
@@ -47,9 +53,11 @@ export function FeatureSidebar({
   onCollapsedChange,
   activePanelId,
   onPanelFocus,
+  onFileClick,
 }: FeatureSidebarProps) {
   const [expandedPanels, setExpandedPanels] = useState<Set<string>>(() => new Set(pinnedPanels.map(p => p.id)));
   const [pinnedExpanded, setPinnedExpanded] = useState(true);
+  const [filesExpanded, setFilesExpanded] = useState(false);
   const [width, setWidth] = useState(() => {
     const saved = localStorage.getItem("feature-sidebar-width");
     return saved ? Number(saved) : 256;
@@ -132,6 +140,9 @@ export function FeatureSidebar({
               <DrawingPinFilledIcon className="w-3 h-3 text-primary/70" />
             </span>
           ))}
+          <span title="Files">
+            <FileIcon className="w-3 h-3 text-muted-foreground" />
+          </span>
         </div>
       </div>
     );
@@ -164,47 +175,64 @@ export function FeatureSidebar({
           <span className="flex-1 text-sm font-medium text-ink px-1 truncate">{title}</span>
         </div>
 
-        {/* Pinned sessions */}
-        <div className="flex-1 min-h-0 flex flex-col border-t border-border">
-          <SectionHeader
-            title="Pinned Sessions"
-            count={pinnedPanels.length > 1 ? pinnedPanels.length : undefined}
-            expanded={pinnedExpanded}
-            onToggle={() => setPinnedExpanded(!pinnedExpanded)}
-            onAdd={onAddPinnedPanel}
-          />
-          {pinnedExpanded && pinnedPanels.length > 0 && <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {pinnedPanels.map((panel) => {
-              const isExpanded = expandedPanels.has(panel.id);
-              const isActive = activePanelId === panel.id;
-              return (
-                <div
-                  key={panel.id}
-                  className={`flex flex-col bg-terminal border border-border overflow-hidden ${
-                    isExpanded ? (expandedCount > 0 ? "flex-1 min-h-0" : "flex-1") : "flex-shrink-0"
-                  }`}
-                  onMouseDown={() => onPanelFocus?.(panel.id)}
-                >
-                  <SessionPanel
-                    isActive={isActive}
-                    panel={panel}
-                    collapsible
-                    isExpanded={isExpanded}
-                    onToggleExpand={() => togglePanelExpanded(panel.id)}
-                    onPanelClose={() => onPanelClose(panel.id)}
-                    onPanelToggleShared={() => onPanelToggleShared(panel.id)}
-                    onPanelReload={() => onPanelReload(panel.id)}
-                    onSessionAdd={() => onSessionAdd(panel.id)}
-                    onSessionClose={(sessionId) => onSessionClose(panel.id, sessionId)}
-                    onSessionSelect={(sessionId) => onSessionSelect(panel.id, sessionId)}
-                    onSessionTitleChange={(sessionId, title) => onSessionTitleChange(panel.id, sessionId, title)}
-                    headerBg="bg-canvas-alt"
-                    titleFallback="Pinned"
-                  />
-                </div>
-              );
-            })}
-          </div>}
+        {/* Sections container */}
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {/* Pinned sessions */}
+          <div className={`flex flex-col border-t border-border ${pinnedExpanded && pinnedPanels.length > 0 ? "flex-1 min-h-0" : "flex-shrink-0"}`}>
+            <SectionHeader
+              title="Pinned Sessions"
+              count={pinnedPanels.length > 1 ? pinnedPanels.length : undefined}
+              expanded={pinnedExpanded}
+              onToggle={() => setPinnedExpanded(!pinnedExpanded)}
+              onAdd={onAddPinnedPanel}
+            />
+            {pinnedExpanded && pinnedPanels.length > 0 && <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              {pinnedPanels.map((panel) => {
+                const isExpanded = expandedPanels.has(panel.id);
+                const isActive = activePanelId === panel.id;
+                return (
+                  <div
+                    key={panel.id}
+                    className={`flex flex-col bg-terminal border border-border overflow-hidden ${
+                      isExpanded ? (expandedCount > 0 ? "flex-1 min-h-0" : "flex-1") : "flex-shrink-0"
+                    }`}
+                    onMouseDown={() => onPanelFocus?.(panel.id)}
+                  >
+                    <SessionPanel
+                      isActive={isActive}
+                      panel={panel}
+                      collapsible
+                      isExpanded={isExpanded}
+                      onToggleExpand={() => togglePanelExpanded(panel.id)}
+                      onPanelClose={() => onPanelClose(panel.id)}
+                      onPanelToggleShared={() => onPanelToggleShared(panel.id)}
+                      onPanelReload={() => onPanelReload(panel.id)}
+                      onSessionAdd={() => onSessionAdd(panel.id)}
+                      onSessionClose={(sessionId) => onSessionClose(panel.id, sessionId)}
+                      onSessionSelect={(sessionId) => onSessionSelect(panel.id, sessionId)}
+                      onSessionTitleChange={(sessionId, title) => onSessionTitleChange(panel.id, sessionId, title)}
+                      headerBg="bg-canvas-alt"
+                      titleFallback="Pinned"
+                    />
+                  </div>
+                );
+              })}
+            </div>}
+          </div>
+
+          {/* Files */}
+          <div className={`flex flex-col border-t border-border ${filesExpanded ? "flex-1 min-h-0" : "flex-shrink-0"}`}>
+            <SectionHeader
+              title="Files"
+              expanded={filesExpanded}
+              onToggle={() => setFilesExpanded(!filesExpanded)}
+            />
+            {filesExpanded && (
+              <div className="flex-1 min-h-0 overflow-auto">
+                <FileTree rootPath={projectPath} onFileClick={onFileClick} />
+              </div>
+            )}
+          </div>
         </div>
       </div>
   );
@@ -221,7 +249,7 @@ function SectionHeader({
   count?: number;
   expanded: boolean;
   onToggle: () => void;
-  onAdd: () => void;
+  onAdd?: () => void;
 }) {
   return (
     <div className="flex items-center px-3 py-1.5 flex-shrink-0">
@@ -241,13 +269,15 @@ function SectionHeader({
           <span className="text-xs text-muted-foreground/60">({count})</span>
         )}
       </div>
-      <button
-        onClick={(e) => { e.stopPropagation(); onAdd(); }}
-        className="p-0.5 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
-        title={`New ${title.toLowerCase().slice(0, -1)}`}
-      >
-        <PlusIcon className="w-3.5 h-3.5" />
-      </button>
+      {onAdd && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onAdd(); }}
+          className="p-0.5 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
+          title={`New ${title.toLowerCase().slice(0, -1)}`}
+        >
+          <PlusIcon className="w-3.5 h-3.5" />
+        </button>
+      )}
     </div>
   );
 }

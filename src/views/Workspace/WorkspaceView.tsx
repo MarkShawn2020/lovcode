@@ -7,6 +7,7 @@ import { ProjectSidebar } from "./ProjectSidebar";
 import { FeatureSidebar } from "./FeatureSidebar";
 import { ProjectHomeView } from "./ProjectHomeView";
 import { PanelGrid } from "../../components/PanelGrid";
+import { FileViewer } from "../../components/FileViewer";
 import type { PanelState } from "../../components/PanelGrid";
 import { disposeTerminal } from "../../components/Terminal";
 import type { WorkspaceData, WorkspaceProject, Feature, FeatureStatus, PanelState as StoredPanelState, SessionState as StoredSessionState, LayoutNode } from "./types";
@@ -16,6 +17,7 @@ export function WorkspaceView() {
   const [loading, setLoading] = useState(true);
   const [sharedPanelCollapsed, setSharedPanelCollapsed] = useState(false);
   const [activePanelId, setActivePanelId] = useState<string | undefined>();
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
   // Load workspace data and reset running features (PTY sessions don't survive restarts)
   useEffect(() => {
@@ -1109,6 +1111,7 @@ export function WorkspaceView() {
               {/* Feature sidebar with pinned sessions */}
               <FeatureSidebar
                 projectName={activeProject.name}
+                projectPath={activeProject.path}
                 featureName={activeFeature?.name}
                 pinnedPanels={sharedPanels}
                 onAddPinnedPanel={handleAddPinnedPanel}
@@ -1123,11 +1126,17 @@ export function WorkspaceView() {
                 onCollapsedChange={setSharedPanelCollapsed}
                 activePanelId={activePanelId}
                 onPanelFocus={setActivePanelId}
+                onFileClick={setSelectedFile}
               />
 
               {/* Main content area */}
               <div className="flex-1 min-w-0 h-full">
-                {activeProject.view_mode === "home" ? (
+                {selectedFile ? (
+                  <FileViewer
+                    filePath={selectedFile}
+                    onClose={() => setSelectedFile(null)}
+                  />
+                ) : activeProject.view_mode === "home" ? (
                   <ProjectHomeView
                     projectPath={activeProject.path}
                     projectName={activeProject.name}
