@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -740,45 +740,81 @@ export function WorkspaceView() {
   );
 
   // Convert workspace panels to PanelGrid format for ALL features (to keep PTY alive)
-  // Memoize to prevent unnecessary re-renders during resize
+  // Use refs to cache session objects and prevent unnecessary remounts
+  const sessionCacheRef = useRef(new Map<string, { id: string; ptyId: string; title: string; command?: string }>());
+
   const allFeaturePanels = useMemo(() => {
     const map = new Map<string, PanelState[]>();
+    const cache = sessionCacheRef.current;
+    const usedSessionIds = new Set<string>();
+
     activeProject?.features.forEach((feature) => {
       map.set(
         feature.id,
         feature.panels.map((p) => ({
           id: p.id,
-          sessions: (p.sessions || []).map((s) => ({
-            id: s.id,
-            ptyId: s.pty_id,
-            title: s.title,
-            command: s.command,
-          })),
+          sessions: (p.sessions || []).map((s) => {
+            usedSessionIds.add(s.id);
+            // Reuse cached session object if only ptyId matches (prevents remount)
+            const cached = cache.get(s.id);
+            if (cached && cached.ptyId === s.pty_id) {
+              // Update mutable fields without creating new object
+              cached.title = s.title;
+              cached.command = s.command;
+              return cached;
+            }
+            // Create and cache new session object
+            const session = { id: s.id, ptyId: s.pty_id, title: s.title, command: s.command };
+            cache.set(s.id, session);
+            return session;
+          }),
           activeSessionId: p.active_session_id,
           isShared: p.is_shared,
           cwd: activeProject?.path || "",
         }))
       );
     });
+
+    // Clean up stale cache entries
+    for (const id of cache.keys()) {
+      if (!usedSessionIds.has(id)) cache.delete(id);
+    }
+
     return map;
   }, [activeProject?.features, activeProject?.path]);
 
-  const sharedPanels = useMemo<PanelState[]>(
-    () =>
-      (activeProject?.shared_panels || []).map((p) => ({
-        id: p.id,
-        sessions: (p.sessions || []).map((s) => ({
-          id: s.id,
-          ptyId: s.pty_id,
-          title: s.title,
-          command: s.command,
-        })),
-        activeSessionId: p.active_session_id,
-        isShared: true,
-        cwd: activeProject?.path || "",
-      })) || [],
-    [activeProject?.shared_panels, activeProject?.path]
-  );
+  // Same caching pattern for shared panels
+  const sharedSessionCacheRef = useRef(new Map<string, { id: string; ptyId: string; title: string; command?: string }>());
+
+  const sharedPanels = useMemo<PanelState[]>(() => {
+    const cache = sharedSessionCacheRef.current;
+    const usedSessionIds = new Set<string>();
+
+    const result = (activeProject?.shared_panels || []).map((p) => ({
+      id: p.id,
+      sessions: (p.sessions || []).map((s) => {
+        usedSessionIds.add(s.id);
+        const cached = cache.get(s.id);
+        if (cached && cached.ptyId === s.pty_id) {
+          cached.title = s.title;
+          cached.command = s.command;
+          return cached;
+        }
+        const session = { id: s.id, ptyId: s.pty_id, title: s.title, command: s.command };
+        cache.set(s.id, session);
+        return session;
+      }),
+      activeSessionId: p.active_session_id,
+      isShared: true,
+      cwd: activeProject?.path || "",
+    }));
+
+    for (const id of cache.keys()) {
+      if (!usedSessionIds.has(id)) cache.delete(id);
+    }
+
+    return result;
+  }, [activeProject?.shared_panels, activeProject?.path]);
 
   if (loading) {
     return (

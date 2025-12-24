@@ -217,11 +217,13 @@ export function PanelGrid({
                   </div>
                 </div>
                 {/* Terminal content for each session */}
+                {/* forceMount keeps TabsContent in DOM so PTY stays alive when tab is inactive */}
                 <div className="flex-1 min-h-0 relative">
                   {panel.sessions.map((session) => (
                     <TabsContent
                       key={session.id}
                       value={session.id}
+                      forceMount
                       className="absolute inset-0 m-0 data-[state=inactive]:hidden"
                     >
                       <TerminalPane
@@ -390,11 +392,13 @@ export function SharedPanelZone({
                 </DropdownMenu>
               </div>
             </div>
+            {/* forceMount keeps TabsContent in DOM so PTY stays alive when tab is inactive */}
             <div className="flex-1 min-h-0 relative">
               {panel.sessions.map((session) => (
                 <TabsContent
                   key={session.id}
                   value={session.id}
+                  forceMount
                   className="absolute inset-0 m-0 data-[state=inactive]:hidden"
                 >
                   <TerminalPane
