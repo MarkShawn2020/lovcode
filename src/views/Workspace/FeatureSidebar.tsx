@@ -488,7 +488,7 @@ function SectionHeader({
   return (
     <div className="flex items-center px-3 py-1.5 flex-shrink-0">
       <div
-        className="flex items-center flex-1 cursor-pointer hover:bg-card-alt transition-colors rounded -ml-1 pl-1"
+        className="flex items-center flex-1 gap-1 cursor-pointer hover:bg-card-alt transition-colors rounded -ml-1 pl-1"
         onClick={onToggle}
       >
         {expanded ? (
@@ -496,7 +496,7 @@ function SectionHeader({
         ) : (
           <ChevronRightIcon className="w-3.5 h-3.5 text-muted-foreground" />
         )}
-        <span className="flex-1 text-center text-xs font-medium text-muted-foreground uppercase tracking-wide">
+        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
           {title}
         </span>
         {count !== undefined && count > 0 && (

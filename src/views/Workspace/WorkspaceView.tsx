@@ -925,7 +925,19 @@ export function WorkspaceView() {
         <ProjectSidebar
           projects={workspace?.projects || []}
           activeProjectId={workspace?.active_project_id}
+          activeFeatureId={activeProject?.active_feature_id}
           onSelectProject={handleSelectProject}
+          onSelectFeature={(projectId, featureId) => {
+            if (!workspace) return;
+            const newProjects = workspace.projects.map((p) =>
+              p.id === projectId ? { ...p, active_feature_id: featureId } : p
+            );
+            saveWorkspace({
+              ...workspace,
+              projects: newProjects,
+              active_project_id: projectId,
+            });
+          }}
           onAddProject={handleAddProject}
           onArchiveProject={handleArchiveProject}
           onUnarchiveProject={handleUnarchiveProject}

@@ -119,13 +119,13 @@ export function SessionPanel({
       onValueChange={onSessionSelect}
       className="flex flex-col h-full gap-0"
     >
-      <div className={`flex items-center gap-1 px-1 py-1 ${headerBg} border-b border-border flex-shrink-0`}>
-        <TabsList className="flex-1 h-6 p-0 rounded-md bg-transparent justify-start gap-0.5">
+      <div className={`flex items-center gap-2 px-2 py-1.5 ${headerBg} border-b border-border flex-shrink-0`}>
+        <TabsList className="flex-1 h-auto p-0 bg-transparent justify-start gap-3">
           {panel.sessions.map((session) => (
             <TabsTrigger
               key={session.id}
               value={session.id}
-              className="relative h-6 px-2.5 text-xs rounded-md text-muted-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:text-ink data-[state=active]:font-medium group"
+              className="relative h-auto px-0 py-1 text-xs border-b-2 border-transparent rounded-none bg-transparent shadow-none text-muted-foreground data-[state=active]:bg-transparent data-[state=active]:shadow-none data-[state=active]:text-ink data-[state=active]:border-primary group"
             >
               <EditableTabTitle
                 title={session.title}
