@@ -257,7 +257,7 @@ export function WorkspaceView() {
 
   // Add panel handler
   const handlePanelAdd = useCallback(
-    (_direction: "horizontal" | "vertical") => {
+    (direction: "horizontal" | "vertical") => {
       if (!activeProject || !activeFeature || !workspace) return;
 
       const panelId = crypto.randomUUID();
@@ -280,6 +280,7 @@ export function WorkspaceView() {
             return {
               ...f,
               panels: [...f.panels, { ...newPanel, is_shared: false, pty_id: ptyId }],
+              layout_direction: direction,
             };
           }),
         };
@@ -469,7 +470,7 @@ export function WorkspaceView() {
                     {/* Shared panels zone */}
                     {sharedPanels.length > 0 && (
                       <>
-                        <Panel defaultSize={30} minSize={15}>
+                        <Panel defaultSize={30} minSize={20}>
                           <SharedPanelZone
                             panels={sharedPanels}
                             onPanelClose={handlePanelClose}
@@ -489,6 +490,7 @@ export function WorkspaceView() {
                         onPanelAdd={handlePanelAdd}
                         onPanelToggleShared={handlePanelToggleShared}
                         onPanelTitleChange={handlePanelTitleChange}
+                        direction={activeFeature.layout_direction || "horizontal"}
                         autoSaveId={activeFeature.id}
                       />
                     </Panel>

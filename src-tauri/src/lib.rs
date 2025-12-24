@@ -3919,7 +3919,9 @@ fn pty_write(id: String, data: Vec<u8>) -> Result<(), String> {
 }
 
 #[tauri::command]
+#[allow(deprecated)]
 fn pty_read(id: String) -> Result<Vec<u8>, String> {
+    // Legacy - data now comes via pty-data events
     pty_manager::read_from_session(&id)
 }
 
@@ -4108,6 +4110,9 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder, PredefinedMenuItem};
+
+            // Initialize PTY manager with app handle for event emission
+            pty_manager::init(app.handle().clone());
 
             // Start watching distill directory for changes
             let app_handle = app.handle().clone();

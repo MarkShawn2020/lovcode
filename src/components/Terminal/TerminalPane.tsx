@@ -3,7 +3,17 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "@xterm/xterm/css/xterm.css";
+
+interface PtyDataEvent {
+  id: string;
+  data: number[];
+}
+
+interface PtyExitEvent {
+  id: string;
+}
 
 export interface TerminalPaneProps {
   /** Unique identifier for this terminal session */
@@ -31,13 +41,10 @@ export function TerminalPane({
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const readingRef = useRef(false);
-  const mountedRef = useRef(true);
 
   // Initialize terminal and PTY
   useEffect(() => {
     if (!containerRef.current) return;
-    mountedRef.current = true;
 
     // Create terminal instance
     const term = new Terminal({
@@ -88,6 +95,9 @@ export function TerminalPane({
       fitAddon.fit();
     });
 
+    // Track cleanup state
+    let isMounted = true;
+
     // Create PTY session
     const initPty = async () => {
       try {
@@ -100,9 +110,6 @@ export function TerminalPane({
           rows: term.rows,
         });
 
-        // Start reading from PTY
-        startReading();
-
         onReady?.();
       } catch (err) {
         console.error("Failed to create PTY:", err);
@@ -112,7 +119,6 @@ export function TerminalPane({
 
     // Handle user input
     const onDataDisposable = term.onData((data) => {
-      // Convert string to byte array
       const encoder = new TextEncoder();
       const bytes = Array.from(encoder.encode(data));
       invoke("pty_write", { id: ptyId, data: bytes }).catch(console.error);
@@ -123,43 +129,33 @@ export function TerminalPane({
       onTitleChange?.(title);
     });
 
-    // Start reading loop
-    const startReading = () => {
-      if (readingRef.current) return;
-      readingRef.current = true;
-      readLoop();
-    };
-
-    const readLoop = async () => {
-      while (mountedRef.current && readingRef.current) {
-        try {
-          const data = await invoke<number[]>("pty_read", { id: ptyId });
-          if (data && data.length > 0 && terminalRef.current) {
-            const bytes = new Uint8Array(data);
-            const text = new TextDecoder().decode(bytes);
-            terminalRef.current.write(text);
-          }
-        } catch (err) {
-          // Session might be closed
-          if (mountedRef.current) {
-            console.error("PTY read error:", err);
-            onExit?.();
-          }
-          break;
-        }
-        // Small delay to prevent CPU spinning
-        await new Promise((r) => setTimeout(r, 16));
+    // Listen for PTY data events
+    const unlistenData = listen<PtyDataEvent>("pty-data", (event) => {
+      if (event.payload.id === ptyId && isMounted && terminalRef.current) {
+        const bytes = new Uint8Array(event.payload.data);
+        const text = new TextDecoder().decode(bytes);
+        terminalRef.current.write(text);
       }
-    };
+    });
+
+    // Listen for PTY exit events
+    const unlistenExit = listen<PtyExitEvent>("pty-exit", (event) => {
+      if (event.payload.id === ptyId && isMounted) {
+        onExit?.();
+      }
+    });
 
     initPty();
 
     // Cleanup
     return () => {
-      mountedRef.current = false;
-      readingRef.current = false;
+      isMounted = false;
       onDataDisposable.dispose();
       onTitleDisposable.dispose();
+
+      // Unlisten events
+      unlistenData.then((fn) => fn());
+      unlistenExit.then((fn) => fn());
 
       // Kill PTY session
       invoke("pty_kill", { id: ptyId }).catch(() => {});

@@ -19,6 +19,7 @@ export interface Feature {
   git_branch?: string;
   chat_session_id?: string;
   panels: PanelState[];
+  layout_direction?: "horizontal" | "vertical";
   created_at: number;
 }
 

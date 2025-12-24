@@ -1,48 +1,67 @@
 //! PTY session management for terminal panels
 //!
-//! This module provides PTY (pseudo-terminal) functionality using portable-pty,
-//! enabling shell sessions within the Lovcode workspace.
+//! Event-driven architecture: data pushed via Tauri events instead of polling.
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::thread;
+use tauri::{AppHandle, Emitter};
 
-/// Session metadata (thread-safe)
-struct SessionMeta {
-    cwd: String,
-    command: Option<String>,
+/// Global AppHandle for emitting events
+static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// Initialize PTY manager with AppHandle
+pub fn init(app_handle: AppHandle) {
+    let _ = APP_HANDLE.set(app_handle);
 }
 
-/// I/O handles wrapped for thread safety
+/// PTY data event payload
+#[derive(Clone, Serialize)]
+pub struct PtyDataEvent {
+    pub id: String,
+    pub data: Vec<u8>,
+}
+
+/// PTY exit event payload
+#[derive(Clone, Serialize)]
+pub struct PtyExitEvent {
+    pub id: String,
+}
+
+/// Session I/O handles
 struct SessionIO {
     writer: Box<dyn Write + Send>,
-    reader: Box<dyn Read + Send>,
 }
 
-/// Global PTY session storage
-/// We separate metadata from I/O handles to work around Sync requirements
+/// Session control
+struct SessionControl {
+    running: Arc<AtomicBool>,
+}
+
+/// Global storages
 static PTY_SESSIONS: LazyLock<Mutex<HashMap<String, Arc<Mutex<SessionIO>>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-static PTY_META: LazyLock<Mutex<HashMap<String, SessionMeta>>> =
+static PTY_CONTROLS: LazyLock<Mutex<HashMap<String, SessionControl>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Resize handles stored separately (MasterPty is not Sync)
 static PTY_MASTERS: LazyLock<Mutex<HashMap<String, Box<dyn portable_pty::MasterPty + Send>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// Create a new PTY session
-///
-/// # Arguments
-/// * `id` - Unique identifier for this session
-/// * `cwd` - Working directory for the shell
-/// * `shell` - Optional shell command (defaults to user's shell or bash)
+/// Create a new PTY session with background reader thread
 pub fn create_session(id: String, cwd: String, shell: Option<String>) -> Result<(), String> {
+    let app_handle = APP_HANDLE
+        .get()
+        .ok_or_else(|| "PTY manager not initialized".to_string())?
+        .clone();
+
     let pty_system = native_pty_system();
 
-    // Create PTY pair with default size
+    // Create PTY pair
     let pair = pty_system
         .openpty(PtySize {
             rows: 24,
@@ -52,22 +71,21 @@ pub fn create_session(id: String, cwd: String, shell: Option<String>) -> Result<
         })
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    // Determine shell to use
+    // Determine shell
     let shell_cmd = shell.unwrap_or_else(|| {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
     });
 
-    // Build command
+    // Build and spawn command
     let mut cmd = CommandBuilder::new(&shell_cmd);
     cmd.cwd(&cwd);
 
-    // Spawn shell in PTY
     let _child = pair
         .slave
         .spawn_command(cmd)
         .map_err(|e| format!("Failed to spawn shell: {}", e))?;
 
-    // Get reader and writer from master
+    // Get reader and writer
     let reader = pair
         .master
         .try_clone_reader()
@@ -78,112 +96,111 @@ pub fn create_session(id: String, cwd: String, shell: Option<String>) -> Result<
         .take_writer()
         .map_err(|e| format!("Failed to take writer: {}", e))?;
 
-    // Store I/O handles
-    let io = Arc::new(Mutex::new(SessionIO { writer, reader }));
-
+    // Store writer
+    let io = Arc::new(Mutex::new(SessionIO { writer }));
     {
-        let mut sessions = PTY_SESSIONS
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+        let mut sessions = PTY_SESSIONS.lock().map_err(|e| e.to_string())?;
         sessions.insert(id.clone(), io);
     }
 
-    // Store metadata
+    // Store master for resize
     {
-        let mut meta = PTY_META
-            .lock()
-            .map_err(|e| format!("Failed to acquire meta lock: {}", e))?;
-        meta.insert(
-            id.clone(),
-            SessionMeta {
-                cwd,
-                command: Some(shell_cmd),
-            },
-        );
+        let mut masters = PTY_MASTERS.lock().map_err(|e| e.to_string())?;
+        masters.insert(id.clone(), pair.master);
     }
 
-    // Store master for resize operations
+    // Create control flag
+    let running = Arc::new(AtomicBool::new(true));
     {
-        let mut masters = PTY_MASTERS
-            .lock()
-            .map_err(|e| format!("Failed to acquire masters lock: {}", e))?;
-        masters.insert(id, pair.master);
+        let mut controls = PTY_CONTROLS.lock().map_err(|e| e.to_string())?;
+        controls.insert(id.clone(), SessionControl { running: running.clone() });
     }
+
+    // Spawn background reader thread
+    let session_id = id.clone();
+    let running_flag = running;
+
+    thread::spawn(move || {
+        read_loop(session_id, reader, running_flag, app_handle);
+    });
 
     Ok(())
 }
 
+/// Background reader loop - runs in dedicated thread per session
+fn read_loop(
+    id: String,
+    mut reader: Box<dyn Read + Send>,
+    running: Arc<AtomicBool>,
+    app_handle: AppHandle,
+) {
+    let mut buffer = vec![0u8; 16384]; // 16KB buffer
+
+    while running.load(Ordering::Relaxed) {
+        match reader.read(&mut buffer) {
+            Ok(0) => {
+                // EOF - session ended
+                let _ = app_handle.emit("pty-exit", PtyExitEvent { id: id.clone() });
+                break;
+            }
+            Ok(n) => {
+                let data = buffer[..n].to_vec();
+                let _ = app_handle.emit("pty-data", PtyDataEvent { id: id.clone(), data });
+            }
+            Err(e) => {
+                // Check if we should still be running
+                if running.load(Ordering::Relaxed) {
+                    eprintln!("PTY read error for {}: {}", id, e);
+                    let _ = app_handle.emit("pty-exit", PtyExitEvent { id: id.clone() });
+                }
+                break;
+            }
+        }
+    }
+
+    // Cleanup on exit
+    cleanup_session(&id);
+}
+
+/// Internal cleanup (called from reader thread)
+fn cleanup_session(id: &str) {
+    if let Ok(mut sessions) = PTY_SESSIONS.lock() {
+        sessions.remove(id);
+    }
+    if let Ok(mut controls) = PTY_CONTROLS.lock() {
+        controls.remove(id);
+    }
+    if let Ok(mut masters) = PTY_MASTERS.lock() {
+        masters.remove(id);
+    }
+}
+
 /// Write data to a PTY session
 pub fn write_to_session(id: &str, data: &[u8]) -> Result<(), String> {
-    let sessions = PTY_SESSIONS
-        .lock()
-        .map_err(|e| format!("Failed to acquire lock: {}", e))?;
+    let sessions = PTY_SESSIONS.lock().map_err(|e| e.to_string())?;
 
     let io = sessions
         .get(id)
         .ok_or_else(|| format!("PTY session '{}' not found", id))?;
 
-    let mut io_guard = io
-        .lock()
-        .map_err(|e| format!("Failed to acquire IO lock: {}", e))?;
+    let mut io_guard = io.lock().map_err(|e| e.to_string())?;
 
     io_guard
         .writer
         .write_all(data)
-        .map_err(|e| format!("Failed to write to PTY: {}", e))?;
+        .map_err(|e| format!("Failed to write: {}", e))?;
 
     io_guard
         .writer
         .flush()
-        .map_err(|e| format!("Failed to flush PTY: {}", e))?;
+        .map_err(|e| format!("Failed to flush: {}", e))?;
 
     Ok(())
 }
 
-/// Read available data from a PTY session (non-blocking with timeout)
-pub fn read_from_session(id: &str) -> Result<Vec<u8>, String> {
-    let io = {
-        let sessions = PTY_SESSIONS
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
-
-        sessions
-            .get(id)
-            .ok_or_else(|| format!("PTY session '{}' not found", id))?
-            .clone()
-    };
-
-    // Read with timeout in a separate thread
-    let (tx, rx) = std::sync::mpsc::channel();
-    let io_clone = Arc::clone(&io);
-
-    thread::spawn(move || {
-        let mut buffer = vec![0u8; 8192];
-        let result = match io_clone.lock() {
-            Ok(mut guard) => match guard.reader.read(&mut buffer) {
-                Ok(n) => {
-                    buffer.truncate(n);
-                    Ok(buffer)
-                }
-                Err(e) => Err(format!("Read error: {}", e)),
-            },
-            Err(e) => Err(format!("Lock error: {}", e)),
-        };
-        let _ = tx.send(result);
-    });
-
-    // Wait with timeout
-    match rx.recv_timeout(std::time::Duration::from_millis(100)) {
-        Ok(result) => result,
-        Err(_) => Ok(Vec::new()), // Timeout = no data available
-    }
-}
-
 /// Resize a PTY session
 pub fn resize_session(id: &str, cols: u16, rows: u16) -> Result<(), String> {
-    let mut masters = PTY_MASTERS
-        .lock()
-        .map_err(|e| format!("Failed to acquire masters lock: {}", e))?;
+    let mut masters = PTY_MASTERS.lock().map_err(|e| e.to_string())?;
 
     let master = masters
         .get_mut(id)
@@ -196,32 +213,22 @@ pub fn resize_session(id: &str, cols: u16, rows: u16) -> Result<(), String> {
             pixel_width: 0,
             pixel_height: 0,
         })
-        .map_err(|e| format!("Failed to resize PTY: {}", e))?;
+        .map_err(|e| format!("Failed to resize: {}", e))?;
 
     Ok(())
 }
 
 /// Kill a PTY session
 pub fn kill_session(id: &str) -> Result<(), String> {
-    // Remove from all storages
-    {
-        let mut sessions = PTY_SESSIONS
-            .lock()
-            .map_err(|e| format!("Failed to acquire lock: {}", e))?;
-        sessions.remove(id);
+    // Signal reader thread to stop
+    if let Ok(controls) = PTY_CONTROLS.lock() {
+        if let Some(ctrl) = controls.get(id) {
+            ctrl.running.store(false, Ordering::Relaxed);
+        }
     }
-    {
-        let mut meta = PTY_META
-            .lock()
-            .map_err(|e| format!("Failed to acquire meta lock: {}", e))?;
-        meta.remove(id);
-    }
-    {
-        let mut masters = PTY_MASTERS
-            .lock()
-            .map_err(|e| format!("Failed to acquire masters lock: {}", e))?;
-        masters.remove(id);
-    }
+
+    // Cleanup will happen in reader thread, but also do immediate cleanup
+    cleanup_session(id);
 
     Ok(())
 }
@@ -242,11 +249,9 @@ pub fn session_exists(id: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Get session info (cwd, command)
-#[allow(dead_code)]
-pub fn get_session_info(id: &str) -> Option<(String, Option<String>)> {
-    PTY_META
-        .lock()
-        .ok()
-        .and_then(|meta| meta.get(id).map(|m| (m.cwd.clone(), m.command.clone())))
+/// Legacy read function - kept for compatibility but should not be used
+#[deprecated(note = "Use event-based reading via pty-data events instead")]
+pub fn read_from_session(_id: &str) -> Result<Vec<u8>, String> {
+    // Return empty - data now comes via events
+    Ok(Vec::new())
 }
