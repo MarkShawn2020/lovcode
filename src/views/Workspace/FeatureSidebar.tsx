@@ -9,6 +9,7 @@ import {
 } from "@radix-ui/react-icons";
 import { SessionPanel } from "../../components/PanelGrid/SessionPanel";
 import { FileTree } from "../../components/FileTree/FileTree";
+import { useResize } from "../../hooks/useResize";
 import type { PanelState } from "../../components/PanelGrid";
 
 interface FeatureSidebarProps {
@@ -77,17 +78,29 @@ export function FeatureSidebar({
   });
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState("");
-  const [width, setWidth] = useState(() => {
-    const saved = localStorage.getItem("feature-sidebar-width");
-    return saved ? Number(saved) : 256;
-  });
-  const sidebarRef = useRef<HTMLDivElement>(null);
+
+  const sectionsRef = useRef<HTMLDivElement>(null);
   const renameInputRef = useRef<HTMLInputElement>(null);
 
-  // Persist states
-  useEffect(() => {
-    localStorage.setItem("feature-sidebar-width", String(width));
-  }, [width]);
+  // Resize hooks
+  const { value: width, handleMouseDown } = useResize({
+    direction: "horizontal",
+    storageKey: "feature-sidebar-width",
+    defaultValue: 256,
+    min: 180,
+    max: 480,
+  });
+
+  const { value: pinnedRatio, handleMouseDown: handleVerticalResize } = useResize({
+    direction: "vertical",
+    storageKey: "feature-sidebar-pinned-ratio",
+    defaultValue: 0.5,
+    min: 0.2,
+    max: 0.8,
+    containerRef: sectionsRef,
+  });
+
+  // Persist expand states
   useEffect(() => {
     localStorage.setItem("feature-sidebar-expanded-panels", JSON.stringify([...expandedPanels]));
   }, [expandedPanels]);
@@ -97,35 +110,6 @@ export function FeatureSidebar({
   useEffect(() => {
     localStorage.setItem("feature-sidebar-files-expanded", String(filesExpanded));
   }, [filesExpanded]);
-
-  // Resize handlers
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    const sidebar = sidebarRef.current;
-    if (!sidebar) return;
-
-    const startX = e.clientX;
-    const startWidth = width;
-
-    document.body.style.cursor = "col-resize";
-    document.body.style.userSelect = "none";
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const delta = e.clientX - startX;
-      const newWidth = Math.min(Math.max(startWidth + delta, 180), 480);
-      setWidth(newWidth);
-    };
-
-    const handleMouseUp = () => {
-      document.body.style.cursor = "";
-      document.body.style.userSelect = "";
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
-    };
-
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-  }, [width]);
 
   // Auto-expand newly pinned panels
   useEffect(() => {
@@ -204,7 +188,6 @@ export function FeatureSidebar({
 
   return (
       <div
-        ref={sidebarRef}
         className="h-full flex flex-col bg-canvas-alt border-r border-border min-w-0 relative"
         style={{ width }}
       >
@@ -248,9 +231,12 @@ export function FeatureSidebar({
         </div>
 
         {/* Sections container */}
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div ref={sectionsRef} className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {/* Pinned sessions */}
-          <div className={`flex flex-col border-t border-border ${pinnedExpanded && pinnedPanels.length > 0 ? "flex-1 min-h-0" : "flex-shrink-0"}`}>
+          <div
+            className="flex flex-col border-t border-border overflow-hidden flex-shrink-0"
+            style={pinnedExpanded && pinnedPanels.length > 0 && filesExpanded ? { height: `${pinnedRatio * 100}%` } : pinnedExpanded && pinnedPanels.length > 0 ? { flex: 1 } : undefined}
+          >
             <SectionHeader
               title="Pinned Sessions"
               count={pinnedPanels.length > 1 ? pinnedPanels.length : undefined}
@@ -292,8 +278,21 @@ export function FeatureSidebar({
             </div>}
           </div>
 
+          {/* Resize handle between sections */}
+          {pinnedExpanded && pinnedPanels.length > 0 && filesExpanded && (
+            <div
+              onMouseDown={handleVerticalResize}
+              className="h-1 cursor-row-resize flex-shrink-0 group relative"
+            >
+              <div className="absolute inset-x-0 top-1/2 -translate-y-1/2 h-0.5 group-hover:bg-primary/50 transition-colors" />
+            </div>
+          )}
+
           {/* Files */}
-          <div className={`flex flex-col border-t border-border ${filesExpanded ? "flex-1 min-h-0" : "flex-shrink-0"}`}>
+          <div
+            className="flex flex-col border-t border-border overflow-hidden flex-shrink-0"
+            style={pinnedExpanded && pinnedPanels.length > 0 && filesExpanded ? { height: `${(1 - pinnedRatio) * 100}%` } : filesExpanded ? { flex: 1 } : undefined}
+          >
             <SectionHeader
               title="Files"
               expanded={filesExpanded}
