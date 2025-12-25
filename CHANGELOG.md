@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.3
+
+### Patch Changes
+
+- Fix CI build by removing unused variables
+
 ## 0.12.2
 
 ### Patch Changes
