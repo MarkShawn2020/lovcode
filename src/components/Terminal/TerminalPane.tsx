@@ -26,6 +26,8 @@ export interface TerminalPaneProps {
   cwd: string;
   /** Optional command to run instead of shell */
   command?: string;
+  /** Auto focus terminal when ready */
+  autoFocus?: boolean;
   /** Callback when terminal is ready */
   onReady?: () => void;
   /** Callback when terminal session ends */
@@ -40,6 +42,7 @@ export function TerminalPane({
   ptyId,
   cwd,
   command,
+  autoFocus = false,
   onReady,
   onExit,
   onTitleChange,
@@ -48,12 +51,14 @@ export function TerminalPane({
   const containerRef = useRef<HTMLDivElement>(null);
   const cwdRef = useRef(cwd);
   const commandRef = useRef(command);
+  const autoFocusRef = useRef(autoFocus);
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
   const onTitleChangeRef = useRef(onTitleChange);
 
   useEffect(() => { cwdRef.current = cwd; }, [cwd]);
   useEffect(() => { commandRef.current = command; }, [command]);
+  useEffect(() => { autoFocusRef.current = autoFocus; }, [autoFocus]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onExitRef.current = onExit; }, [onExit]);
   useEffect(() => { onTitleChangeRef.current = onTitleChange; }, [onTitleChange]);
@@ -80,14 +85,57 @@ export function TerminalPane({
 
     // IME Shift+symbol fix: detect dropped characters and resend
     // xterm.js may drop the first Shift+symbol when Chinese IME is active
+    const IME_RESEND_DELAY_MS = 200;
     let pendingChar: string | null = null;
     let pendingTimer: ReturnType<typeof setTimeout> | null = null;
     let dataReceived = false;
+    let isComposing = false;
+
+    const handleInputEvent = (event: InputEvent) => {
+      if (!pendingChar) return;
+      if (!event.inputType.startsWith("insert")) return;
+
+      dataReceived = true;
+      const data = event.data ?? "";
+      const isCompositionInput = event.inputType.startsWith("insertComposition");
+      const hasNonAscii = data !== "" && /[^\x00-\x7f]/.test(data);
+
+      if (data.includes(pendingChar) || hasNonAscii || isCompositionInput) {
+        clearPending();
+      }
+    };
+
+    const clearPending = () => {
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+      pendingChar = null;
+      dataReceived = false;
+    };
+
+    const textarea = pooled.container.querySelector("textarea");
+    const handleCompositionStart = () => {
+      isComposing = true;
+      clearPending();
+    };
+    const handleCompositionEnd = () => {
+      isComposing = false;
+    };
+
+    if (textarea) {
+      textarea.addEventListener("compositionstart", handleCompositionStart);
+      textarea.addEventListener("compositionend", handleCompositionEnd);
+      textarea.addEventListener("beforeinput", handleInputEvent);
+      textarea.addEventListener("input", handleInputEvent);
+    }
 
     const customKeyHandler = (event: KeyboardEvent) => {
       if (event.type !== "keydown") return true;
-      if (event.isComposing) return true;
+      if (event.isComposing || isComposing) return true;
       if (!ptyReadySessions.has(sessionId)) return true;
+      if (event.key === "Process" || event.key === "Unidentified") return true;
+      if (event.keyCode === 229) return true;
 
       if (event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey) {
         const key = event.key;
@@ -98,14 +146,14 @@ export function TerminalPane({
 
           if (pendingTimer) clearTimeout(pendingTimer);
           pendingTimer = setTimeout(() => {
-            // If no data received within 50ms, the char was dropped - resend it
-            if (pendingChar && !dataReceived) {
+            // If no data arrives within the delay, the char was dropped - resend it.
+            if (pendingChar && !dataReceived && !isComposing) {
               const encoder = new TextEncoder();
               invoke("pty_write", { id: sessionId, data: Array.from(encoder.encode(pendingChar)) });
             }
             pendingChar = null;
             pendingTimer = null;
-          }, 50);
+          }, IME_RESEND_DELAY_MS);
         }
       }
       return true; // Let xterm handle normally
@@ -146,6 +194,14 @@ export function TerminalPane({
           rows: term.rows,
         }).catch(() => {});
 
+        console.log('[DEBUG][TerminalPane] PTY ready', { sessionId, autoFocus: autoFocusRef.current });
+        // Focus if autoFocus is true when PTY becomes ready
+        if (autoFocusRef.current) {
+          requestAnimationFrame(() => {
+            console.log('[DEBUG][TerminalPane] Focus on PTY ready', { sessionId });
+            term.focus();
+          });
+        }
         onReadyRef.current?.();
       } catch (err) {
         if (mountState.isMounted) {
@@ -207,6 +263,12 @@ export function TerminalPane({
     return () => {
       mountState.isMounted = false;
       if (pendingTimer) clearTimeout(pendingTimer);
+      if (textarea) {
+        textarea.removeEventListener("compositionstart", handleCompositionStart);
+        textarea.removeEventListener("compositionend", handleCompositionEnd);
+        textarea.removeEventListener("beforeinput", handleInputEvent);
+        textarea.removeEventListener("input", handleInputEvent);
+      }
       onDataDisposable.dispose();
       onTitleDisposable.dispose();
       unlistenData.then((fn) => fn());
@@ -244,6 +306,18 @@ export function TerminalPane({
       resizeObserver.disconnect();
     };
   }, [handleResize]);
+
+  // Auto-focus when autoFocus prop becomes true
+  useEffect(() => {
+    if (!autoFocus) return;
+    if (!ptyReadySessions.has(ptyId)) return;
+
+    const pooled = attachTerminal(ptyId, containerRef.current!);
+    if (pooled) {
+      console.log('[DEBUG][TerminalPane] autoFocus triggered', { ptyId });
+      pooled.term.focus();
+    }
+  }, [autoFocus, ptyId]);
 
   // Focus terminal on click
   const handleClick = useCallback(() => {

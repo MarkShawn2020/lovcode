@@ -110,6 +110,7 @@ export function SessionPanel({
   headerBg = "bg-muted",
   titleFallback = "Terminal",
 }: SessionPanelProps) {
+  console.log('[DEBUG][SessionPanel]', { panelId: panel.id, isActive, activeSessionId: panel.activeSessionId });
   const [autoCopyEnabled, setAutoCopyEnabled] = useState(getAutoCopyOnSelect);
 
   const handleTitleChange = useCallback(
@@ -252,7 +253,9 @@ export function SessionPanel({
                 ptyId={session.ptyId}
                 cwd={panel.cwd}
                 command={session.command}
+                autoFocus={session.id === panel.activeSessionId && isActive}
                 onTitleChange={handleTitleChange(session.id)}
+                onExit={() => onSessionClose(session.id)}
               />
             </TabsContent>
           ))}

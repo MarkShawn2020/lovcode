@@ -814,6 +814,14 @@ export function WorkspaceView() {
         }
       }
 
+      // Helper: ensure at least one session exists after close
+      const ensureSessions = (sessions: StoredSessionState[], closedId: string, featureName?: string): StoredSessionState[] => {
+        const remaining = sessions.filter((s) => s.id !== closedId);
+        if (remaining.length > 0) return remaining;
+        // Create a fresh session when last one closes
+        return [{ id: crypto.randomUUID(), pty_id: crypto.randomUUID(), title: featureName || "Terminal" }];
+      };
+
       const newProjects = workspace.projects.map((p) => {
         if (p.id !== activeProject.id) return p;
         return {
@@ -822,7 +830,7 @@ export function WorkspaceView() {
             ...f,
             panels: f.panels.map((panel) => {
               if (panel.id !== panelId) return panel;
-              const newSessions = (panel.sessions || []).filter((s) => s.id !== sessionId);
+              const newSessions = ensureSessions(panel.sessions || [], sessionId, f.name);
               const newActiveId = panel.active_session_id === sessionId
                 ? newSessions[0]?.id || ""
                 : panel.active_session_id;
@@ -831,7 +839,7 @@ export function WorkspaceView() {
           })),
           shared_panels: (p.shared_panels || []).map((panel) => {
             if (panel.id !== panelId) return panel;
-            const newSessions = (panel.sessions || []).filter((s) => s.id !== sessionId);
+            const newSessions = ensureSessions(panel.sessions || [], sessionId);
             const newActiveId = panel.active_session_id === sessionId
               ? newSessions[0]?.id || ""
               : panel.active_session_id;
