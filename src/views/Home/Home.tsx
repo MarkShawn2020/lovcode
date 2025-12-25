@@ -17,10 +17,15 @@ interface HomeData {
   commands: LocalCommand[];
 }
 
+interface ActivityStats {
+  daily: Record<string, number>;
+  hourly: Record<string, number>;
+  detailed: Record<string, number>;
+}
+
 export function Home({ onFeatureClick, onProjectClick, onSessionClick, onSearch }: HomeProps) {
   const [data, setData] = useState<HomeData | null>(null);
-
-  const [dailyStats, setDailyStats] = useState<Map<string, number>>(new Map());
+  const [activityStats, setActivityStats] = useState<ActivityStats | null>(null);
 
   useEffect(() => {
     Promise.all([
@@ -31,10 +36,8 @@ export function Home({ onFeatureClick, onProjectClick, onSessionClick, onSearch 
       setData({ projects, sessions, commands });
     });
 
-    // Load daily message stats for heatmap (separate call, can be slow)
-    invoke<Record<string, number>>("get_daily_message_stats").then((stats) => {
-      setDailyStats(new Map(Object.entries(stats)));
-    });
+    // Load activity stats for heatmap
+    invoke<ActivityStats>("get_activity_stats").then(setActivityStats);
   }, []);
 
 
@@ -83,7 +86,12 @@ export function Home({ onFeatureClick, onProjectClick, onSessionClick, onSearch 
         {/* Activity Heatmap + Stats */}
         {data && (
           <div className="bg-card/50 rounded-2xl p-5 border border-border/40">
-            <ActivityHeatmap data={dailyStats} />
+            {activityStats && (
+              <ActivityHeatmap
+                daily={activityStats.daily}
+                detailed={activityStats.detailed}
+              />
+            )}
             {/* Inline Stats */}
             {stats && (
               <div className="flex items-center gap-6 mt-4 pt-4 border-t border-border/40 text-sm text-muted-foreground">

@@ -171,19 +171,6 @@ export function WorkspaceView() {
     [workspace, saveWorkspace]
   );
 
-  // Select project handler
-  const handleSelectProject = useCallback(
-    (id: string) => {
-      if (workspace) {
-        saveWorkspace({
-          ...workspace,
-          active_project_id: id,
-        });
-      }
-    },
-    [workspace, saveWorkspace]
-  );
-
   // Add new feature with auto-generated name
   const handleAddFeature = useCallback(async (projectId?: string) => {
     if (!workspace) return;
@@ -242,92 +229,6 @@ export function WorkspaceView() {
       console.error("Failed to rename feature:", err);
     }
   }, [activeProject, workspace, saveWorkspace]);
-
-  // Select feature handler
-  const handleSelectFeature = useCallback(
-    (featureId: string) => {
-      if (!activeProject || !workspace) return;
-
-      const newProjects = workspace.projects.map((p) =>
-        p.id === activeProject.id
-          ? { ...p, active_feature_id: featureId, view_mode: "features" as const }
-          : p
-      );
-      saveWorkspace({
-        ...workspace,
-        projects: newProjects,
-      });
-    },
-    [activeProject, workspace, saveWorkspace]
-  );
-
-  // Update feature status handler (completed = auto archive)
-  const handleUpdateFeatureStatus = useCallback(
-    (featureId: string, status: FeatureStatus, note?: string) => {
-      if (!activeProject || !workspace) return;
-
-      const shouldArchive = status === "completed";
-      const nonArchivedFeatures = activeProject.features.filter(
-        (f) => f.id !== featureId && !f.archived
-      );
-
-      const newProjects = workspace.projects.map((p) => {
-        if (p.id !== activeProject.id) return p;
-        return {
-          ...p,
-          features: p.features.map((f) =>
-            f.id === featureId
-              ? {
-                  ...f,
-                  status,
-                  archived: shouldArchive ? true : f.archived,
-                  archived_note: shouldArchive ? note : f.archived_note,
-                }
-              : f
-          ),
-          active_feature_id:
-            shouldArchive && p.active_feature_id === featureId
-              ? nonArchivedFeatures[0]?.id
-              : p.active_feature_id,
-        };
-      });
-      saveWorkspace({
-        ...workspace,
-        projects: newProjects,
-      });
-    },
-    [activeProject, workspace, saveWorkspace]
-  );
-
-  // Archive feature handler (cancel without completing)
-  const handleArchiveFeature = useCallback(
-    (featureId: string, note?: string) => {
-      if (!activeProject || !workspace) return;
-
-      const nonArchivedFeatures = activeProject.features.filter(
-        (f) => f.id !== featureId && !f.archived
-      );
-
-      const newProjects = workspace.projects.map((p) => {
-        if (p.id !== activeProject.id) return p;
-        return {
-          ...p,
-          features: p.features.map((f) =>
-            f.id === featureId ? { ...f, archived: true, archived_note: note } : f
-          ),
-          active_feature_id:
-            p.active_feature_id === featureId
-              ? nonArchivedFeatures[0]?.id
-              : p.active_feature_id,
-        };
-      });
-      saveWorkspace({
-        ...workspace,
-        projects: newProjects,
-      });
-    },
-    [activeProject, workspace, saveWorkspace]
-  );
 
   // Unarchive feature handler (restore to tabs)
   const handleUnarchiveFeature = useCallback(
@@ -429,28 +330,6 @@ export function WorkspaceView() {
       });
     },
     [workspace, saveWorkspace]
-  );
-
-  // Pin/unpin feature handler
-  const handlePinFeature = useCallback(
-    (featureId: string, pinned: boolean) => {
-      if (!activeProject || !workspace) return;
-
-      const newProjects = workspace.projects.map((p) => {
-        if (p.id !== activeProject.id) return p;
-        return {
-          ...p,
-          features: p.features.map((f) =>
-            f.id === featureId ? { ...f, pinned } : f
-          ),
-        };
-      });
-      saveWorkspace({
-        ...workspace,
-        projects: newProjects,
-      });
-    },
-    [activeProject, workspace, saveWorkspace]
   );
 
   // Layout tree utilities
