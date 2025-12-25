@@ -1247,7 +1247,7 @@ export function WorkspaceView() {
                         No features yet
                       </p>
                       <button
-                        onClick={handleAddFeature}
+                        onClick={() => handleAddFeature(activeProject?.id)}
                         className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
                       >
                         Create First Feature
