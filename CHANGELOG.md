@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.12.2
+
+### Patch Changes
+
+- Update logo to falcon eye design (v21) - simple geometric eye + tear mark in warm terracotta
+
 ## 0.12.1
 
 ### Patch Changes
