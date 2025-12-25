@@ -1,5 +1,7 @@
 import { useState, useCallback, useEffect } from "react";
+import { useAtom } from "jotai";
 import { invoke } from "@tauri-apps/api/core";
+import { expandedPathsAtom } from "@/store";
 import { ChevronRightIcon, ChevronDownIcon, FileIcon, CopyIcon, ExternalLinkIcon } from "@radix-ui/react-icons";
 import {
   ContextMenu,
@@ -18,18 +20,23 @@ interface DirEntry {
 interface FileTreeProps {
   rootPath: string;
   onFileClick?: (path: string) => void;
+  selectedFile?: string | null;
 }
 
 interface TreeNodeProps {
   entry: DirEntry;
   depth: number;
   onFileClick?: (path: string) => void;
+  selectedFile?: string | null;
+  expandedPaths: Set<string>;
+  onToggleExpand: (path: string) => void;
 }
 
-function TreeNode({ entry, depth, onFileClick }: TreeNodeProps) {
-  const [expanded, setExpanded] = useState(false);
+function TreeNode({ entry, depth, onFileClick, selectedFile, expandedPaths, onToggleExpand }: TreeNodeProps) {
   const [children, setChildren] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const expanded = entry.is_dir && expandedPaths.has(entry.path);
+  const isSelected = !entry.is_dir && entry.path === selectedFile;
 
   const loadChildren = useCallback(async () => {
     if (!entry.is_dir || children.length > 0) return;
@@ -45,16 +52,23 @@ function TreeNode({ entry, depth, onFileClick }: TreeNodeProps) {
     }
   }, [entry.path, entry.is_dir, children.length]);
 
+  // 恢复已展开目录的子内容
+  useEffect(() => {
+    if (expanded && children.length === 0) {
+      loadChildren();
+    }
+  }, [expanded, children.length, loadChildren]);
+
   const handleClick = useCallback(() => {
     if (entry.is_dir) {
       if (!expanded) {
         loadChildren();
       }
-      setExpanded(!expanded);
+      onToggleExpand(entry.path);
     } else {
       onFileClick?.(entry.path);
     }
-  }, [entry, expanded, loadChildren, onFileClick]);
+  }, [entry, expanded, loadChildren, onFileClick, onToggleExpand]);
 
   const handleCopyPath = useCallback(() => {
     navigator.clipboard.writeText(entry.path);
@@ -87,7 +101,9 @@ function TreeNode({ entry, depth, onFileClick }: TreeNodeProps) {
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className="flex items-center gap-1 py-0.5 px-1 hover:bg-primary/10 rounded cursor-pointer text-sm transition-colors"
+            className={`flex items-center gap-1 py-0.5 px-1 rounded cursor-pointer text-sm transition-colors ${
+              isSelected ? "bg-primary/15 text-primary" : "hover:bg-primary/10"
+            }`}
             style={{ paddingLeft: `${depth * 12 + 4}px` }}
             onClick={handleClick}
           >
@@ -134,6 +150,9 @@ function TreeNode({ entry, depth, onFileClick }: TreeNodeProps) {
               entry={child}
               depth={depth + 1}
               onFileClick={onFileClick}
+              selectedFile={selectedFile}
+              expandedPaths={expandedPaths}
+              onToggleExpand={onToggleExpand}
             />
           ))}
         </div>
@@ -142,10 +161,25 @@ function TreeNode({ entry, depth, onFileClick }: TreeNodeProps) {
   );
 }
 
-export function FileTree({ rootPath, onFileClick }: FileTreeProps) {
+export function FileTree({ rootPath, onFileClick, selectedFile }: FileTreeProps) {
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [expandedPathsArray, setExpandedPathsArray] = useAtom(expandedPathsAtom);
+
+  const expandedPaths = new Set(expandedPathsArray);
+
+  const handleToggleExpand = useCallback((path: string) => {
+    setExpandedPathsArray(prev => {
+      const set = new Set(prev);
+      if (set.has(path)) {
+        set.delete(path);
+      } else {
+        set.add(path);
+      }
+      return Array.from(set);
+    });
+  }, [setExpandedPathsArray]);
 
   useEffect(() => {
     let cancelled = false;
@@ -196,6 +230,9 @@ export function FileTree({ rootPath, onFileClick }: FileTreeProps) {
           entry={entry}
           depth={0}
           onFileClick={onFileClick}
+          selectedFile={selectedFile}
+          expandedPaths={expandedPaths}
+          onToggleExpand={handleToggleExpand}
         />
       ))}
     </div>

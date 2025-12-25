@@ -1,4 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useAtom } from "jotai";
+import { selectedFileAtom, activePanelIdAtom } from "@/store";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -19,8 +21,8 @@ export function WorkspaceView() {
   const [sharedPanelCollapsed, setSharedPanelCollapsed] = useState(() => {
     return localStorage.getItem("feature-sidebar-collapsed") === "true";
   });
-  const [activePanelId, setActivePanelId] = useState<string | undefined>();
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [activePanelId, setActivePanelId] = useAtom(activePanelIdAtom);
+  const [selectedFile, setSelectedFile] = useAtom(selectedFileAtom);
 
   // Load workspace data and reset running features (PTY sessions don't survive restarts)
   useEffect(() => {
@@ -1188,6 +1190,7 @@ export function WorkspaceView() {
                 activePanelId={activePanelId}
                 onPanelFocus={setActivePanelId}
                 onFileClick={setSelectedFile}
+                selectedFile={selectedFile}
                 onFeatureRename={activeFeature ? (name) => handleRenameFeature(activeFeature.id, name) : undefined}
               />
 

@@ -35,6 +35,7 @@ interface FeatureSidebarProps {
   onPanelFocus?: (id: string) => void;
   // File actions
   onFileClick?: (path: string) => void;
+  selectedFile?: string | null;
   // Feature rename
   onFeatureRename?: (name: string) => void;
 }
@@ -57,6 +58,7 @@ export function FeatureSidebar({
   activePanelId,
   onPanelFocus,
   onFileClick,
+  selectedFile,
   onFeatureRename,
 }: FeatureSidebarProps) {
   const [expandedPanels, setExpandedPanels] = useState<Set<string>>(() => {
@@ -300,7 +302,7 @@ export function FeatureSidebar({
             />
             {filesExpanded && (
               <div className="flex-1 min-h-0 overflow-auto">
-                <FileTree rootPath={projectPath} onFileClick={onFileClick} />
+                <FileTree rootPath={projectPath} onFileClick={onFileClick} selectedFile={selectedFile} />
               </div>
             )}
           </div>
