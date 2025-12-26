@@ -9,14 +9,27 @@ interface PooledTerminal {
   container: HTMLDivElement;
 }
 
-/** Global pool of xterm instances keyed by session ID */
-const terminalPool = new Map<string, PooledTerminal>();
+// Persist state across HMR by attaching to window
+declare global {
+  interface Window {
+    __terminalPool?: Map<string, PooledTerminal>;
+    __ptyReadySessions?: Set<string>;
+    __autoCopyDisposables?: Map<string, { dispose: () => void }>;
+    __ptyInitLocks?: Map<string, Promise<void>>;
+  }
+}
 
-/** Track which PTY sessions are ready */
-export const ptyReadySessions = new Set<string>();
+/** Global pool of xterm instances keyed by session ID (survives HMR) */
+const terminalPool: Map<string, PooledTerminal> =
+  window.__terminalPool ?? (window.__terminalPool = new Map());
 
-/** Track auto-copy disposables per session */
-const autoCopyDisposables = new Map<string, { dispose: () => void }>();
+/** Track which PTY sessions are ready (survives HMR) */
+export const ptyReadySessions: Set<string> =
+  window.__ptyReadySessions ?? (window.__ptyReadySessions = new Set());
+
+/** Track auto-copy disposables per session (survives HMR) */
+const autoCopyDisposables: Map<string, { dispose: () => void }> =
+  window.__autoCopyDisposables ?? (window.__autoCopyDisposables = new Map());
 
 /** Global auto-copy enabled state */
 let autoCopyEnabled = (() => {
@@ -27,8 +40,9 @@ let autoCopyEnabled = (() => {
   }
 })();
 
-/** Global lock to prevent concurrent PTY initialization */
-export const ptyInitLocks = new Map<string, Promise<void>>();
+/** Global lock to prevent concurrent PTY initialization (survives HMR) */
+export const ptyInitLocks: Map<string, Promise<void>> =
+  window.__ptyInitLocks ?? (window.__ptyInitLocks = new Map());
 
 const TERMINAL_THEME = {
   background: "#1a1a1a",

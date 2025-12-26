@@ -4022,6 +4022,11 @@ fn pty_exists(id: String) -> bool {
     pty_manager::session_exists(&id)
 }
 
+#[tauri::command]
+fn pty_scrollback(id: String) -> Vec<u8> {
+    pty_manager::get_scrollback(&id)
+}
+
 // ============================================================================
 // Workspace Commands
 // ============================================================================
@@ -4532,6 +4537,7 @@ pub fn run() {
             pty_kill,
             pty_list,
             pty_exists,
+            pty_scrollback,
             // Workspace commands
             workspace_load,
             workspace_save,

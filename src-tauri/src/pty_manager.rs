@@ -4,12 +4,15 @@
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::thread;
 use tauri::{AppHandle, Emitter};
+
+/// Maximum scrollback buffer size per session (256KB)
+const SCROLLBACK_MAX_BYTES: usize = 256 * 1024;
 
 /// Global AppHandle for emitting events
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
@@ -50,6 +53,10 @@ static PTY_CONTROLS: LazyLock<Mutex<HashMap<String, SessionControl>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 static PTY_MASTERS: LazyLock<Mutex<HashMap<String, Box<dyn portable_pty::MasterPty + Send>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Scrollback buffer per session (ring buffer, max SCROLLBACK_MAX_BYTES)
+static PTY_SCROLLBACK: LazyLock<Mutex<HashMap<String, VecDeque<u8>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// Create a new PTY session with background reader thread
@@ -133,6 +140,12 @@ pub fn create_session(
         controls.insert(id.clone(), SessionControl { running: running.clone() });
     }
 
+    // Initialize scrollback buffer
+    {
+        let mut scrollback = PTY_SCROLLBACK.lock().map_err(|e| e.to_string())?;
+        scrollback.insert(id.clone(), VecDeque::with_capacity(SCROLLBACK_MAX_BYTES));
+    }
+
     // Spawn background reader thread
     let session_id = id.clone();
     let running_flag = running;
@@ -162,6 +175,19 @@ fn read_loop(
             }
             Ok(n) => {
                 let data = buffer[..n].to_vec();
+
+                // Save to scrollback buffer
+                if let Ok(mut scrollback) = PTY_SCROLLBACK.lock() {
+                    if let Some(buf) = scrollback.get_mut(&id) {
+                        // Remove old data if buffer would exceed max
+                        let overflow = (buf.len() + n).saturating_sub(SCROLLBACK_MAX_BYTES);
+                        if overflow > 0 {
+                            buf.drain(..overflow);
+                        }
+                        buf.extend(&data);
+                    }
+                }
+
                 let _ = app_handle.emit("pty-data", PtyDataEvent { id: id.clone(), data });
             }
             Err(e) => {
@@ -189,6 +215,9 @@ fn cleanup_session(id: &str) {
     }
     if let Ok(mut masters) = PTY_MASTERS.lock() {
         masters.remove(id);
+    }
+    if let Ok(mut scrollback) = PTY_SCROLLBACK.lock() {
+        scrollback.remove(id);
     }
 }
 
@@ -264,6 +293,15 @@ pub fn session_exists(id: &str) -> bool {
         .lock()
         .map(|sessions| sessions.contains_key(id))
         .unwrap_or(false)
+}
+
+/// Get scrollback buffer for a session (for replay after page refresh)
+pub fn get_scrollback(id: &str) -> Vec<u8> {
+    PTY_SCROLLBACK
+        .lock()
+        .ok()
+        .and_then(|scrollback| scrollback.get(id).map(|buf| buf.iter().copied().collect()))
+        .unwrap_or_default()
 }
 
 /// Legacy read function - kept for compatibility but should not be used

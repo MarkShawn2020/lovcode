@@ -157,6 +157,14 @@ export function TerminalPane({
 
         if (!exists) {
           await invoke("pty_create", { id: sessionId, cwd: cwdRef.current, command: commandRef.current });
+        } else {
+          // PTY exists - replay scrollback buffer (e.g., after page refresh)
+          const scrollback = await invoke<number[]>("pty_scrollback", { id: sessionId });
+          if (scrollback.length > 0 && mountState.isMounted) {
+            const bytes = new Uint8Array(scrollback);
+            const text = new TextDecoder().decode(bytes);
+            term.write(text);
+          }
         }
 
         ptyReadySessions.add(sessionId);
