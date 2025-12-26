@@ -262,4 +262,4 @@ export const SessionPanel = memo(function SessionPanel({
       )}
     </Tabs>
   );
-}
+});

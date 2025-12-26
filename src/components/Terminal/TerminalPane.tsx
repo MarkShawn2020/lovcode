@@ -188,6 +188,9 @@ export function TerminalPane({
           requestAnimationFrame(() => {
             fitAddon.fit();
             requestAnimationFrame(() => {
+              // Don't steal focus from input/textarea
+              const active = document.activeElement;
+              if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return;
               term.focus();
             });
           });
@@ -323,6 +326,9 @@ export function TerminalPane({
       requestAnimationFrame(() => {
         pooled.fitAddon.fit();
         requestAnimationFrame(() => {
+          // Don't steal focus from input/textarea
+          const active = document.activeElement;
+          if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return;
           pooled.term.focus();
         });
       });

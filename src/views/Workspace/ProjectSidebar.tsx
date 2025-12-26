@@ -64,6 +64,8 @@ export function ProjectSidebar({
   const [renameValue, setRenameValue] = useState("");
   const renameInputRef = useRef<HTMLInputElement>(null);
   const renameJustStartedRef = useRef(false);
+  const pendingRenameRef = useRef<{ featureId: string; featureName: string } | null>(null);
+  const isComposingRef = useRef(false);
 
   // Auto-expand active project
   useEffect(() => {
@@ -72,19 +74,29 @@ export function ProjectSidebar({
     }
   }, [activeProjectId]);
 
+  // Handle pending rename when new feature appears in projects
+  useEffect(() => {
+    if (!pendingRenameRef.current) return;
+    const { featureId, featureName } = pendingRenameRef.current;
+    // Check if the feature now exists in projects
+    const featureExists = projects.some(p => p.features.some(f => f.id === featureId));
+    if (featureExists) {
+      pendingRenameRef.current = null;
+      renameJustStartedRef.current = true;
+      setRenameValue(featureName);
+      setRenamingFeatureId(featureId);
+    }
+  }, [projects]);
+
   // Auto-focus rename input when entering rename mode
   useEffect(() => {
     if (renamingFeatureId) {
-      // Wait for DOM to stabilize before focusing
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (renameInputRef.current) {
-            renameInputRef.current.focus();
-            renameInputRef.current.select();
-          }
-          // Clear the flag after focus is stable
-          renameJustStartedRef.current = false;
-        });
+        if (renameInputRef.current) {
+          renameInputRef.current.focus();
+          renameInputRef.current.select();
+        }
+        renameJustStartedRef.current = false;
       });
     }
   }, [renamingFeatureId]);
@@ -117,7 +129,7 @@ export function ProjectSidebar({
   }, [renameValue, onRenameFeature]);
 
   const handleRenameKeyDown = useCallback((e: React.KeyboardEvent, projectId: string, featureId: string, originalName: string) => {
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && !isComposingRef.current) {
       handleRenameSubmit(projectId, featureId, originalName);
     } else if (e.key === "Escape") {
       setRenamingFeatureId(null);
@@ -165,7 +177,7 @@ export function ProjectSidebar({
                               const result = await onAddFeature(project.id);
                               if (result) {
                                 setExpandedProjects(prev => new Set([...prev, project.id]));
-                                handleStartRename(result.featureId, result.featureName);
+                                pendingRenameRef.current = result;
                               }
                             }}
                             title="New Feature"
@@ -197,7 +209,7 @@ export function ProjectSidebar({
                         const result = await onAddFeature(project.id);
                         if (result) {
                           setExpandedProjects(prev => new Set([...prev, project.id]));
-                          handleStartRename(result.featureId, result.featureName);
+                          pendingRenameRef.current = result;
                         }
                       }}
                       className="gap-2 cursor-pointer"
@@ -282,6 +294,8 @@ export function ProjectSidebar({
                                       handleRenameSubmit(project.id, feature.id, feature.name);
                                     }}
                                     onKeyDown={(e) => handleRenameKeyDown(e, project.id, feature.id, feature.name)}
+                                    onCompositionStart={() => { isComposingRef.current = true; }}
+                                    onCompositionEnd={() => { isComposingRef.current = false; }}
                                     onClick={(e) => e.stopPropagation()}
                                     className="flex-1 text-sm bg-card border border-border rounded outline-none focus:border-primary min-w-0 px-1"
                                   />
