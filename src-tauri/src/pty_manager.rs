@@ -1,21 +1,82 @@
 //! PTY session management for terminal panels
 //!
 //! Event-driven architecture: data pushed via Tauri events instead of polling.
+//! Scrollback buffers are persisted to disk for recovery after app restart.
 
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::thread;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 /// Maximum scrollback buffer size per session (256KB)
 const SCROLLBACK_MAX_BYTES: usize = 256 * 1024;
 
+/// Minimum interval between disk writes (debounce)
+const SCROLLBACK_SAVE_INTERVAL_MS: u64 = 2000;
+
 /// Global AppHandle for emitting events
 static APP_HANDLE: OnceLock<AppHandle> = OnceLock::new();
+
+/// Get scrollback storage directory
+fn get_scrollback_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".lovstudio")
+        .join("lovcode")
+        .join("scrollback")
+}
+
+/// Get scrollback file path for a session
+fn get_scrollback_path(id: &str) -> PathBuf {
+    get_scrollback_dir().join(format!("{}.bin", id))
+}
+
+/// Load scrollback from disk
+fn load_scrollback_from_disk(id: &str) -> Option<VecDeque<u8>> {
+    let path = get_scrollback_path(id);
+    println!("[DEBUG][pty_manager] load_scrollback_from_disk: id={}, path={:?}, exists={}", id, path, path.exists());
+    if path.exists() {
+        match fs::read(&path) {
+            Ok(data) => {
+                println!("[DEBUG][pty_manager] load_scrollback_from_disk: loaded {} bytes", data.len());
+                Some(VecDeque::from(data))
+            }
+            Err(e) => {
+                eprintln!("[DEBUG][pty_manager] load_scrollback_from_disk: failed to read: {}", e);
+                None
+            }
+        }
+    } else {
+        println!("[DEBUG][pty_manager] load_scrollback_from_disk: file not found");
+        None
+    }
+}
+
+/// Save scrollback to disk
+fn save_scrollback_to_disk(id: &str, data: &VecDeque<u8>) -> Result<(), String> {
+    let dir = get_scrollback_dir();
+    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create scrollback dir: {}", e))?;
+
+    let path = get_scrollback_path(id);
+    let bytes: Vec<u8> = data.iter().copied().collect();
+    println!("[DEBUG][pty_manager] save_scrollback_to_disk: id={}, path={:?}, bytes={}", id, path, bytes.len());
+    fs::write(&path, &bytes).map_err(|e| format!("Failed to write scrollback: {}", e))?;
+    Ok(())
+}
+
+/// Delete scrollback file
+fn delete_scrollback_from_disk(id: &str) {
+    let path = get_scrollback_path(id);
+    println!("[DEBUG][pty_manager] delete_scrollback_from_disk: id={}, path={:?}", id, path);
+    let _ = fs::remove_file(path);
+}
 
 /// Initialize PTY manager with AppHandle
 pub fn init(app_handle: AppHandle) {
@@ -58,6 +119,14 @@ static PTY_MASTERS: LazyLock<Mutex<HashMap<String, Box<dyn portable_pty::MasterP
 /// Scrollback buffer per session (ring buffer, max SCROLLBACK_MAX_BYTES)
 static PTY_SCROLLBACK: LazyLock<Mutex<HashMap<String, VecDeque<u8>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Last disk save timestamp per session (for debouncing)
+static PTY_SCROLLBACK_LAST_SAVE: LazyLock<Mutex<HashMap<String, Instant>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Sessions with pending unsaved changes
+static PTY_SCROLLBACK_DIRTY: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Create a new PTY session with background reader thread
 pub fn create_session(
@@ -140,10 +209,19 @@ pub fn create_session(
         controls.insert(id.clone(), SessionControl { running: running.clone() });
     }
 
-    // Initialize scrollback buffer
+    // Initialize scrollback buffer - load from disk if exists (for app restart recovery)
     {
+        println!("[DEBUG][pty_manager] create_session: loading scrollback for id={}", id);
         let mut scrollback = PTY_SCROLLBACK.lock().map_err(|e| e.to_string())?;
-        scrollback.insert(id.clone(), VecDeque::with_capacity(SCROLLBACK_MAX_BYTES));
+        let buffer = load_scrollback_from_disk(&id)
+            .unwrap_or_else(|| VecDeque::with_capacity(SCROLLBACK_MAX_BYTES));
+        println!("[DEBUG][pty_manager] create_session: scrollback buffer size={}", buffer.len());
+        scrollback.insert(id.clone(), buffer);
+    }
+    // Initialize last save timestamp
+    {
+        let mut last_save = PTY_SCROLLBACK_LAST_SAVE.lock().map_err(|e| e.to_string())?;
+        last_save.insert(id.clone(), Instant::now());
     }
 
     // Spawn background reader thread
@@ -176,8 +254,8 @@ fn read_loop(
             Ok(n) => {
                 let data = buffer[..n].to_vec();
 
-                // Save to scrollback buffer
-                if let Ok(mut scrollback) = PTY_SCROLLBACK.lock() {
+                // Save to scrollback buffer and persist to disk (debounced)
+                let should_save = if let Ok(mut scrollback) = PTY_SCROLLBACK.lock() {
                     if let Some(buf) = scrollback.get_mut(&id) {
                         // Remove old data if buffer would exceed max
                         let overflow = (buf.len() + n).saturating_sub(SCROLLBACK_MAX_BYTES);
@@ -185,7 +263,48 @@ fn read_loop(
                             buf.drain(..overflow);
                         }
                         buf.extend(&data);
+
+                        // Check if we should persist to disk (debounced)
+                        let now = Instant::now();
+                        let should_save = if let Ok(mut last_save) = PTY_SCROLLBACK_LAST_SAVE.lock() {
+                            if let Some(last) = last_save.get(&id) {
+                                if now.duration_since(*last) >= Duration::from_millis(SCROLLBACK_SAVE_INTERVAL_MS) {
+                                    last_save.insert(id.clone(), now);
+                                    true
+                                } else {
+                                    // Mark as dirty for later save
+                                    if let Ok(mut dirty) = PTY_SCROLLBACK_DIRTY.lock() {
+                                        dirty.insert(id.clone());
+                                    }
+                                    false
+                                }
+                            } else {
+                                last_save.insert(id.clone(), now);
+                                true
+                            }
+                        } else {
+                            false
+                        };
+
+                        if should_save {
+                            // Remove from dirty set since we're saving now
+                            if let Ok(mut dirty) = PTY_SCROLLBACK_DIRTY.lock() {
+                                dirty.remove(&id);
+                            }
+                            Some(buf.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
                     }
+                } else {
+                    None
+                };
+
+                // Persist to disk outside of lock
+                if let Some(buf) = should_save {
+                    let _ = save_scrollback_to_disk(&id, &buf);
                 }
 
                 let _ = app_handle.emit("pty-data", PtyDataEvent { id: id.clone(), data });
@@ -206,7 +325,21 @@ fn read_loop(
 }
 
 /// Internal cleanup (called from reader thread)
+/// Note: This does NOT delete the scrollback file - it persists for app restart recovery
 fn cleanup_session(id: &str) {
+    // Save any dirty scrollback before cleanup
+    if let Ok(scrollback) = PTY_SCROLLBACK.lock() {
+        if let Some(buf) = scrollback.get(id) {
+            let is_dirty = PTY_SCROLLBACK_DIRTY
+                .lock()
+                .map(|dirty| dirty.contains(id))
+                .unwrap_or(false);
+            if is_dirty || !buf.is_empty() {
+                let _ = save_scrollback_to_disk(id, buf);
+            }
+        }
+    }
+
     if let Ok(mut sessions) = PTY_SESSIONS.lock() {
         sessions.remove(id);
     }
@@ -218,6 +351,12 @@ fn cleanup_session(id: &str) {
     }
     if let Ok(mut scrollback) = PTY_SCROLLBACK.lock() {
         scrollback.remove(id);
+    }
+    if let Ok(mut last_save) = PTY_SCROLLBACK_LAST_SAVE.lock() {
+        last_save.remove(id);
+    }
+    if let Ok(mut dirty) = PTY_SCROLLBACK_DIRTY.lock() {
+        dirty.remove(id);
     }
 }
 
@@ -296,12 +435,44 @@ pub fn session_exists(id: &str) -> bool {
 }
 
 /// Get scrollback buffer for a session (for replay after page refresh)
+/// First checks memory, then falls back to disk
 pub fn get_scrollback(id: &str) -> Vec<u8> {
-    PTY_SCROLLBACK
-        .lock()
-        .ok()
-        .and_then(|scrollback| scrollback.get(id).map(|buf| buf.iter().copied().collect()))
+    // Try memory first
+    if let Ok(scrollback) = PTY_SCROLLBACK.lock() {
+        if let Some(buf) = scrollback.get(id) {
+            return buf.iter().copied().collect();
+        }
+    }
+    // Fall back to disk (for app restart recovery)
+    load_scrollback_from_disk(id)
+        .map(|buf| buf.into_iter().collect())
         .unwrap_or_default()
+}
+
+/// Delete scrollback from disk (called when session is permanently removed)
+pub fn purge_scrollback(id: &str) {
+    delete_scrollback_from_disk(id);
+}
+
+/// Flush all dirty scrollback buffers to disk (called on app shutdown)
+pub fn flush_all_scrollback() {
+    let dirty_ids: Vec<String> = PTY_SCROLLBACK_DIRTY
+        .lock()
+        .map(|dirty| dirty.iter().cloned().collect())
+        .unwrap_or_default();
+
+    if let Ok(scrollback) = PTY_SCROLLBACK.lock() {
+        for id in dirty_ids {
+            if let Some(buf) = scrollback.get(&id) {
+                let _ = save_scrollback_to_disk(&id, buf);
+            }
+        }
+    }
+
+    // Clear dirty set
+    if let Ok(mut dirty) = PTY_SCROLLBACK_DIRTY.lock() {
+        dirty.clear();
+    }
 }
 
 /// Legacy read function - kept for compatibility but should not be used

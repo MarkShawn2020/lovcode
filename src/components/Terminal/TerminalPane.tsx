@@ -152,19 +152,24 @@ export function TerminalPane({
 
       try {
         const exists = await invoke<boolean>("pty_exists", { id: sessionId });
+        console.log('[DEBUG][TerminalPane] initPty: sessionId=%s, exists=%s', sessionId, exists);
 
         if (!mountState.isMounted) return;
 
         if (!exists) {
+          console.log('[DEBUG][TerminalPane] initPty: creating new PTY');
           await invoke("pty_create", { id: sessionId, cwd: cwdRef.current, command: commandRef.current });
-        } else {
-          // PTY exists - replay scrollback buffer (e.g., after page refresh)
-          const scrollback = await invoke<number[]>("pty_scrollback", { id: sessionId });
-          if (scrollback.length > 0 && mountState.isMounted) {
-            const bytes = new Uint8Array(scrollback);
-            const text = new TextDecoder().decode(bytes);
-            term.write(text);
-          }
+        }
+
+        // Replay scrollback buffer (works for both page refresh and app restart)
+        console.log('[DEBUG][TerminalPane] initPty: fetching scrollback');
+        const scrollback = await invoke<number[]>("pty_scrollback", { id: sessionId });
+        console.log('[DEBUG][TerminalPane] initPty: scrollback length=%d', scrollback.length);
+        if (scrollback.length > 0 && mountState.isMounted) {
+          const bytes = new Uint8Array(scrollback);
+          const text = new TextDecoder().decode(bytes);
+          console.log('[DEBUG][TerminalPane] initPty: replaying scrollback, text length=%d', text.length);
+          term.write(text);
         }
 
         ptyReadySessions.add(sessionId);

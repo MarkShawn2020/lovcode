@@ -4027,6 +4027,16 @@ fn pty_scrollback(id: String) -> Vec<u8> {
     pty_manager::get_scrollback(&id)
 }
 
+#[tauri::command]
+fn pty_purge_scrollback(id: String) {
+    pty_manager::purge_scrollback(&id)
+}
+
+#[tauri::command]
+fn pty_flush_scrollback() {
+    pty_manager::flush_all_scrollback()
+}
+
 // ============================================================================
 // Workspace Commands
 // ============================================================================
@@ -4538,6 +4548,8 @@ pub fn run() {
             pty_list,
             pty_exists,
             pty_scrollback,
+            pty_purge_scrollback,
+            pty_flush_scrollback,
             // Workspace commands
             workspace_load,
             workspace_save,

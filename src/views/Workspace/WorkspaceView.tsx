@@ -537,10 +537,11 @@ export function WorkspaceView() {
         }
       }
 
-      // Kill all PTY sessions and dispose terminal instances
+      // Kill all PTY sessions, dispose terminal instances, and purge scrollback
       for (const ptyId of ptyIdsToKill) {
         disposeTerminal(ptyId);
         invoke("pty_kill", { id: ptyId }).catch(console.error);
+        invoke("pty_purge_scrollback", { id: ptyId }).catch(console.error);
       }
 
       const newProjects = workspace.projects.map((p) => {
@@ -700,6 +701,8 @@ export function WorkspaceView() {
       if (oldPtyId) {
         disposeTerminal(oldPtyId);
         invoke("pty_kill", { id: oldPtyId }).catch(console.error);
+        // Purge old scrollback since we're creating a new ptyId
+        invoke("pty_purge_scrollback", { id: oldPtyId }).catch(console.error);
       }
 
       const newPtyId = crypto.randomUUID();
@@ -805,25 +808,34 @@ export function WorkspaceView() {
     (panelId: string, sessionId: string) => {
       if (!activeProject || !workspace) return;
 
-      // Find and kill the PTY session, dispose terminal instance
+      // Find and kill the PTY session, dispose terminal instance, purge scrollback
+      let ptyIdToPurge: string | null = null;
       for (const feature of activeProject.features) {
         const panel = feature.panels.find((p) => p.id === panelId);
         if (panel) {
           const session = (panel.sessions || []).find((s) => s.id === sessionId);
           if (session) {
+            ptyIdToPurge = session.pty_id;
             disposeTerminal(session.pty_id);
             invoke("pty_kill", { id: session.pty_id }).catch(console.error);
           }
           break;
         }
       }
-      const sharedPanel = (activeProject.shared_panels || []).find((p) => p.id === panelId);
-      if (sharedPanel) {
-        const session = (sharedPanel.sessions || []).find((s) => s.id === sessionId);
-        if (session) {
-          disposeTerminal(session.pty_id);
-          invoke("pty_kill", { id: session.pty_id }).catch(console.error);
+      if (!ptyIdToPurge) {
+        const sharedPanel = (activeProject.shared_panels || []).find((p) => p.id === panelId);
+        if (sharedPanel) {
+          const session = (sharedPanel.sessions || []).find((s) => s.id === sessionId);
+          if (session) {
+            ptyIdToPurge = session.pty_id;
+            disposeTerminal(session.pty_id);
+            invoke("pty_kill", { id: session.pty_id }).catch(console.error);
+          }
         }
+      }
+      // Purge scrollback file since this session is being closed
+      if (ptyIdToPurge) {
+        invoke("pty_purge_scrollback", { id: ptyIdToPurge }).catch(console.error);
       }
 
       // Helper: ensure at least one session exists after close
