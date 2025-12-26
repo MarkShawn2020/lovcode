@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface PooledTerminal {
   term: Terminal;
@@ -77,7 +78,9 @@ export function getOrCreateTerminal(sessionId: string): PooledTerminal {
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
-  term.loadAddon(new WebLinksAddon());
+  term.loadAddon(new WebLinksAddon((_event, uri) => {
+    openUrl(uri).catch(console.error);
+  }));
 
   // Create a detached container for the terminal
   const container = document.createElement("div");
