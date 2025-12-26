@@ -80,6 +80,58 @@ export function TerminalPane({
       fitAddon.fit();
     });
 
+    // IME Fix: Handle direct non-ASCII input (Shift+punctuation) to bypass xterm's buggy CompositionHelper
+    // Composition input (pinyin) should go through xterm normally
+    // See: https://github.com/xtermjs/xterm.js/issues/3070
+    const textarea = pooled.container.querySelector('textarea') as HTMLTextAreaElement;
+    let handlingDirectNonAscii = false;
+    let justFinishedComposition = false;
+    let lastDirectInputSent: string | null = null;
+
+    if (textarea) {
+      // Track composition state
+      let isComposing = false;
+      textarea.addEventListener('compositionstart', () => {
+        isComposing = true;
+      }, { capture: true });
+      textarea.addEventListener('compositionend', () => {
+        isComposing = false;
+        justFinishedComposition = true;
+      }, { capture: true });
+
+      // Use beforeinput to intercept BEFORE the character enters textarea
+      textarea.addEventListener('beforeinput', (e) => {
+        const ie = e as InputEvent;
+
+        // Skip composition input
+        if (isComposing || justFinishedComposition) {
+          justFinishedComposition = false;
+          return;
+        }
+
+        // Only handle direct non-ASCII input (Shift+punctuation)
+        if (ie.inputType === 'insertText' && ie.data && /[^\x00-\x7f]/.test(ie.data)) {
+          e.preventDefault(); // Prevent xterm from seeing it at all
+          handlingDirectNonAscii = true;
+          lastDirectInputSent = ie.data;
+          // Send directly to PTY
+          if (ptyReadySessions.has(sessionId)) {
+            const encoder = new TextEncoder();
+            invoke("pty_write", { id: sessionId, data: Array.from(encoder.encode(ie.data)) });
+          }
+        }
+      }, { capture: true });
+    }
+
+    // Block xterm's keydown processing when we just handled direct non-ASCII input
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type === 'keydown' && handlingDirectNonAscii) {
+        handlingDirectNonAscii = false;
+        return false;
+      }
+      return true;
+    });
+
     // Track mount state
     const mountState = { isMounted: true };
 
@@ -142,6 +194,16 @@ export function TerminalPane({
     // Handle user input
     const onDataDisposable = term.onData((data) => {
       if (!ptyReadySessions.has(sessionId)) return;
+      // Skip if this exact data was already sent by our direct input handler
+      if (lastDirectInputSent === data) {
+        lastDirectInputSent = null;
+        return;
+      }
+      // Skip ASCII punctuation that accompanies direct non-ASCII input (e.g., "(" when IME produces "（")
+      if (lastDirectInputSent && /^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]$/.test(data)) {
+        lastDirectInputSent = null;
+        return;
+      }
       const encoder = new TextEncoder();
       const bytes = Array.from(encoder.encode(data));
       invoke("pty_write", { id: sessionId, data: bytes }).catch(console.error);

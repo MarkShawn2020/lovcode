@@ -213,7 +213,7 @@ function App() {
     <AppConfigContext.Provider value={appConfig}>
     <div className="h-screen bg-canvas flex">
       {/* Sidebar */}
-      <aside className={`flex flex-col border-r border-border bg-card transition-all duration-300 ease-in-out overflow-hidden ${sidebarCollapsed ? "w-0 border-r-0" : "w-52"}`}>
+      <aside className={`flex flex-col border-r border-border bg-card w-52 shrink-0 transition-[margin] duration-150 ${sidebarCollapsed ? "-ml-52" : "ml-0"}`}>
         <div data-tauri-drag-region className="h-[52px] shrink-0 flex items-center justify-end px-3 border-b border-border min-w-52">
           <button
             onClick={() => setSidebarCollapsed(true)}
