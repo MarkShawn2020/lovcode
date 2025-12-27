@@ -173,19 +173,32 @@ export function FeatureSidebar({
         <div className="flex-1 flex flex-col items-center pt-2 gap-2">
           {/* Pinned section with status dots */}
           <div className="flex flex-col items-center gap-1">
-            <span title={`${totalSessionsCount} sessions`}>
+            <button
+              onClick={() => {
+                onCollapsedChange(false);
+                setPinnedExpanded(true);
+              }}
+              title={`${totalSessionsCount} sessions`}
+              className="hover:bg-card-alt rounded p-0.5 transition-colors"
+            >
               <DrawingPinFilledIcon className="w-3 h-3 text-primary/70" />
-            </span>
-            {/* Status dots for each session - one per line */}
+            </button>
+            {/* Status dots for each session - clickable to expand and focus */}
             <div className="flex flex-col items-center gap-1">
               {pinnedPanels.flatMap((panel) =>
                 panel.sessions.map((session) => {
                   const isRunning = ptyStatusMap.get(session.ptyId) ?? true;
                   return (
-                    <span
+                    <button
                       key={session.id}
+                      onClick={() => {
+                        onCollapsedChange(false);
+                        setPinnedExpanded(true);
+                        onPanelFocus?.(panel.id);
+                        onSessionSelect(panel.id, session.id);
+                      }}
                       title={`${session.title || "Terminal"}: ${isRunning ? "running" : "stopped"}`}
-                      className={`w-2 h-2 rounded-full ${
+                      className={`w-2 h-2 rounded-full hover:ring-2 hover:ring-primary/50 transition-all ${
                         isRunning ? "bg-green-500" : "bg-muted-foreground/40"
                       }`}
                     />
@@ -198,6 +211,7 @@ export function FeatureSidebar({
           <button
             onClick={() => {
               onCollapsedChange(false);
+              setPinnedExpanded(true);
               onAddPinnedPanel();
             }}
             className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
@@ -205,9 +219,16 @@ export function FeatureSidebar({
           >
             <PlusIcon className="w-3 h-3" />
           </button>
-          <span title="Files">
+          <button
+            onClick={() => {
+              onCollapsedChange(false);
+              setFilesExpanded(true);
+            }}
+            title="Files"
+            className="hover:bg-card-alt rounded p-0.5 transition-colors"
+          >
             <FileIcon className="w-3 h-3 text-muted-foreground" />
-          </span>
+          </button>
         </div>
       </div>
     );
