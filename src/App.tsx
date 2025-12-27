@@ -7,6 +7,7 @@ import {
   DoubleArrowLeftIcon,
 } from "@radix-ui/react-icons";
 import { GlobalHeader } from "./components/GlobalHeader";
+import { setAutoCopyOnSelect, getAutoCopyOnSelect } from "./components/Terminal";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { Switch } from "./components/ui/switch";
 import { Avatar, AvatarImage, AvatarFallback } from "./components/ui/avatar";
@@ -757,6 +758,13 @@ function App() {
 
 function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { shortenPaths, setShortenPaths } = useAppConfig();
+  const [autoCopy, setAutoCopy] = useState(getAutoCopyOnSelect);
+
+  const handleAutoCopyChange = (checked: boolean) => {
+    setAutoCopy(checked);
+    setAutoCopyOnSelect(checked);
+  };
+
   if (!open) return null;
 
   return (
@@ -767,13 +775,28 @@ function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => vo
           <h2 className="text-lg font-semibold text-ink">Settings</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-ink text-xl leading-none">&times;</button>
         </div>
-        <div className="p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium text-ink">Shorten paths</p>
-              <p className="text-xs text-muted-foreground">Replace home directory with ~</p>
+        <div className="p-5 space-y-5">
+          {/* Display */}
+          <div className="space-y-3">
+            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Display</h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-ink">Shorten paths</p>
+                <p className="text-xs text-muted-foreground">Replace home directory with ~</p>
+              </div>
+              <Switch checked={shortenPaths} onCheckedChange={setShortenPaths} />
             </div>
-            <Switch checked={shortenPaths} onCheckedChange={setShortenPaths} />
+          </div>
+          {/* Terminal */}
+          <div className="space-y-3">
+            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Terminal</h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-ink">Auto copy on select</p>
+                <p className="text-xs text-muted-foreground">Copy terminal selection to clipboard</p>
+              </div>
+              <Switch checked={autoCopy} onCheckedChange={handleAutoCopyChange} />
+            </div>
           </div>
         </div>
         <div className="px-5 py-3 border-t border-border flex justify-end">

@@ -7,9 +7,8 @@ import {
   CheckCircledIcon,
   TimerIcon,
   DrawingPinFilledIcon,
-  Pencil1Icon,
   ArchiveIcon,
-  TrashIcon,
+  GearIcon,
 } from "@radix-ui/react-icons";
 import {
   ContextMenu,
@@ -21,9 +20,16 @@ import {
   ContextMenuSubContent,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { workspaceDataAtom } from "@/store";
 import { invoke } from "@tauri-apps/api/core";
-import type { Feature, WorkspaceData } from "@/views/Workspace/types";
+import type { Feature, FeatureStatus, WorkspaceData } from "@/views/Workspace/types";
 
 interface FeatureTabProps {
   feature: Feature;
@@ -45,6 +51,13 @@ export function FeatureTab({
   const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
   const [isRenaming, setIsRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(feature.name);
+  const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [detailForm, setDetailForm] = useState({
+    name: feature.name,
+    description: feature.description || "",
+    status: feature.status,
+    git_branch: feature.git_branch || "",
+  });
   const inputRef = useRef<HTMLInputElement>(null);
   const isComposingRef = useRef(false);
 
@@ -108,26 +121,6 @@ export function FeatureTab({
     await saveWorkspace({ ...workspace, projects: newProjects });
   };
 
-  const handleDelete = async () => {
-    if (!workspace) return;
-
-    const newProjects = workspace.projects.map((p) => {
-      if (p.id !== projectId) return p;
-      const remainingFeatures = p.features.filter((f) => f.id !== feature.id);
-      const activeFeatures = remainingFeatures.filter((f) => !f.archived);
-      return {
-        ...p,
-        features: remainingFeatures,
-        active_feature_id:
-          p.active_feature_id === feature.id
-            ? activeFeatures[0]?.id
-            : p.active_feature_id,
-      };
-    });
-
-    await saveWorkspace({ ...workspace, projects: newProjects });
-  };
-
   const handlePin = async () => {
     if (!workspace) return;
 
@@ -151,6 +144,48 @@ export function FeatureTab({
     setIsRenaming(true);
   };
 
+  const openDetailDialog = () => {
+    setDetailForm({
+      name: feature.name,
+      description: feature.description || "",
+      status: feature.status,
+      git_branch: feature.git_branch || "",
+    });
+    setIsDetailOpen(true);
+  };
+
+  const handleSaveDetail = async () => {
+    if (!workspace) return;
+    const trimmedName = detailForm.name.trim();
+    if (!trimmedName) return;
+
+    if (trimmedName !== feature.name) {
+      await invoke("workspace_rename_feature", { featureId: feature.id, name: trimmedName });
+    }
+
+    const newProjects = workspace.projects.map((p) =>
+      p.id === projectId
+        ? {
+            ...p,
+            features: p.features.map((f) =>
+              f.id === feature.id
+                ? {
+                    ...f,
+                    name: trimmedName,
+                    description: detailForm.description || undefined,
+                    status: detailForm.status,
+                    git_branch: detailForm.git_branch || undefined,
+                  }
+                : f
+            ),
+          }
+        : p
+    );
+
+    await saveWorkspace({ ...workspace, projects: newProjects });
+    setIsDetailOpen(false);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.keyCode === 229) return; // IME
     if (e.key === "Enter" && !isComposingRef.current) {
@@ -162,6 +197,7 @@ export function FeatureTab({
   };
 
   return (
+  <>
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
@@ -215,21 +251,15 @@ export function FeatureTab({
       </ContextMenuTrigger>
 
       <ContextMenuContent className="min-w-[140px]">
-        <ContextMenuItem
-          onClick={() => {
-            setRenameValue(feature.name);
-            setIsRenaming(true);
-          }}
-          className="gap-2 cursor-pointer"
-        >
-          <Pencil1Icon className="w-3.5 h-3.5" />
-          Rename
+        <ContextMenuItem onClick={openDetailDialog} className="gap-2 cursor-pointer">
+          <GearIcon className="w-3.5 h-3.5" />
+          Details
         </ContextMenuItem>
+        <ContextMenuSeparator />
         <ContextMenuItem onClick={handlePin} className="gap-2 cursor-pointer">
           <DrawingPinFilledIcon className="w-3.5 h-3.5" />
           {feature.pinned ? "Unpin" : "Pin"}
         </ContextMenuItem>
-        <ContextMenuSeparator />
         <ContextMenuSub>
           <ContextMenuSubTrigger className="gap-2">
             <ArchiveIcon className="w-3.5 h-3.5" />
@@ -259,15 +289,74 @@ export function FeatureTab({
             </ContextMenuItem>
           </ContextMenuSubContent>
         </ContextMenuSub>
-        <ContextMenuItem
-          onClick={handleDelete}
-          className="gap-2 cursor-pointer text-destructive focus:text-destructive"
-        >
-          <TrashIcon className="w-3.5 h-3.5" />
-          Delete
-        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+
+    {/* Feature Detail Dialog */}
+    <Dialog open={isDetailOpen} onOpenChange={setIsDetailOpen}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Feature Details</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-4 py-4">
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Name</label>
+            <input
+              value={detailForm.name}
+              onChange={(e) => setDetailForm({ ...detailForm, name: e.target.value })}
+              className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Description</label>
+            <textarea
+              value={detailForm.description}
+              onChange={(e) => setDetailForm({ ...detailForm, description: e.target.value })}
+              rows={3}
+              placeholder="Optional description..."
+              className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+            />
+          </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Status</label>
+            <select
+              value={detailForm.status}
+              onChange={(e) => setDetailForm({ ...detailForm, status: e.target.value as FeatureStatus })}
+              className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            >
+              <option value="pending">Pending</option>
+              <option value="running">Running</option>
+              <option value="completed">Completed</option>
+              <option value="needs-review">Needs Review</option>
+            </select>
+          </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium">Git Branch</label>
+            <input
+              value={detailForm.git_branch}
+              onChange={(e) => setDetailForm({ ...detailForm, git_branch: e.target.value })}
+              placeholder="feature/my-branch"
+              className="w-full px-3 py-2 text-sm bg-background border border-border rounded-md focus:outline-none focus:ring-2 focus:ring-primary"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <button
+            onClick={() => setIsDetailOpen(false)}
+            className="px-4 py-2 text-sm border border-border rounded-md hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleSaveDetail}
+            className="px-4 py-2 text-sm bg-primary text-primary-foreground rounded-md hover:bg-primary/90"
+          >
+            Save
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  </>
   );
 }
 

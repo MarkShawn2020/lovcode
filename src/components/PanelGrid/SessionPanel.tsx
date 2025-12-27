@@ -1,5 +1,5 @@
-import { Cross2Icon, PlusIcon, RowsIcon, ColumnsIcon, PinLeftIcon, DotsVerticalIcon, ReloadIcon, ChevronRightIcon, ChevronDownIcon, DrawingPinIcon, ClipboardCopyIcon, CheckIcon } from "@radix-ui/react-icons";
-import { TerminalPane, setAutoCopyOnSelect, getAutoCopyOnSelect } from "../Terminal";
+import { Cross2Icon, PlusIcon, RowsIcon, ColumnsIcon, PinLeftIcon, DotsVerticalIcon, ReloadIcon, DrawingPinIcon } from "@radix-ui/react-icons";
+import { TerminalPane } from "../Terminal";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../ui/tabs";
 import {
   DropdownMenu,
@@ -95,9 +95,9 @@ export interface SessionPanelProps {
 export const SessionPanel = memo(function SessionPanel({
   panel,
   isActive = false,
-  collapsible = false,
+  collapsible: _collapsible = false,
   isExpanded = true,
-  onToggleExpand,
+  onToggleExpand: _onToggleExpand,
   showSplitActions = false,
   onPanelSplit,
   onPanelClose,
@@ -110,20 +110,12 @@ export const SessionPanel = memo(function SessionPanel({
   headerBg = "bg-muted",
   titleFallback = "Terminal",
 }: SessionPanelProps) {
-  const [autoCopyEnabled, setAutoCopyEnabled] = useState(getAutoCopyOnSelect);
-
   const handleTitleChange = useCallback(
     (sessionId: string) => (title: string) => {
       onSessionTitleChange(sessionId, title);
     },
     [onSessionTitleChange]
   );
-
-  const handleToggleAutoCopy = useCallback(() => {
-    const newValue = !autoCopyEnabled;
-    setAutoCopyEnabled(newValue);
-    setAutoCopyOnSelect(newValue);
-  }, [autoCopyEnabled]);
 
   return (
     <Tabs
@@ -173,32 +165,17 @@ export const SessionPanel = memo(function SessionPanel({
                 <PlusIcon className="w-4 h-4 mr-2" />
                 New tab
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={onPanelReload}>
-                <ReloadIcon className="w-4 h-4 mr-2" />
-                Reload
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleToggleAutoCopy}>
-                {autoCopyEnabled ? (
-                  <CheckIcon className="w-4 h-4 mr-2" />
-                ) : (
-                  <ClipboardCopyIcon className="w-4 h-4 mr-2" />
-                )}
-                Auto copy on select
-              </DropdownMenuItem>
-              {collapsible && onToggleExpand && (
-                <DropdownMenuItem onClick={onToggleExpand}>
-                  {isExpanded ? (
-                    <>
-                      <ChevronDownIcon className="w-4 h-4 mr-2" />
-                      Collapse
-                    </>
-                  ) : (
-                    <>
-                      <ChevronRightIcon className="w-4 h-4 mr-2" />
-                      Expand
-                    </>
-                  )}
-                </DropdownMenuItem>
+              {showSplitActions && onPanelSplit && (
+                <>
+                  <DropdownMenuItem onClick={() => onPanelSplit("horizontal")}>
+                    <ColumnsIcon className="w-4 h-4 mr-2" />
+                    Split horizontal
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onPanelSplit("vertical")}>
+                    <RowsIcon className="w-4 h-4 mr-2" />
+                    Split vertical
+                  </DropdownMenuItem>
+                </>
               )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={onPanelToggleShared}>
@@ -214,18 +191,10 @@ export const SessionPanel = memo(function SessionPanel({
                   </>
                 )}
               </DropdownMenuItem>
-              {showSplitActions && onPanelSplit && (
-                <>
-                  <DropdownMenuItem onClick={() => onPanelSplit("horizontal")}>
-                    <ColumnsIcon className="w-4 h-4 mr-2" />
-                    Split horizontal
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => onPanelSplit("vertical")}>
-                    <RowsIcon className="w-4 h-4 mr-2" />
-                    Split vertical
-                  </DropdownMenuItem>
-                </>
-              )}
+              <DropdownMenuItem onClick={onPanelReload}>
+                <ReloadIcon className="w-4 h-4 mr-2" />
+                Reload
+              </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem
                 onClick={onPanelClose}
