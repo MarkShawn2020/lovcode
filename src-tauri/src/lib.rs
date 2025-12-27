@@ -3799,6 +3799,46 @@ async fn test_zenmux_connection(
     })
 }
 
+#[derive(Serialize)]
+struct ClaudeCliTestResult {
+    ok: bool,
+    code: i32,
+    stdout: String,
+    stderr: String,
+}
+
+#[tauri::command]
+async fn test_claude_cli(
+    base_url: String,
+    auth_token: String,
+) -> Result<ClaudeCliTestResult, String> {
+    if auth_token.trim().is_empty() {
+        return Err("ANTHROPIC_AUTH_TOKEN is empty".to_string());
+    }
+
+    let output = tokio::process::Command::new("claude")
+        .arg("--print")
+        .arg("reply 1")
+        .env("ANTHROPIC_BASE_URL", &base_url)
+        .env("ANTHROPIC_AUTH_TOKEN", &auth_token)
+        .output()
+        .await
+        .map_err(|e| format!("Failed to execute claude CLI: {}", e))?;
+
+    let code = output.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+    println!("claude cli test code={} stdout={} stderr={}", code, stdout, stderr);
+
+    Ok(ClaudeCliTestResult {
+        ok: output.status.success(),
+        code,
+        stdout,
+        stderr,
+    })
+}
+
 // ============================================================================
 // Claude Code Version Management
 // ============================================================================
@@ -4557,6 +4597,7 @@ pub fn run() {
             enable_settings_env,
             update_disabled_settings_env,
             test_zenmux_connection,
+            test_claude_cli,
             list_distill_documents,
             get_distill_document,
             find_session_project,

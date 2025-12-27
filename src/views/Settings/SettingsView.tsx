@@ -79,6 +79,9 @@ export function SettingsView({
   const [revealedEnvKeys, setRevealedEnvKeys] = useState<Record<string, boolean>>({});
   const [editingEnvIsDisabled, setEditingEnvIsDisabled] = useState(false);
   const [expandedPresetKey, setExpandedPresetKey] = useState<string | null>(null);
+  const [selectedModels, setSelectedModels] = useState<Record<string, string>>({
+    univibe: "claude-sonnet-4-5-20250929",
+  });
 
   useEffect(() => {
     Promise.all([
@@ -90,6 +93,14 @@ export function SettingsView({
         setSettings(s);
         setContextFiles(c.filter((f) => f.scope === "global"));
         setSettingsPath(p);
+        // Initialize selected model from current env
+        const envValue = s?.raw && typeof s.raw === "object" ? (s.raw as Record<string, unknown>).env : null;
+        if (envValue && typeof envValue === "object") {
+          const currentModel = (envValue as Record<string, unknown>).ANTHROPIC_MODEL;
+          if (typeof currentModel === "string" && currentModel) {
+            setSelectedModels((prev) => ({ ...prev, univibe: currentModel }));
+          }
+        }
       })
       .finally(() => setLoading(false));
   }, []);
@@ -161,6 +172,14 @@ export function SettingsView({
     ? allEnvEntries
     : allEnvEntries.filter(([key]) => key.toLowerCase().includes(search.toLowerCase()));
 
+  const providerModels: Record<string, { id: string; label: string }[]> = {
+    univibe: [
+      { id: "claude-sonnet-4-5-20250929", label: "Claude Sonnet 4.5" },
+      { id: "claude-opus-4-5-20251101", label: "Claude Opus 4.5" },
+      { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
+    ],
+  };
+
   const proxyPresets = [
     {
       key: "anthropic-subscription",
@@ -179,6 +198,12 @@ export function SettingsView({
       label: "ZenMux",
       description: "Route via ZenMux to unlock more model options",
       templateName: "zenmux-anthropic-proxy",
+    },
+    {
+      key: "univibe",
+      label: "UniVibe",
+      description: "UniVibe proxy service, supports Claude Code / Codex / Cursor",
+      templateName: "univibe-anthropic-proxy",
     },
     {
       key: "qiniu",
@@ -224,6 +249,13 @@ export function SettingsView({
       downloads: null,
       content: JSON.stringify({ env: { QINIU_API_KEY: "your_qiniu_api_key_here" } }, null, 2),
     },
+    univibe: {
+      name: "univibe-anthropic-proxy",
+      path: "fallback/univibe-anthropic-proxy.json",
+      description: "UniVibe proxy service, supports Claude Code / Codex / Cursor.",
+      downloads: null,
+      content: JSON.stringify({ env: { ANTHROPIC_AUTH_TOKEN: "cr_xxxxxxxxxxxxxxxxxx" } }, null, 2),
+    },
   };
 
   const filteredPresets = proxyPresets.filter(
@@ -252,36 +284,24 @@ export function SettingsView({
 
   const getPresetPreviewConfig = (presetKey: string) => {
     const resolved = getPresetTemplate(presetKey);
-    const settingsRaw =
-      settings?.raw && typeof settings.raw === "object" && !Array.isArray(settings.raw)
-        ? (settings.raw as Record<string, unknown>)
-        : {};
     const templateContent = resolved?.template?.content;
     if (!templateContent) {
-      return { settings: settingsRaw, note: "Template not available locally." };
+      return { env: {}, note: "Template not available locally." };
     }
 
     try {
       const parsed = JSON.parse(templateContent) as Record<string, unknown>;
-      const preview: Record<string, unknown> = {};
       const templateEnv =
         parsed.env && typeof parsed.env === "object" && !Array.isArray(parsed.env)
           ? (parsed.env as Record<string, unknown>)
-          : null;
-      if (templateEnv) {
-        const currentEnv =
-          settingsRaw.env && typeof settingsRaw.env === "object" && !Array.isArray(settingsRaw.env)
-            ? (settingsRaw.env as Record<string, unknown>)
-            : {};
-        preview.env = Object.fromEntries(Object.keys(templateEnv).map((key) => [key, currentEnv[key] ?? ""]));
-      }
-      Object.keys(parsed).forEach((key) => {
-        if (key === "env") return;
-        if (key in settingsRaw) preview[key] = settingsRaw[key];
-      });
-      return { settings: preview, note: null };
+          : {};
+      // Show only required env keys with current values from rawEnv
+      const previewEnv = Object.fromEntries(
+        Object.keys(templateEnv).map((key) => [key, rawEnv[key] || ""])
+      );
+      return { env: previewEnv, note: null };
     } catch {
-      return { settings: settingsRaw, note: "Template JSON invalid; showing full settings." };
+      return { env: {}, note: "Template JSON invalid." };
     }
   };
 
@@ -323,8 +343,37 @@ export function SettingsView({
 
       setTestMissingKeys((prev) => ({ ...prev, [presetKey]: [] }));
 
+      if (presetKey === "univibe") {
+        const authToken = (envSource.ANTHROPIC_AUTH_TOKEN || "").trim();
+        const baseUrl = envSource.ANTHROPIC_BASE_URL || "https://api.univibe.cc/anthropic";
+
+        try {
+          const result = await invoke<{ ok: boolean; code: number; stdout: string; stderr: string }>("test_claude_cli", {
+            baseUrl,
+            authToken,
+          });
+
+          if (!result.ok) {
+            setTestStatus((prev) => ({ ...prev, [presetKey]: "error" }));
+            setTestMessage((prev) => ({
+              ...prev,
+              [presetKey]: `UniVibe test failed (${result.code}): ${result.stderr || result.stdout || "No output"}`,
+            }));
+            return;
+          }
+        } catch (e) {
+          setTestStatus((prev) => ({ ...prev, [presetKey]: "error" }));
+          setTestMessage((prev) => ({ ...prev, [presetKey]: `UniVibe test error: ${String(e)}` }));
+          return;
+        }
+      }
+
       if (presetKey === "zenmux") {
-        const authToken = (envSource.ZENMUX_API_KEY || envSource.ANTHROPIC_AUTH_TOKEN || "").trim();
+        const authToken = (
+          envSource.ZENMUX_API_KEY ||
+          envSource.ANTHROPIC_AUTH_TOKEN ||
+          ""
+        ).trim();
         const baseUrl = envSource.ANTHROPIC_BASE_URL || "https://zenmux.ai/api/anthropic";
         const model = envSource.ANTHROPIC_DEFAULT_SONNET_MODEL || envSource.ANTHROPIC_MODEL || "anthropic/claude-sonnet-4.5";
 
@@ -371,6 +420,10 @@ export function SettingsView({
       CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
     },
     qiniu: { ANTHROPIC_BASE_URL: "https://api.qnaigc.com" },
+    univibe: {
+      ANTHROPIC_BASE_URL: "https://api.univibe.cc/anthropic",
+      ANTHROPIC_API_KEY: "",
+    },
   };
 
   const handleApplyPreset = async (presetKey: string) => {
@@ -393,13 +446,26 @@ export function SettingsView({
       if (presetKey === "anthropic-subscription") {
         parsed.env = { CLAUDE_CODE_USE_OAUTH: "1" };
       } else if (parsed.env) {
+        // Use current values from rawEnv for template keys
+        const templateKeys = Object.keys(parsed.env);
+        for (const key of templateKeys) {
+          if (rawEnv[key]) {
+            parsed.env[key] = rawEnv[key];
+          }
+        }
+        // Apply key mappings (e.g., ZENMUX_API_KEY -> ANTHROPIC_AUTH_TOKEN)
         for (const [fromKey, toKey] of Object.entries(keyMapping)) {
           if (fromKey in parsed.env) {
             parsed.env[toKey] = parsed.env[fromKey];
             delete parsed.env[fromKey];
           }
         }
+        // Merge extra env vars
         Object.assign(parsed.env, extraEnv);
+        // Add model for univibe
+        if (presetKey === "univibe" && selectedModels.univibe) {
+          parsed.env.ANTHROPIC_MODEL = selectedModels.univibe;
+        }
       }
 
       parsed.lovcode = { activeProvider: presetKey };
@@ -783,6 +849,17 @@ export function SettingsView({
                       )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1 truncate">{preset.description}</p>
+                    {providerModels[preset.key] && (
+                      <select
+                        className="mt-2 text-xs px-2 py-1 rounded bg-canvas border border-border text-ink w-full max-w-[200px]"
+                        value={selectedModels[preset.key] || providerModels[preset.key][0]?.id}
+                        onChange={(e) => setSelectedModels((prev) => ({ ...prev, [preset.key]: e.target.value }))}
+                      >
+                        {providerModels[preset.key].map((m) => (
+                          <option key={m.id} value={m.id}>{m.label}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                   <ResponsiveActions
                     variant="router"
@@ -850,12 +927,30 @@ export function SettingsView({
                   <div className="rounded-lg border border-border bg-canvas/70 p-2">
                     {(() => {
                       const preview = getPresetPreviewConfig(preset.key);
+                      const envKeys = Object.keys(preview.env);
                       return (
                         <>
                           {preview.note && <p className="text-xs text-muted-foreground mb-2">{preview.note}</p>}
-                          <pre className="text-xs text-ink whitespace-pre-wrap break-words font-mono">
-                            {JSON.stringify(preview.settings, null, 2)}
-                          </pre>
+                          {envKeys.length > 0 ? (
+                            <div className="flex flex-col gap-2">
+                              {envKeys.map((key) => (
+                                <div key={key} className="flex items-center gap-2">
+                                  <span className="text-xs text-muted-foreground font-mono min-w-[10rem] shrink-0">{key}</span>
+                                  <input
+                                    className="text-xs px-2 py-1 rounded bg-canvas border border-border text-ink flex-1 font-mono"
+                                    placeholder="Enter value..."
+                                    value={rawEnv[key] || ""}
+                                    onChange={async (e) => {
+                                      await invoke("update_settings_env", { envKey: key, envValue: e.target.value });
+                                      await refreshSettings();
+                                    }}
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-muted-foreground">No configuration required.</p>
+                          )}
                         </>
                       );
                     })()}
