@@ -215,13 +215,14 @@ export function FeatureTabGroup({
 
   const contextMenuContent = (
     <ContextMenuContent className="min-w-[160px]">
-      <ContextMenuItem onClick={() => handleAddFeature()} className="gap-2 cursor-pointer">
-        <PlusIcon className="w-3.5 h-3.5" />
-        <span>New Feature</span>
-      </ContextMenuItem>
       <ContextMenuItem onClick={handleOpenDashboard} className="gap-2 cursor-pointer">
         <DashboardIcon className="w-3.5 h-3.5" />
         <span>Dashboard</span>
+      </ContextMenuItem>
+      <ContextMenuSeparator />
+      <ContextMenuItem onClick={() => handleAddFeature()} className="gap-2 cursor-pointer">
+        <PlusIcon className="w-3.5 h-3.5" />
+        <span>New Feature</span>
       </ContextMenuItem>
       {archivedFeatures.length > 0 && (
         <ContextMenuSub>
