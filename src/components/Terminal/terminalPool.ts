@@ -85,7 +85,7 @@ export function getOrCreateTerminal(sessionId: string): PooledTerminal {
     fontSize: 13,
     fontFamily: "Monaco, Menlo, 'DejaVu Sans Mono', Consolas, monospace",
     lineHeight: 1.2,
-    macOptionIsMeta: true,
+    macOptionIsMeta: false,
     allowProposedApi: true,
     theme: TERMINAL_THEME,
   });
@@ -103,6 +103,34 @@ export function getOrCreateTerminal(sessionId: string): PooledTerminal {
 
   // Open terminal in the detached container
   term.open(container);
+
+  // macOS: Cmd/Option + Arrow keys for navigation
+  term.attachCustomKeyEventHandler((event) => {
+    if (event.type !== "keydown") return true;
+    // Cmd+Left/Right: line start/end
+    if (event.metaKey && !event.altKey) {
+      if (event.key === "ArrowLeft") {
+        term.input("\x01"); // Ctrl+A
+        return false;
+      }
+      if (event.key === "ArrowRight") {
+        term.input("\x05"); // Ctrl+E
+        return false;
+      }
+    }
+    // Option+Left/Right: word jump
+    if (event.altKey && !event.metaKey) {
+      if (event.key === "ArrowLeft") {
+        term.input("\x1bb"); // Alt+b (backward-word)
+        return false;
+      }
+      if (event.key === "ArrowRight") {
+        term.input("\x1bf"); // Alt+f (forward-word)
+        return false;
+      }
+    }
+    return true;
+  });
 
   const pooled: PooledTerminal = { term, fitAddon, container };
   terminalPool.set(sessionId, pooled);
