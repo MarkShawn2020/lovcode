@@ -12,6 +12,7 @@ import {
 import { SessionPanel } from "../../components/PanelGrid/SessionPanel";
 import { FileTree } from "../../components/FileTree/FileTree";
 import { useResize } from "../../hooks/useResize";
+import { usePtyStatus } from "../../hooks/usePtyStatus";
 import type { PanelState } from "../../components/PanelGrid";
 
 interface FeatureSidebarProps {
@@ -150,6 +151,14 @@ export function FeatureSidebar({
   // Calculate total sessions count
   const totalSessionsCount = pinnedPanels.reduce((sum, p) => sum + p.sessions.length, 0);
 
+  // Collect all ptyIds from pinned sessions
+  const allPtyIds = useMemo(() => {
+    return pinnedPanels.flatMap((p) => p.sessions.map((s) => s.ptyId));
+  }, [pinnedPanels]);
+
+  // Track PTY running status
+  const ptyStatusMap = usePtyStatus(allPtyIds);
+
   // Collapsed state
   if (collapsed) {
     return (
@@ -162,12 +171,28 @@ export function FeatureSidebar({
           <ChevronRightIcon className="w-4 h-4" />
         </button>
         <div className="flex-1 flex flex-col items-center pt-2 gap-2">
-          {/* Pinned section with count */}
-          <div className="flex flex-col items-center gap-0.5">
+          {/* Pinned section with status dots */}
+          <div className="flex flex-col items-center gap-1">
             <span title={`${totalSessionsCount} sessions`}>
               <DrawingPinFilledIcon className="w-3 h-3 text-primary/70" />
             </span>
-            <span className="text-[10px] text-muted-foreground">{totalSessionsCount}</span>
+            {/* Status dots for each session - one per line */}
+            <div className="flex flex-col items-center gap-1">
+              {pinnedPanels.flatMap((panel) =>
+                panel.sessions.map((session) => {
+                  const isRunning = ptyStatusMap.get(session.ptyId) ?? true;
+                  return (
+                    <span
+                      key={session.id}
+                      title={`${session.title || "Terminal"}: ${isRunning ? "running" : "stopped"}`}
+                      className={`w-2 h-2 rounded-full ${
+                        isRunning ? "bg-green-500" : "bg-muted-foreground/40"
+                      }`}
+                    />
+                  );
+                })
+              )}
+            </div>
           </div>
           {/* Add button */}
           <button
