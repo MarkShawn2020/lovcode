@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { KanbanBoard } from "./KanbanBoard";
 import { ProjectLogo } from "./ProjectLogo";
+import { GitHistory } from "./GitHistory";
 import type { WorkspaceProject, FeatureStatus } from "./types";
 
 interface ProjectDashboardProps {
@@ -191,6 +192,12 @@ export function ProjectDashboard({
           </div>
         )}
       </div>
+
+      {/* Git History */}
+      <GitHistory
+        projectPath={project.path}
+        features={activeFeatures}
+      />
     </div>
   );
 }

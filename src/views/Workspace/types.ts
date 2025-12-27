@@ -69,3 +69,24 @@ export interface WorkspaceData {
   /** Global feature counter across all projects */
   feature_counter?: number;
 }
+
+// ============================================================================
+// Git Types
+// ============================================================================
+
+/** Git commit info */
+export interface CommitInfo {
+  hash: string;
+  short_hash: string;
+  message: string;
+  timestamp: number;
+  author: string;
+  feat_name?: string;
+}
+
+/** Git note for commit association */
+export interface CommitNote {
+  feat_id: string;
+  feat_name?: string;
+  override_assoc?: boolean;
+}
