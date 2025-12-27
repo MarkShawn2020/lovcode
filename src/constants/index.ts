@@ -14,6 +14,7 @@ import {
   LayersIcon,
   PersonIcon,
   DesktopIcon,
+  RowsIcon,
 } from "@radix-ui/react-icons";
 import type { FeatureType, FeatureConfig, TemplateCategory } from "../types";
 
@@ -31,6 +32,7 @@ export const FEATURE_ICONS: Record<
   "kb-reference": BookmarkIcon,
   "kb-distill": LightningBoltIcon,
   settings: GearIcon,
+  statusline: RowsIcon,
   commands: CodeIcon,
   mcp: Component1Icon,
   skills: TargetIcon,
@@ -118,6 +120,13 @@ export const FEATURES: FeatureConfig[] = [
     type: "output-styles",
     label: "Output Styles",
     description: "Response formatting styles",
+    available: true,
+    group: "config",
+  },
+  {
+    type: "statusline",
+    label: "Status Line",
+    description: "Custom CLI status line",
     available: true,
     group: "config",
   },

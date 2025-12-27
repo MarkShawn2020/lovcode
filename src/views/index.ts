@@ -2,6 +2,7 @@
 export { Home } from "./Home";
 export { ProjectsView } from "./Projects";
 export { OutputStylesView } from "./OutputStyles";
+export { StatuslineView } from "./Statusline/StatuslineView";
 export { SubAgentsView, SubAgentDetailView } from "./SubAgents";
 export { SkillsView, SkillDetailView } from "./Skills";
 export { HooksView } from "./Hooks";

@@ -26,10 +26,11 @@ export function DistillDetailView({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    invoke<string>("get_distill_document", { file: document.file })
+    const path = `${homeDir}/.claude/distill/${document.file}`;
+    invoke<string>("read_file", { path })
       .then(setContent)
       .finally(() => setLoading(false));
-  }, [document.file]);
+  }, [document.file, homeDir]);
 
   const handleNavigateSession = async () => {
     if (!document.session) return;

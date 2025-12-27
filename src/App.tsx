@@ -33,6 +33,7 @@ import {
   FeaturesView,
   FeaturesLayout,
   OutputStylesView,
+  StatuslineView,
   SubAgentsView,
   SubAgentDetailView,
   SkillsView,
@@ -161,7 +162,9 @@ function App() {
                   ? "sub-agents"
                   : view.type === "output-styles"
                     ? "output-styles"
-                    : view.type === "kb-distill" || view.type === "kb-distill-detail"
+                    : view.type === "statusline"
+                      ? "statusline"
+                      : view.type === "kb-distill" || view.type === "kb-distill-detail"
                       ? "kb-distill"
                       : view.type === "kb-reference" || view.type === "kb-reference-doc"
                         ? "kb-reference"
@@ -196,6 +199,9 @@ function App() {
         break;
       case "output-styles":
         navigate({ type: "output-styles" });
+        break;
+      case "statusline":
+        navigate({ type: "statusline" });
         break;
       case "kb-distill":
         navigate({ type: "kb-distill" });
@@ -269,7 +275,8 @@ function App() {
         )}
         {(view.type === "commands" || view.type === "command-detail" || view.type === "mcp" ||
           view.type === "skills" || view.type === "skill-detail" || view.type === "hooks" ||
-          view.type === "sub-agents" || view.type === "sub-agent-detail" || view.type === "output-styles") && (
+          view.type === "sub-agents" || view.type === "sub-agent-detail" || view.type === "output-styles" ||
+          view.type === "statusline") && (
           <FeaturesLayout currentFeature={currentFeature} onFeatureClick={handleFeatureClick}>
             {view.type === "commands" && (
               <CommandsView
@@ -340,6 +347,7 @@ function App() {
             )}
             {view.type === "sub-agent-detail" && <SubAgentDetailView agent={view.agent} onBack={() => navigate({ type: "sub-agents" })} />}
             {view.type === "output-styles" && <OutputStylesView />}
+            {view.type === "statusline" && <StatuslineView marketplaceItems={catalog?.statuslines || []} />}
           </FeaturesLayout>
         )}
         {(view.type === "kb-distill" || view.type === "kb-distill-detail" || view.type === "kb-reference" || view.type === "kb-reference-doc") && (
@@ -590,7 +598,8 @@ function App() {
 
         {(view.type === "commands" || view.type === "command-detail" || view.type === "mcp" ||
           view.type === "skills" || view.type === "skill-detail" || view.type === "hooks" ||
-          view.type === "sub-agents" || view.type === "sub-agent-detail" || view.type === "output-styles") && (
+          view.type === "sub-agents" || view.type === "sub-agent-detail" || view.type === "output-styles" ||
+          view.type === "statusline") && (
           <FeaturesLayout currentFeature={currentFeature} onFeatureClick={handleFeatureClick}>
             {view.type === "commands" && (
               <CommandsView
@@ -661,6 +670,7 @@ function App() {
             )}
             {view.type === "sub-agent-detail" && <SubAgentDetailView agent={view.agent} onBack={() => navigate({ type: "sub-agents" })} />}
             {view.type === "output-styles" && <OutputStylesView />}
+            {view.type === "statusline" && <StatuslineView marketplaceItems={catalog?.statuslines || []} />}
           </FeaturesLayout>
         )}
 

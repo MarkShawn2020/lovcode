@@ -163,7 +163,7 @@ export function ReferenceView({
     const doc = docs[initialDocIndex];
     if (!doc) return;
     setDocLoading(true);
-    invoke<string>("get_reference_doc", { path: doc.path })
+    invoke<string>("read_file", { path: doc.path })
       .then(setDocContent)
       .finally(() => setDocLoading(false));
   }, [isDocView, initialDocIndex, docs]);

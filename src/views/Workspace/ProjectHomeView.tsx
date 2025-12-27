@@ -19,7 +19,7 @@ export function ProjectHomeView({ projectPath, projectName }: ProjectHomeViewPro
       setLoading(true);
       for (const name of readmeNames) {
         try {
-          const content = await invoke<string>("get_reference_doc", {
+          const content = await invoke<string>("read_file", {
             path: `${projectPath}/${name}`,
           });
           setReadme(content);

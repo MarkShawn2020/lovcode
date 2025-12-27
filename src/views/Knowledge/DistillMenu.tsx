@@ -34,11 +34,12 @@ export function DistillMenu({ watchEnabled, onWatchToggle, onRefresh }: DistillM
 
   useEffect(() => {
     if (helpOpen && !commandContent) {
-      invoke<string>("get_distill_command_file")
+      const path = `${homeDir}/.claude/commands/distill.md`;
+      invoke<string>("read_file", { path })
         .then(setCommandContent)
         .catch(() => setCommandContent(null));
     }
-  }, [helpOpen, commandContent]);
+  }, [helpOpen, commandContent, homeDir]);
 
   const handleCopy = async () => {
     if (commandContent) {

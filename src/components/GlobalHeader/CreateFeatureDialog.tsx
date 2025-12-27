@@ -122,9 +122,9 @@ export function CreateFeatureDialog({
               </div>
             </div>
 
-            <div className="flex-1 min-h-[200px] border border-border rounded-lg overflow-hidden">
+            <div className="flex-1 min-h-[200px] border border-border rounded-lg overflow-hidden relative">
               {showPreview ? (
-                <div className="h-full overflow-auto p-4 bg-card">
+                <div className="absolute inset-0 overflow-auto p-4 bg-card">
                   {description ? (
                     <MarkdownRenderer content={description} className="max-w-none" />
                   ) : (
@@ -146,7 +146,7 @@ What should be achieved?
 
 ## Notes
 Any additional context..."
-                  className="w-full h-full p-4 bg-card text-sm resize-none outline-none placeholder:text-muted-foreground/50"
+                  className="absolute inset-0 p-4 bg-card text-sm resize-none outline-none placeholder:text-muted-foreground/50"
                   onKeyDown={handleKeyDown}
                 />
               )}

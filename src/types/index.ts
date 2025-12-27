@@ -7,6 +7,7 @@ export type FeatureType =
   | "workspace"
   | "features"
   | "settings"
+  | "statusline"
   | "commands"
   | "mcp"
   | "skills"
@@ -174,6 +175,7 @@ export interface TemplatesCatalog {
   skills: TemplateComponent[];
   hooks: TemplateComponent[];
   agents: TemplateComponent[];
+  statuslines: TemplateComponent[];
   "output-styles": TemplateComponent[];
   sources?: SourceInfo[];
 }
@@ -208,6 +210,7 @@ export type View =
   | { type: "sub-agents" }
   | { type: "sub-agent-detail"; agent: LocalAgent }
   | { type: "output-styles" }
+  | { type: "statusline" }
   | { type: "kb-distill" }
   | { type: "kb-distill-detail"; document: DistillDocument }
   | { type: "kb-reference" }
