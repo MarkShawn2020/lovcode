@@ -9,7 +9,7 @@ export const Avatar = forwardRef<HTMLSpanElement, AvatarProps>(
     return (
       <span
         ref={ref}
-        className={`relative flex h-10 w-10 shrink-0 overflow-hidden rounded-full ${className}`}
+        className={`relative flex shrink-0 overflow-hidden rounded-full ${className}`}
         {...props}
       >
         {children}

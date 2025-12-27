@@ -1,16 +1,15 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { version } from "../package.json";
-// Lucide icons
-import { PanelLeft } from "lucide-react";
 // Radix icons
 import {
-  PersonIcon, ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon,
+  PersonIcon, ChevronDownIcon,
   HomeIcon, ReaderIcon, GearIcon, LayersIcon, CubeIcon, ChatBubbleIcon,
+  DoubleArrowLeftIcon,
 } from "@radix-ui/react-icons";
+import { GlobalHeader } from "./components/GlobalHeader";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { Switch } from "./components/ui/switch";
 import { Avatar, AvatarImage, AvatarFallback } from "./components/ui/avatar";
-import { Popover, PopoverTrigger, PopoverContent } from "./components/ui/popover";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "./components/ui/dialog";
 import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
@@ -31,6 +30,8 @@ import { FEATURES, FEATURE_ICONS } from "./constants";
 import {
   Home,
   WorkspaceView,
+  FeaturesView,
+  FeaturesLayout,
   OutputStylesView,
   SubAgentsView,
   SubAgentDetailView,
@@ -42,10 +43,12 @@ import {
   CommandsView,
   CommandDetailView,
   MarketplaceView,
+  MarketplaceLayout,
   TemplateDetailView,
   DistillView,
   DistillDetailView,
   ReferenceView,
+  KnowledgeLayout,
   SettingsView,
   ProjectList,
   SessionList,
@@ -142,6 +145,8 @@ function App() {
       ? "chat"
       : view.type === "workspace"
         ? "workspace"
+        : view.type === "features"
+        ? "features"
         : view.type === "settings"
         ? "settings"
         : view.type === "commands" || view.type === "command-detail"
@@ -204,6 +209,9 @@ function App() {
       case "workspace":
         navigate({ type: "workspace" });
         break;
+      case "features":
+        navigate({ type: "features" });
+        break;
       default:
         navigate({ type: "feature-todo", feature });
     }
@@ -211,196 +219,336 @@ function App() {
 
   return (
     <AppConfigContext.Provider value={appConfig}>
-    <div className="h-screen bg-canvas flex">
-      {/* Sidebar */}
-      <aside className={`flex flex-col border-r border-border bg-card w-52 shrink-0 transition-[margin] duration-150 ${sidebarCollapsed ? "-ml-52" : "ml-0"}`}>
-        <div data-tauri-drag-region className="h-[52px] shrink-0 flex items-center justify-end px-3 border-b border-border min-w-52">
-          <button
-            onClick={() => setSidebarCollapsed(true)}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt"
-            title="Collapse sidebar"
-          >
-            <PanelLeft className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto py-3 min-w-52">
-          <div className="px-2 mb-2">
-            <button
-              onClick={() => navigate({ type: "home" })}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-                view.type === "home" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
-              }`}
-            >
-              <HomeIcon className="w-5 h-5" />
-              <span className="text-sm">Home</span>
-            </button>
-          </div>
-
-          <div className="mx-4 border-t border-border" />
-
-          <div className="px-2 py-2 flex flex-col gap-0.5">
-            {FEATURES.filter(f => f.group === "history").map((feature) => (
-              <FeatureButton
-                key={feature.type}
-                feature={feature}
-                active={currentFeature === feature.type}
-                onClick={() => handleFeatureClick(feature.type)}
+    {sidebarCollapsed ? (
+      /* Collapsed: vertical layout */
+      <div className="h-screen bg-canvas flex flex-col">
+        <GlobalHeader
+          currentFeature={currentFeature}
+          canGoBack={canGoBack}
+          canGoForward={canGoForward}
+          onGoBack={goBack}
+          onGoForward={goForward}
+          onNavigate={navigate}
+          onFeatureClick={handleFeatureClick}
+          onShowProfileDialog={() => setShowProfileDialog(true)}
+          onShowSettings={() => setShowSettings(true)}
+        />
+        <main className="flex-1 overflow-auto">
+        {view.type === "home" && (
+          <Home
+            onFeatureClick={handleFeatureClick}
+            onProjectClick={(p) => navigate({ type: "chat-sessions", projectId: p.id, projectPath: p.path })}
+            onSessionClick={(s) => navigate({ type: "chat-messages", projectId: s.project_id, sessionId: s.id, summary: s.summary })}
+            onSearch={() => navigate({ type: "chat-projects" })}
+          />
+        )}
+        {view.type === "workspace" && <WorkspaceView />}
+        {view.type === "features" && <FeaturesView onFeatureClick={handleFeatureClick} currentFeature={currentFeature} />}
+        {view.type === "chat-projects" && (
+          <ProjectList
+            onSelectProject={(p) => navigate({ type: "chat-sessions", projectId: p.id, projectPath: p.path })}
+            onSelectSession={(s) => navigate({ type: "chat-messages", projectId: s.project_id, sessionId: s.id, summary: s.summary })}
+            onSelectChat={(c) => navigate({ type: "chat-messages", projectId: c.project_id, sessionId: c.session_id, summary: c.session_summary })}
+          />
+        )}
+        {view.type === "chat-sessions" && (
+          <SessionList
+            projectId={view.projectId}
+            projectPath={view.projectPath}
+            onBack={() => navigate({ type: "chat-projects" })}
+            onSelect={(s) => navigate({ type: "chat-messages", projectId: s.project_id, sessionId: s.id, summary: s.summary })}
+          />
+        )}
+        {view.type === "chat-messages" && (
+          <MessageView
+            projectId={view.projectId}
+            sessionId={view.sessionId}
+            summary={view.summary}
+            onBack={() => navigate({ type: "chat-sessions", projectId: view.projectId, projectPath: "" })}
+          />
+        )}
+        {(view.type === "commands" || view.type === "command-detail" || view.type === "mcp" ||
+          view.type === "skills" || view.type === "skill-detail" || view.type === "hooks" ||
+          view.type === "sub-agents" || view.type === "sub-agent-detail" || view.type === "output-styles") && (
+          <FeaturesLayout currentFeature={currentFeature} onFeatureClick={handleFeatureClick}>
+            {view.type === "commands" && (
+              <CommandsView
+                onSelect={(cmd, scrollToChangelog) => navigate({ type: "command-detail", command: cmd, scrollToChangelog })}
+                marketplaceItems={catalog?.commands || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.commands.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "commands" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "commands" })}
               />
-            ))}
+            )}
+            {view.type === "command-detail" && (
+              <CommandDetailView
+                command={view.command}
+                onBack={() => navigate({ type: "commands" })}
+                onCommandUpdated={() => {}}
+                onRenamed={async (newPath: string) => {
+                  const commands = await invoke<LocalCommand[]>("list_local_commands");
+                  const cmd = commands.find(c => c.path === newPath);
+                  if (cmd) navigate({ type: "command-detail", command: cmd });
+                }}
+                scrollToChangelog={view.scrollToChangelog}
+              />
+            )}
+            {view.type === "mcp" && (
+              <McpView
+                marketplaceItems={catalog?.mcps || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.mcps.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "mcps" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "mcps" })}
+              />
+            )}
+            {view.type === "skills" && (
+              <SkillsView
+                onSelect={(skill) => navigate({ type: "skill-detail", skill })}
+                marketplaceItems={catalog?.skills || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.skills.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "skills" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "skills" })}
+              />
+            )}
+            {view.type === "skill-detail" && <SkillDetailView skill={view.skill} onBack={() => navigate({ type: "skills" })} />}
+            {view.type === "hooks" && (
+              <HooksView
+                marketplaceItems={catalog?.hooks || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.hooks.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "hooks" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "hooks" })}
+              />
+            )}
+            {view.type === "sub-agents" && (
+              <SubAgentsView
+                onSelect={(agent) => navigate({ type: "sub-agent-detail", agent })}
+                marketplaceItems={catalog?.agents || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.agents.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "agents" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "agents" })}
+              />
+            )}
+            {view.type === "sub-agent-detail" && <SubAgentDetailView agent={view.agent} onBack={() => navigate({ type: "sub-agents" })} />}
+            {view.type === "output-styles" && <OutputStylesView />}
+          </FeaturesLayout>
+        )}
+        {(view.type === "kb-distill" || view.type === "kb-distill-detail" || view.type === "kb-reference" || view.type === "kb-reference-doc") && (
+          <KnowledgeLayout currentFeature={currentFeature} onFeatureClick={handleFeatureClick}>
+            {view.type === "kb-distill" && (
+              <DistillView
+                onSelect={(doc) => navigate({ type: "kb-distill-detail", document: doc })}
+                watchEnabled={distillWatchEnabled}
+                onWatchToggle={(enabled) => {
+                  setDistillWatchEnabled(enabled);
+                  invoke("set_distill_watch_enabled", { enabled });
+                }}
+              />
+            )}
+            {view.type === "kb-distill-detail" && (
+              <DistillDetailView
+                document={view.document}
+                onBack={() => navigate({ type: "kb-distill" })}
+                onNavigateSession={(projectId, sessionId, summary) => navigate({ type: "chat-messages", projectId, sessionId, summary })}
+              />
+            )}
+            {(view.type === "kb-reference" || view.type === "kb-reference-doc") && (
+              <ReferenceView
+                initialSource={view.type === "kb-reference-doc" ? view.source : undefined}
+                initialDocIndex={view.type === "kb-reference-doc" ? view.docIndex : undefined}
+                onDocOpen={(source, docIndex) => navigate({ type: "kb-reference-doc", source, docIndex })}
+                onDocClose={() => navigate({ type: "kb-reference" })}
+              />
+            )}
+          </KnowledgeLayout>
+        )}
+        {view.type === "settings" && (
+          <SettingsView
+            marketplaceItems={catalog?.settings || []}
+            onMarketplaceSelect={(item) => {
+              const template = catalog?.settings.find(c => c.path === item.path);
+              if (template) navigate({ type: "template-detail", template, category: "settings" });
+            }}
+            onBrowseMore={() => navigate({ type: "marketplace", category: "settings" })}
+          />
+        )}
+        {(view.type === "marketplace" || view.type === "template-detail") && (
+          <MarketplaceLayout
+            currentCategory={view.type === "marketplace" ? (view.category ?? marketplaceCategory) : view.category}
+            onCategoryClick={(category) => navigate({ type: "marketplace", category })}
+          >
+            {view.type === "marketplace" && (
+              <MarketplaceView
+                initialCategory={view.category ?? marketplaceCategory}
+                onSelectTemplate={(template, category) => {
+                  setMarketplaceCategory(category);
+                  navigate({ type: "template-detail", template, category });
+                }}
+              />
+            )}
+            {view.type === "template-detail" && (
+              <TemplateDetailView
+                template={view.template}
+                category={view.category}
+                onBack={() => navigate({ type: "marketplace", category: marketplaceCategory })}
+                onNavigateToInstalled={view.category === "mcps" ? () => navigate({ type: "mcp" }) : undefined}
+              />
+            )}
+          </MarketplaceLayout>
+        )}
+        {view.type === "feature-todo" && <FeatureTodo feature={view.feature} />}
+        </main>
+      </div>
+    ) : (
+    <div className="h-screen bg-canvas flex">
+      {/* Sidebar - expanded */}
+      <aside className="flex flex-col border-r border-border bg-card w-52 shrink-0">
+          <div data-tauri-drag-region className="h-[52px] shrink-0 flex items-center justify-end px-3 border-b border-border">
             <button
-              onClick={() => handleFeatureClick("chat")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-                currentFeature === "chat" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
-              }`}
+              onClick={() => setSidebarCollapsed(true)}
+              className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
+              title="Collapse sidebar"
             >
-              <ChatBubbleIcon className="w-5 h-5" />
-              <span className="text-sm">Chat History</span>
+              <DoubleArrowLeftIcon className="w-3.5 h-3.5" />
             </button>
-            <Collapsible defaultOpen={currentFeature?.startsWith("kb-")}>
-              <CollapsibleTrigger className="w-full group">
-                <div className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-                  currentFeature?.startsWith("kb-") ? "text-primary" : "text-ink hover:bg-card-alt"
-                }`}>
-                  <ReaderIcon className="w-5 h-5" />
-                  <span className="text-sm flex-1">Knowledge</span>
-                  <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
-                </div>
-              </CollapsibleTrigger>
-              <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
-                {FEATURES.filter(f => f.group === "knowledge").map((feature) => (
-                  <FeatureButton
-                    key={feature.type}
-                    feature={feature}
-                    active={currentFeature === feature.type}
-                    onClick={() => handleFeatureClick(feature.type)}
-                    statusIndicator={feature.type === "kb-distill" ? (distillWatchEnabled ? "on" : "off") : undefined}
-                    compact
-                  />
-                ))}
-              </CollapsibleBody>
-            </Collapsible>
           </div>
 
-          <div className="mx-4 border-t border-border" />
-
-          <div className="px-2 py-2 flex flex-col gap-0.5">
-            <button
-              onClick={() => handleFeatureClick("settings")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-                currentFeature === "settings" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
-              }`}
-            >
-              <GearIcon className="w-5 h-5" />
-              <span className="text-sm">Configuration</span>
-            </button>
-            <Collapsible defaultOpen={FEATURES.some(f => f.group === "config" && f.type !== "settings" && currentFeature === f.type)}>
-              <CollapsibleTrigger className="w-full group">
-                <div className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-                  FEATURES.some(f => f.group === "config" && f.type !== "settings" && currentFeature === f.type)
-                    ? "text-primary" : "text-ink hover:bg-card-alt"
-                }`}>
-                  <LayersIcon className="w-5 h-5" />
-                  <span className="text-sm flex-1">Features</span>
-                  <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
-                </div>
-              </CollapsibleTrigger>
-              <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
-                {FEATURES.filter(f => f.group === "config" && f.type !== "settings").map((feature) => (
-                  <FeatureButton
-                    key={feature.type}
-                    feature={feature}
-                    active={currentFeature === feature.type}
-                    onClick={() => handleFeatureClick(feature.type)}
-                    compact
-                  />
-                ))}
-              </CollapsibleBody>
-            </Collapsible>
-            <button
-              onClick={() => handleFeatureClick("marketplace")}
-              className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
-                currentFeature === "marketplace" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
-              }`}
-            >
-              <CubeIcon className="w-5 h-5" />
-              <span className="text-sm">Marketplace</span>
-            </button>
-          </div>
-        </div>
-
-        <div className="px-3 py-2.5 border-t border-border/50 min-w-52">
-          <div className="flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors cursor-default">
-            <img src="/logo.png" alt="Lovcode" className="w-3.5 h-3.5" />
-            <span className="text-[11px] font-medium text-muted-foreground tracking-wide">Lovcode</span>
-            <span className="text-[10px] text-muted-foreground/60">v{version}</span>
-          </div>
-        </div>
-      </aside>
-
-      {/* Main area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        <div data-tauri-drag-region className="h-[52px] shrink-0 flex items-center justify-between border-b border-border bg-card">
-          <div className={`flex items-center gap-1 ${sidebarCollapsed ? "pl-[92px]" : "pl-3"}`}>
-            <button
-              onClick={() => setSidebarCollapsed(false)}
-              className={`p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt transition-opacity duration-300 ${sidebarCollapsed ? "opacity-100" : "opacity-0 pointer-events-none w-0 p-0"}`}
-              title="Expand sidebar"
-            >
-              <PanelLeft className="w-4 h-4" />
-            </button>
-            <div className="flex items-center gap-0.5">
+          <div className="flex-1 overflow-y-auto py-3">
+            <div className="px-2 mb-2">
               <button
-                onClick={goBack}
-                disabled={!canGoBack}
-                className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
-                title="Go back"
+                onClick={() => navigate({ type: "home" })}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                  view.type === "home" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
+                }`}
               >
-                <ChevronLeftIcon className="w-5 h-5" />
+                <HomeIcon className="w-5 h-5" />
+                <span className="text-sm">Home</span>
               </button>
+            </div>
+
+            <div className="mx-4 border-t border-border" />
+
+            <div className="px-2 py-2 flex flex-col gap-0.5">
+              {FEATURES.filter(f => f.group === "history").map((feature) => (
+                <FeatureButton
+                  key={feature.type}
+                  feature={feature}
+                  active={currentFeature === feature.type}
+                  onClick={() => handleFeatureClick(feature.type)}
+                />
+              ))}
               <button
-                onClick={goForward}
-                disabled={!canGoForward}
-                className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
-                title="Go forward"
+                onClick={() => handleFeatureClick("chat")}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                  currentFeature === "chat" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
+                }`}
               >
-                <ChevronRightIcon className="w-5 h-5" />
+                <ChatBubbleIcon className="w-5 h-5" />
+                <span className="text-sm">Chat History</span>
+              </button>
+              <Collapsible defaultOpen={currentFeature?.startsWith("kb-")}>
+                <CollapsibleTrigger className="w-full group">
+                  <div className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                    currentFeature?.startsWith("kb-") ? "text-primary" : "text-ink hover:bg-card-alt"
+                  }`}>
+                    <ReaderIcon className="w-5 h-5" />
+                    <span className="text-sm flex-1">Knowledge</span>
+                    <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </div>
+                </CollapsibleTrigger>
+                <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
+                  {FEATURES.filter(f => f.group === "knowledge").map((feature) => (
+                    <FeatureButton
+                      key={feature.type}
+                      feature={feature}
+                      active={currentFeature === feature.type}
+                      onClick={() => handleFeatureClick(feature.type)}
+                      statusIndicator={feature.type === "kb-distill" ? (distillWatchEnabled ? "on" : "off") : undefined}
+                      compact
+                    />
+                  ))}
+                </CollapsibleBody>
+              </Collapsible>
+            </div>
+
+            <div className="mx-4 border-t border-border" />
+
+            <div className="px-2 py-2 flex flex-col gap-0.5">
+              <button
+                onClick={() => handleFeatureClick("settings")}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                  currentFeature === "settings" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
+                }`}
+              >
+                <GearIcon className="w-5 h-5" />
+                <span className="text-sm">Configuration</span>
+              </button>
+              <Collapsible defaultOpen={FEATURES.some(f => f.group === "config" && f.type !== "settings" && currentFeature === f.type)}>
+                <CollapsibleTrigger className="w-full group">
+                  <div className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                    FEATURES.some(f => f.group === "config" && f.type !== "settings" && currentFeature === f.type)
+                      ? "text-primary" : "text-ink hover:bg-card-alt"
+                  }`}>
+                    <LayersIcon className="w-5 h-5" />
+                    <span className="text-sm flex-1">Features</span>
+                    <ChevronDownIcon className="w-4 h-4 transition-transform group-data-[state=open]:rotate-180" />
+                  </div>
+                </CollapsibleTrigger>
+                <CollapsibleBody className="pl-4 flex flex-col gap-0.5">
+                  {FEATURES.filter(f => f.group === "config" && f.type !== "settings").map((feature) => (
+                    <FeatureButton
+                      key={feature.type}
+                      feature={feature}
+                      active={currentFeature === feature.type}
+                      onClick={() => handleFeatureClick(feature.type)}
+                      compact
+                    />
+                  ))}
+                </CollapsibleBody>
+              </Collapsible>
+              <button
+                onClick={() => handleFeatureClick("marketplace")}
+                className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-colors ${
+                  currentFeature === "marketplace" ? "bg-primary/10 text-primary" : "text-ink hover:bg-card-alt"
+                }`}
+              >
+                <CubeIcon className="w-5 h-5" />
+                <span className="text-sm">Marketplace</span>
               </button>
             </div>
           </div>
 
-          <div className="pr-4">
-            <Popover>
-              <PopoverTrigger className="rounded-full hover:ring-2 hover:ring-primary/50 transition-all">
-                <Avatar className="h-8 w-8 cursor-pointer">
-                  {profile.avatarUrl ? <AvatarImage src={profile.avatarUrl} alt={profile.nickname || "User"} /> : null}
-                  <AvatarFallback className="bg-primary/10 text-primary text-sm">
-                    {profile.nickname ? profile.nickname.charAt(0).toUpperCase() : <PersonIcon className="w-4 h-4" />}
-                  </AvatarFallback>
-                </Avatar>
-              </PopoverTrigger>
-              <PopoverContent align="end" className="w-48 p-2">
-                <div className="space-y-1">
-                  {profile.nickname && (
-                    <p className="px-2 py-1.5 text-sm font-medium text-ink truncate">{profile.nickname}</p>
-                  )}
-                  <button
-                    onClick={() => setShowProfileDialog(true)}
-                    className="w-full text-left px-2 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-md transition-colors"
-                  >
-                    Edit Profile
-                  </button>
-                  <button
-                    onClick={() => setShowSettings(true)}
-                    className="w-full text-left px-2 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-md transition-colors"
-                  >
-                    Settings
-                  </button>
-                </div>
-              </PopoverContent>
-            </Popover>
+          <div className="px-3 py-2.5 border-t border-border/50">
+            <div className="flex items-center justify-center gap-2 px-3 py-1.5 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors cursor-default">
+              <img src="/logo.png" alt="Lovcode" className="w-3.5 h-3.5" />
+              <span className="text-[11px] font-medium text-muted-foreground tracking-wide">Lovcode</span>
+              <span className="text-[10px] text-muted-foreground/60">v{version}</span>
+            </div>
           </div>
-        </div>
+        </aside>
+
+      {/* Main area */}
+      <div className="flex-1 flex flex-col min-w-0">
+        <GlobalHeader
+          currentFeature={currentFeature}
+          canGoBack={canGoBack}
+          canGoForward={canGoForward}
+          onGoBack={goBack}
+          onGoForward={goForward}
+          onNavigate={navigate}
+          onFeatureClick={handleFeatureClick}
+          onShowProfileDialog={() => setShowProfileDialog(true)}
+          onShowSettings={() => setShowSettings(true)}
+        />
 
         <main className="flex-1 overflow-auto">
         {view.type === "home" && (
@@ -412,6 +560,7 @@ function App() {
           />
         )}
         {view.type === "workspace" && <WorkspaceView />}
+        {view.type === "features" && <FeaturesView onFeatureClick={handleFeatureClick} currentFeature={currentFeature} />}
 
         {view.type === "chat-projects" && (
           <ProjectList
@@ -439,109 +588,110 @@ function App() {
           />
         )}
 
-        {view.type === "commands" && (
-          <CommandsView
-            onSelect={(cmd, scrollToChangelog) => navigate({ type: "command-detail", command: cmd, scrollToChangelog })}
-            marketplaceItems={catalog?.commands || []}
-            onMarketplaceSelect={(item) => {
-              const template = catalog?.commands.find(c => c.path === item.path);
-              if (template) navigate({ type: "template-detail", template, category: "commands" });
-            }}
-            onBrowseMore={() => navigate({ type: "marketplace", category: "commands" })}
-          />
+        {(view.type === "commands" || view.type === "command-detail" || view.type === "mcp" ||
+          view.type === "skills" || view.type === "skill-detail" || view.type === "hooks" ||
+          view.type === "sub-agents" || view.type === "sub-agent-detail" || view.type === "output-styles") && (
+          <FeaturesLayout currentFeature={currentFeature} onFeatureClick={handleFeatureClick}>
+            {view.type === "commands" && (
+              <CommandsView
+                onSelect={(cmd, scrollToChangelog) => navigate({ type: "command-detail", command: cmd, scrollToChangelog })}
+                marketplaceItems={catalog?.commands || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.commands.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "commands" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "commands" })}
+              />
+            )}
+            {view.type === "command-detail" && (
+              <CommandDetailView
+                command={view.command}
+                onBack={() => navigate({ type: "commands" })}
+                onCommandUpdated={() => {}}
+                onRenamed={async (newPath: string) => {
+                  const commands = await invoke<LocalCommand[]>("list_local_commands");
+                  const cmd = commands.find(c => c.path === newPath);
+                  if (cmd) navigate({ type: "command-detail", command: cmd });
+                }}
+                scrollToChangelog={view.scrollToChangelog}
+              />
+            )}
+            {view.type === "mcp" && (
+              <McpView
+                marketplaceItems={catalog?.mcps || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.mcps.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "mcps" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "mcps" })}
+              />
+            )}
+            {view.type === "skills" && (
+              <SkillsView
+                onSelect={(skill) => navigate({ type: "skill-detail", skill })}
+                marketplaceItems={catalog?.skills || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.skills.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "skills" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "skills" })}
+              />
+            )}
+            {view.type === "skill-detail" && <SkillDetailView skill={view.skill} onBack={() => navigate({ type: "skills" })} />}
+            {view.type === "hooks" && (
+              <HooksView
+                marketplaceItems={catalog?.hooks || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.hooks.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "hooks" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "hooks" })}
+              />
+            )}
+            {view.type === "sub-agents" && (
+              <SubAgentsView
+                onSelect={(agent) => navigate({ type: "sub-agent-detail", agent })}
+                marketplaceItems={catalog?.agents || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.agents.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "agents" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "agents" })}
+              />
+            )}
+            {view.type === "sub-agent-detail" && <SubAgentDetailView agent={view.agent} onBack={() => navigate({ type: "sub-agents" })} />}
+            {view.type === "output-styles" && <OutputStylesView />}
+          </FeaturesLayout>
         )}
 
-        {view.type === "command-detail" && (
-          <CommandDetailView
-            command={view.command}
-            onBack={() => navigate({ type: "commands" })}
-            onCommandUpdated={() => {}}
-            onRenamed={async (newPath: string) => {
-              const commands = await invoke<LocalCommand[]>("list_local_commands");
-              const cmd = commands.find(c => c.path === newPath);
-              if (cmd) navigate({ type: "command-detail", command: cmd });
-            }}
-            scrollToChangelog={view.scrollToChangelog}
-          />
-        )}
-
-        {view.type === "mcp" && (
-          <McpView
-            marketplaceItems={catalog?.mcps || []}
-            onMarketplaceSelect={(item) => {
-              const template = catalog?.mcps.find(c => c.path === item.path);
-              if (template) navigate({ type: "template-detail", template, category: "mcps" });
-            }}
-            onBrowseMore={() => navigate({ type: "marketplace", category: "mcps" })}
-          />
-        )}
-
-        {view.type === "skills" && (
-          <SkillsView
-            onSelect={(skill) => navigate({ type: "skill-detail", skill })}
-            marketplaceItems={catalog?.skills || []}
-            onMarketplaceSelect={(item) => {
-              const template = catalog?.skills.find(c => c.path === item.path);
-              if (template) navigate({ type: "template-detail", template, category: "skills" });
-            }}
-            onBrowseMore={() => navigate({ type: "marketplace", category: "skills" })}
-          />
-        )}
-
-        {view.type === "skill-detail" && <SkillDetailView skill={view.skill} onBack={() => navigate({ type: "skills" })} />}
-
-        {view.type === "hooks" && (
-          <HooksView
-            marketplaceItems={catalog?.hooks || []}
-            onMarketplaceSelect={(item) => {
-              const template = catalog?.hooks.find(c => c.path === item.path);
-              if (template) navigate({ type: "template-detail", template, category: "hooks" });
-            }}
-            onBrowseMore={() => navigate({ type: "marketplace", category: "hooks" })}
-          />
-        )}
-
-        {view.type === "sub-agents" && (
-          <SubAgentsView
-            onSelect={(agent) => navigate({ type: "sub-agent-detail", agent })}
-            marketplaceItems={catalog?.agents || []}
-            onMarketplaceSelect={(item) => {
-              const template = catalog?.agents.find(c => c.path === item.path);
-              if (template) navigate({ type: "template-detail", template, category: "agents" });
-            }}
-            onBrowseMore={() => navigate({ type: "marketplace", category: "agents" })}
-          />
-        )}
-
-        {view.type === "sub-agent-detail" && <SubAgentDetailView agent={view.agent} onBack={() => navigate({ type: "sub-agents" })} />}
-        {view.type === "output-styles" && <OutputStylesView />}
-
-        {view.type === "kb-distill" && (
-          <DistillView
-            onSelect={(doc) => navigate({ type: "kb-distill-detail", document: doc })}
-            watchEnabled={distillWatchEnabled}
-            onWatchToggle={(enabled) => {
-              setDistillWatchEnabled(enabled);
-              invoke("set_distill_watch_enabled", { enabled });
-            }}
-          />
-        )}
-
-        {view.type === "kb-distill-detail" && (
-          <DistillDetailView
-            document={view.document}
-            onBack={() => navigate({ type: "kb-distill" })}
-            onNavigateSession={(projectId, sessionId, summary) => navigate({ type: "chat-messages", projectId, sessionId, summary })}
-          />
-        )}
-
-        {(view.type === "kb-reference" || view.type === "kb-reference-doc") && (
-          <ReferenceView
-            initialSource={view.type === "kb-reference-doc" ? view.source : undefined}
-            initialDocIndex={view.type === "kb-reference-doc" ? view.docIndex : undefined}
-            onDocOpen={(source, docIndex) => navigate({ type: "kb-reference-doc", source, docIndex })}
-            onDocClose={() => navigate({ type: "kb-reference" })}
-          />
+        {(view.type === "kb-distill" || view.type === "kb-distill-detail" || view.type === "kb-reference" || view.type === "kb-reference-doc") && (
+          <KnowledgeLayout currentFeature={currentFeature} onFeatureClick={handleFeatureClick}>
+            {view.type === "kb-distill" && (
+              <DistillView
+                onSelect={(doc) => navigate({ type: "kb-distill-detail", document: doc })}
+                watchEnabled={distillWatchEnabled}
+                onWatchToggle={(enabled) => {
+                  setDistillWatchEnabled(enabled);
+                  invoke("set_distill_watch_enabled", { enabled });
+                }}
+              />
+            )}
+            {view.type === "kb-distill-detail" && (
+              <DistillDetailView
+                document={view.document}
+                onBack={() => navigate({ type: "kb-distill" })}
+                onNavigateSession={(projectId, sessionId, summary) => navigate({ type: "chat-messages", projectId, sessionId, summary })}
+              />
+            )}
+            {(view.type === "kb-reference" || view.type === "kb-reference-doc") && (
+              <ReferenceView
+                initialSource={view.type === "kb-reference-doc" ? view.source : undefined}
+                initialDocIndex={view.type === "kb-reference-doc" ? view.docIndex : undefined}
+                onDocOpen={(source, docIndex) => navigate({ type: "kb-reference-doc", source, docIndex })}
+                onDocClose={() => navigate({ type: "kb-reference" })}
+              />
+            )}
+          </KnowledgeLayout>
         )}
 
         {view.type === "settings" && (
@@ -555,29 +705,36 @@ function App() {
           />
         )}
 
-        {view.type === "marketplace" && (
-          <MarketplaceView
-            initialCategory={view.category ?? marketplaceCategory}
-            onSelectTemplate={(template, category) => {
-              setMarketplaceCategory(category);
-              navigate({ type: "template-detail", template, category });
-            }}
-          />
-        )}
-
-        {view.type === "template-detail" && (
-          <TemplateDetailView
-            template={view.template}
-            category={view.category}
-            onBack={() => navigate({ type: "marketplace", category: marketplaceCategory })}
-            onNavigateToInstalled={view.category === "mcps" ? () => navigate({ type: "mcp" }) : undefined}
-          />
+        {(view.type === "marketplace" || view.type === "template-detail") && (
+          <MarketplaceLayout
+            currentCategory={view.type === "marketplace" ? (view.category ?? marketplaceCategory) : view.category}
+            onCategoryClick={(category) => navigate({ type: "marketplace", category })}
+          >
+            {view.type === "marketplace" && (
+              <MarketplaceView
+                initialCategory={view.category ?? marketplaceCategory}
+                onSelectTemplate={(template, category) => {
+                  setMarketplaceCategory(category);
+                  navigate({ type: "template-detail", template, category });
+                }}
+              />
+            )}
+            {view.type === "template-detail" && (
+              <TemplateDetailView
+                template={view.template}
+                category={view.category}
+                onBack={() => navigate({ type: "marketplace", category: marketplaceCategory })}
+                onNavigateToInstalled={view.category === "mcps" ? () => navigate({ type: "mcp" }) : undefined}
+              />
+            )}
+          </MarketplaceLayout>
         )}
 
         {view.type === "feature-todo" && <FeatureTodo feature={view.feature} />}
         </main>
       </div>
     </div>
+    )}
     <AppSettingsDialog open={showSettings} onClose={() => setShowSettings(false)} />
     <ProfileDialog open={showProfileDialog} onClose={() => setShowProfileDialog(false)} profile={profile} onSave={setProfile} />
     </AppConfigContext.Provider>

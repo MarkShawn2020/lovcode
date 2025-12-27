@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { useAtom } from "jotai";
 import { PlusIcon, ArchiveIcon, DashboardIcon } from "@radix-ui/react-icons";
 import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
@@ -32,6 +33,13 @@ export function FeatureTabGroup({
 }: FeatureTabGroupProps) {
   const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
   const [collapsedGroups, setCollapsedGroups] = useAtom(collapsedProjectGroupsAtom);
+  const [hasLogo, setHasLogo] = useState(true); // Default true to hide name initially
+
+  useEffect(() => {
+    invoke<string | null>("get_project_logo", { projectPath: project.path })
+      .then((logo) => setHasLogo(!!logo))
+      .catch(() => setHasLogo(false));
+  }, [project.path]);
 
   const archivedFeatures = project.features.filter(f => f.archived);
 
@@ -222,9 +230,12 @@ export function FeatureTabGroup({
               className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors ${
                 isActiveProject ? "bg-primary/10 text-primary" : "text-muted-foreground hover:text-ink hover:bg-card-alt"
               }`}
+              title={projectDisplayName}
             >
               <ProjectLogo projectPath={project.path} size="sm" />
-              <span className="text-xs font-medium truncate max-w-[80px]">{projectDisplayName}</span>
+              {!hasLogo && (
+                <span className="text-xs font-medium truncate max-w-[80px]">{projectDisplayName}</span>
+              )}
               {features.length > 0 && (
                 <span className="text-xs text-muted-foreground">({features.length})</span>
               )}
@@ -237,62 +248,68 @@ export function FeatureTabGroup({
     );
   }
 
-  // Expanded view: project header + tabs
+  // Expanded view: project header + tabs with underline indicator
   return (
-    <div className="flex items-center gap-0.5">
-      {/* Project header with context menu */}
-      <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <button
-            onClick={features.length > 0 ? toggleCollapsed : handleSelectProject}
-            onPointerDown={(e) => e.stopPropagation()}
-            className={`flex items-center gap-1 px-1.5 py-1 rounded transition-colors ${
-              isActiveProject ? "text-primary" : "text-muted-foreground hover:text-ink"
-            }`}
-            title={projectDisplayName}
-          >
-            <ProjectLogo projectPath={project.path} size="sm" />
-          </button>
-        </ContextMenuTrigger>
-        {contextMenuContent}
-      </ContextMenu>
+    <div className="flex items-center">
+      <div
+        className={`relative flex items-center gap-0.5 px-1 pb-1 after:absolute after:bottom-0 after:left-1 after:right-1 after:h-0.5 after:rounded-full ${
+          isActiveProject ? "after:bg-primary" : "after:bg-border"
+        }`}
+      >
+        {/* Project header with context menu */}
+        <ContextMenu>
+          <ContextMenuTrigger asChild>
+            <button
+              onClick={features.length > 0 ? toggleCollapsed : handleSelectProject}
+              onPointerDown={(e) => e.stopPropagation()}
+              className={`flex items-center px-1 py-1 rounded transition-colors ${
+                isActiveProject ? "text-primary" : "text-muted-foreground hover:text-ink"
+              }`}
+              title={projectDisplayName}
+            >
+              <ProjectLogo projectPath={project.path} size="sm" />
+            </button>
+          </ContextMenuTrigger>
+          {contextMenuContent}
+        </ContextMenu>
 
-      {/* Feature tabs */}
-      {features.length > 0 && (
-        <SortableContext
-          items={features.map(f => f.id)}
-          strategy={horizontalListSortingStrategy}
-        >
-          <div className="flex items-center gap-0.5">
-            {features
-              .sort((a, b) => (a.pinned === b.pinned ? 0 : a.pinned ? -1 : 1))
-              .map((feature) => (
-                <SortableFeatureTab
-                  key={feature.id}
-                  feature={feature}
-                  projectId={project.id}
-                  isActive={isActiveProject && project.active_feature_id === feature.id}
-                  onSelect={() => handleSelectFeature(feature.id)}
-                />
-              ))}
-          </div>
-        </SortableContext>
-      )}
+        {/* Feature tabs */}
+        {features.length > 0 && (
+          <SortableContext
+            items={features.map(f => f.id)}
+            strategy={horizontalListSortingStrategy}
+          >
+            <div className="flex items-center gap-0.5">
+              {features
+                .sort((a, b) => (a.pinned === b.pinned ? 0 : a.pinned ? -1 : 1))
+                .map((feature) => (
+                  <SortableFeatureTab
+                    key={feature.id}
+                    feature={feature}
+                    projectId={project.id}
+                    isActive={isActiveProject && project.active_feature_id === feature.id}
+                    onSelect={() => handleSelectFeature(feature.id)}
+                  />
+                ))}
+            </div>
+          </SortableContext>
+        )}
+
+        {/* Add button - only show for active project */}
+        {isActiveProject && (
+          <button
+            onClick={handleAddFeature}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
+            title="New Feature"
+          >
+            <PlusIcon className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
 
       {/* Separator between project groups */}
       <div className="h-4 border-l border-border mx-1" />
-
-      {/* Add button - only show for active project */}
-      {isActiveProject && (
-        <button
-          onClick={handleAddFeature}
-          onPointerDown={(e) => e.stopPropagation()}
-          className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
-          title="New Feature"
-        >
-          <PlusIcon className="w-3.5 h-3.5" />
-        </button>
-      )}
     </div>
   );
 }
