@@ -5,6 +5,20 @@ import { StarFilledIcon, HeartFilledIcon, GlobeIcon } from "@radix-ui/react-icon
 import type { TemplateComponent, TemplateCategory } from "../../types";
 import { TEMPLATE_CATEGORIES } from "../../constants";
 import { DetailCard, ConfigPage } from "../../components/config";
+import { CodePreview } from "../../components/shared";
+
+function getLanguageForCategory(category: TemplateCategory): string {
+  switch (category) {
+    case "mcps":
+    case "hooks":
+    case "settings":
+      return "json";
+    case "statuslines":
+      return "shell";
+    default:
+      return "markdown";
+  }
+}
 
 interface TemplateDetailViewProps {
   template: TemplateComponent;
@@ -74,6 +88,13 @@ export function TemplateDetailView({
         case "settings":
         case "output-styles":
           await invoke("install_setting_template", { config: template.content });
+          break;
+        case "statuslines":
+          // Write script and update settings
+          await invoke("write_statusline_script", { content: template.content });
+          await invoke("update_settings_statusline", {
+            statusline: { type: "command", command: "~/.claude/statusline.sh", padding: 0 },
+          });
           break;
       }
       setInstalled(true);
@@ -179,15 +200,13 @@ export function TemplateDetailView({
 
       {template.content && (
         <DetailCard label="Content Preview">
-          <div className="prose prose-sm max-w-none prose-neutral prose-pre:bg-card-alt prose-pre:text-ink prose-code:text-ink">
-            {category === "mcps" || category === "hooks" || category === "settings" ? (
-              <pre className="bg-card-alt rounded-lg p-3 text-xs font-mono overflow-x-auto text-ink whitespace-pre-wrap break-words">
-                {template.content}
-              </pre>
-            ) : (
+          {category === "mcps" || category === "hooks" || category === "settings" || category === "statuslines" ? (
+            <CodePreview value={template.content} language={getLanguageForCategory(category)} height={400} />
+          ) : (
+            <div className="prose prose-sm max-w-none prose-neutral prose-pre:bg-card-alt prose-pre:text-ink prose-code:text-ink">
               <Markdown>{template.content}</Markdown>
-            )}
-          </div>
+            </div>
+          )}
         </DetailCard>
       )}
     </ConfigPage>

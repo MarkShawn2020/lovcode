@@ -169,4 +169,5 @@ export const TEMPLATE_CATEGORIES: {
   { key: "hooks", label: "Hooks", icon: Link2Icon },
   { key: "agents", label: "Sub Agents", icon: PersonIcon },
   { key: "output-styles", label: "Output Styles", icon: MixerHorizontalIcon },
+  { key: "statuslines", label: "Status Line", icon: RowsIcon },
 ];

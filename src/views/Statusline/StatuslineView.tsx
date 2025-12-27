@@ -2,11 +2,36 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { RowsIcon, Pencil1Icon, CheckIcon, Cross1Icon, TrashIcon, RocketIcon, CodeIcon, ChevronDownIcon } from "@radix-ui/react-icons";
 import { ConfigPage, PageHeader, EmptyState, LoadingState } from "../../components/config";
-import { CollapsibleCard } from "../../components/shared";
+import { CollapsibleCard, BrowseMarketplaceButton, CodePreview } from "../../components/shared";
 import { Button } from "../../components/ui/button";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../../components/ui/collapsible";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
 import type { ClaudeSettings, TemplateComponent } from "../../types";
+
+const JSON_REFERENCE = `{
+  "hook_event_name": "Status",
+  "session_id": "abc123...",
+  "cwd": "/current/working/directory",
+  "model": {
+    "id": "claude-opus-4-1",
+    "display_name": "Opus"
+  },
+  "workspace": {
+    "current_dir": "/current/directory",
+    "project_dir": "/project/directory"
+  },
+  "version": "1.0.80",
+  "cost": {
+    "total_cost_usd": 0.01234,
+    "total_lines_added": 156,
+    "total_lines_removed": 23
+  },
+  "context_window": {
+    "total_input_tokens": 15234,
+    "context_window_size": 200000,
+    "current_usage": { ... }
+  }
+}`;
 
 interface StatusLineConfig {
   type: "command";
@@ -16,9 +41,10 @@ interface StatusLineConfig {
 
 interface StatuslineViewProps {
   marketplaceItems?: TemplateComponent[];
+  onBrowseMore?: () => void;
 }
 
-export function StatuslineView({ marketplaceItems = [] }: StatuslineViewProps) {
+export function StatuslineView({ marketplaceItems = [], onBrowseMore }: StatuslineViewProps) {
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
   const [editing, setEditing] = useState(false);
@@ -125,7 +151,11 @@ export function StatuslineView({ marketplaceItems = [] }: StatuslineViewProps) {
 
   return (
     <ConfigPage>
-      <PageHeader title="Status Line" subtitle="Customize Claude Code's CLI status bar" />
+      <PageHeader
+        title="Status Line"
+        subtitle="Customize Claude Code's CLI status bar"
+        action={onBrowseMore && <BrowseMarketplaceButton onClick={onBrowseMore} />}
+      />
 
       <CollapsibleCard
         storageKey="lovcode:statusline:configOpen"
@@ -156,9 +186,7 @@ export function StatuslineView({ marketplaceItems = [] }: StatuslineViewProps) {
                     <ChevronDownIcon className="w-4 h-4 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" />
                   </CollapsibleTrigger>
                   <CollapsibleContent>
-                    <pre className="text-xs p-3 overflow-x-auto font-mono text-muted-foreground whitespace-pre-wrap bg-canvas">
-                      {scriptContent}
-                    </pre>
+                    <CodePreview value={scriptContent} language="shell" height={300} />
                   </CollapsibleContent>
                 </div>
               </Collapsible>
@@ -267,9 +295,7 @@ export function StatuslineView({ marketplaceItems = [] }: StatuslineViewProps) {
                   </div>
                   <CollapsibleContent>
                     <div className="px-3 pb-3">
-                      <pre className="text-xs bg-muted p-3 rounded-lg overflow-x-auto font-mono text-muted-foreground whitespace-pre-wrap">
-                        {template.content || "No content available"}
-                      </pre>
+                      <CodePreview value={template.content || "# No content available"} language="shell" height={200} />
                     </div>
                   </CollapsibleContent>
                 </div>
@@ -285,32 +311,7 @@ export function StatuslineView({ marketplaceItems = [] }: StatuslineViewProps) {
         subtitle="Data available to your statusline script"
         bodyClassName="p-4"
       >
-        <pre className="text-xs bg-muted p-3 rounded-lg overflow-x-auto font-mono text-muted-foreground">
-{`{
-  "hook_event_name": "Status",
-  "session_id": "abc123...",
-  "cwd": "/current/working/directory",
-  "model": {
-    "id": "claude-opus-4-1",
-    "display_name": "Opus"
-  },
-  "workspace": {
-    "current_dir": "/current/directory",
-    "project_dir": "/project/directory"
-  },
-  "version": "1.0.80",
-  "cost": {
-    "total_cost_usd": 0.01234,
-    "total_lines_added": 156,
-    "total_lines_removed": 23
-  },
-  "context_window": {
-    "total_input_tokens": 15234,
-    "context_window_size": 200000,
-    "current_usage": { ... }
-  }
-}`}
-        </pre>
+        <CodePreview value={JSON_REFERENCE} language="json" height={280} />
         <p className="text-[10px] text-muted-foreground mt-2">
           Use <code className="bg-muted px-1 rounded">jq</code> to parse JSON in bash scripts.
         </p>

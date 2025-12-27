@@ -3,12 +3,9 @@ import { useAtom } from "jotai";
 import { fileViewModeAtom } from "@/store";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { Cross2Icon, ExternalLinkIcon, CodeIcon, ReaderIcon, ColumnsIcon } from "@radix-ui/react-icons";
-import Editor, { loader } from "@monaco-editor/react";
+import Editor from "@monaco-editor/react";
 import { MarkdownRenderer } from "../MarkdownRenderer";
 import { isImageFile } from "@/lib/utils";
-
-// Configure Monaco to use local assets (avoid CDN)
-loader.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" } });
 
 const EDITOR_OPTIONS = {
   readOnly: true,

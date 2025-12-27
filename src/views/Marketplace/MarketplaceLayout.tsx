@@ -1,5 +1,7 @@
 import type { ReactNode } from "react";
-import { MarketplaceSidebar } from "./MarketplaceSidebar";
+import { useMemo } from "react";
+import { SidebarLayout, NavSidebar } from "@/components/shared";
+import { TEMPLATE_CATEGORIES } from "@/constants";
 import type { TemplateCategory } from "@/types";
 
 interface MarketplaceLayoutProps {
@@ -9,12 +11,24 @@ interface MarketplaceLayoutProps {
 }
 
 export function MarketplaceLayout({ children, currentCategory, onCategoryClick }: MarketplaceLayoutProps) {
+  const items = useMemo(() =>
+    TEMPLATE_CATEGORIES
+      .filter(c => c.key !== "settings")
+      .map(c => ({ key: c.key, label: c.label, icon: c.icon })),
+    []
+  );
+
   return (
-    <div className="flex h-full">
-      <MarketplaceSidebar currentCategory={currentCategory} onCategoryClick={onCategoryClick} />
-      <main className="flex-1 overflow-auto">
-        {children}
-      </main>
-    </div>
+    <SidebarLayout
+      sidebar={
+        <NavSidebar
+          items={items}
+          activeKey={currentCategory}
+          onItemClick={(key) => onCategoryClick(key as TemplateCategory)}
+        />
+      }
+    >
+      {children}
+    </SidebarLayout>
   );
 }
