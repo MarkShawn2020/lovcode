@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.13.0
+
+### Minor Changes
+
+- feat: support vibe coding in workspace
+
 ## 0.12.3
 
 ### Patch Changes
