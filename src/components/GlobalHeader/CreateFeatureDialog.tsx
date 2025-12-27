@@ -14,37 +14,49 @@ import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 interface CreateFeatureDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  defaultName: string;
+  seq: number;
   onSubmit: (name: string, description: string) => void;
 }
 
 export function CreateFeatureDialog({
   open,
   onOpenChange,
-  defaultName,
+  seq,
   onSubmit,
 }: CreateFeatureDialogProps) {
-  const [name, setName] = useState(defaultName);
+  const placeholder = `#${seq}`;
+  const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [showPreview, setShowPreview] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (open) {
-      setName(defaultName);
+      setName("");
       setDescription("");
       setShowPreview(false);
       // Focus name input when dialog opens
       setTimeout(() => nameInputRef.current?.focus(), 100);
     }
-  }, [open, defaultName]);
+  }, [open]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmedName = name.trim();
-    if (!trimmedName) return;
-    onSubmit(trimmedName, description.trim());
+    // Use placeholder if name is empty
+    const finalName = name.trim() || placeholder;
+    onSubmit(finalName, description.trim());
     onOpenChange(false);
+  };
+
+  const handleNameKeyDown = (e: React.KeyboardEvent) => {
+    // Tab to accept placeholder
+    if (e.key === "Tab" && !name) {
+      e.preventDefault();
+      setName(placeholder);
+    }
+    if (e.key === "Enter" && e.metaKey) {
+      handleSubmit(e);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -61,16 +73,24 @@ export function CreateFeatureDialog({
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-4 flex-1 min-h-0">
-          <div className="space-y-2">
-            <Label htmlFor="feature-name">Title</Label>
-            <Input
-              ref={nameInputRef}
-              id="feature-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Feature title"
-              onKeyDown={handleKeyDown}
-            />
+          <div className="flex gap-4">
+            <div className="space-y-2 w-20 flex-shrink-0">
+              <Label>ID</Label>
+              <div className="h-9 px-3 flex items-center text-sm text-muted-foreground bg-muted rounded-md">
+                #{seq}
+              </div>
+            </div>
+            <div className="space-y-2 flex-1">
+              <Label htmlFor="feature-name">Title</Label>
+              <Input
+                ref={nameInputRef}
+                id="feature-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={placeholder}
+                onKeyDown={handleNameKeyDown}
+              />
+            </div>
           </div>
 
           <div className="flex-1 min-h-0 flex flex-col space-y-2">
@@ -137,7 +157,7 @@ Any additional context..."
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={!name.trim()}>
+            <Button type="submit">
               Create
             </Button>
           </DialogFooter>

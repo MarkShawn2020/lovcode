@@ -116,6 +116,9 @@ pub struct WorkspaceProject {
 pub struct WorkspaceData {
     pub projects: Vec<WorkspaceProject>,
     pub active_project_id: Option<String>,
+    /// Global feature counter across all projects
+    #[serde(default)]
+    pub feature_counter: Option<u32>,
 }
 
 /// Load workspace data from disk
@@ -128,7 +131,21 @@ pub fn load_workspace() -> Result<WorkspaceData, String> {
 
     let content = fs::read_to_string(&path).map_err(|e| format!("Failed to read workspace: {}", e))?;
 
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse workspace: {}", e))
+    let mut data: WorkspaceData = serde_json::from_str(&content).map_err(|e| format!("Failed to parse workspace: {}", e))?;
+
+    // Migrate: initialize global feature_counter from max seq if not set
+    if data.feature_counter.is_none() {
+        let max_seq = data.projects.iter()
+            .flat_map(|p| p.features.iter())
+            .map(|f| f.seq)
+            .max()
+            .unwrap_or(0);
+        if max_seq > 0 {
+            data.feature_counter = Some(max_seq);
+        }
+    }
+
+    Ok(data)
 }
 
 /// Save workspace data to disk
@@ -231,6 +248,10 @@ pub fn set_active_project(id: &str) -> Result<(), String> {
 pub fn create_feature(project_id: &str, name: String, description: Option<String>) -> Result<Feature, String> {
     let mut data = load_workspace()?;
 
+    // Increment global feature counter
+    let seq = data.feature_counter.unwrap_or(0) + 1;
+    data.feature_counter = Some(seq);
+
     let project = data
         .projects
         .iter_mut()
@@ -239,7 +260,7 @@ pub fn create_feature(project_id: &str, name: String, description: Option<String
 
     let feature = Feature {
         id: uuid::Uuid::new_v4().to_string(),
-        seq: 0, // Will be set by frontend using feature_counter
+        seq,
         name,
         description,
         status: FeatureStatus::Pending,

@@ -130,10 +130,12 @@ export function WorkspaceView() {
       : activeProject;
     if (!targetProject) return;
 
-    const counter = (targetProject.feature_counter ?? 0) + 1;
+    // Generate name based on global counter (backend will assign actual seq)
+    const counter = (workspace.feature_counter ?? 0) + 1;
     const name = `#${counter}`;
 
     try {
+      // Backend handles seq and feature_counter atomically (global)
       const feature = await invoke<Feature>("workspace_create_feature", {
         projectId: targetProject.id,
         name,
@@ -143,9 +145,8 @@ export function WorkspaceView() {
         p.id === targetProject.id
           ? {
               ...p,
-              features: [...p.features, { ...feature, seq: counter }],
+              features: [...p.features, feature],
               active_feature_id: feature.id,
-              feature_counter: counter,
             }
           : p
       );
@@ -153,8 +154,9 @@ export function WorkspaceView() {
         ...workspace,
         projects: newProjects,
         active_project_id: targetProject.id,
+        feature_counter: feature.seq,
       });
-      return { featureId: feature.id, featureName: name };
+      return { featureId: feature.id, featureName: feature.name };
     } catch (err) {
       console.error("Failed to create feature:", err);
       return undefined;

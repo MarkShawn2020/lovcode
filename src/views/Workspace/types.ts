@@ -66,4 +66,6 @@ export interface WorkspaceProject {
 export interface WorkspaceData {
   projects: WorkspaceProject[];
   active_project_id?: string;
+  /** Global feature counter across all projects */
+  feature_counter?: number;
 }

@@ -37,7 +37,7 @@ export function FeatureTabGroup({
   const [, setView] = useAtom(viewAtom);
   const [hasLogo, setHasLogo] = useState(true); // Default true to hide name initially
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [defaultFeatureName, setDefaultFeatureName] = useState("");
+  const [nextSeq, setNextSeq] = useState(0);
 
   useEffect(() => {
     invoke<string | null>("get_project_logo", { projectPath: project.path })
@@ -139,8 +139,8 @@ export function FeatureTabGroup({
     e?.stopPropagation();
     if (!workspace) return;
 
-    const counter = (project.feature_counter ?? 0) + 1;
-    setDefaultFeatureName(`#${counter}`);
+    // Use global counter
+    setNextSeq((workspace.feature_counter ?? 0) + 1);
     setShowCreateDialog(true);
   };
 
@@ -149,9 +149,8 @@ export function FeatureTabGroup({
 
     setView({ type: "workspace" });
 
-    const counter = (project.feature_counter ?? 0) + 1;
-
     try {
+      // Backend handles seq and feature_counter atomically (global)
       const feature = await invoke<Feature>("workspace_create_feature", {
         projectId: project.id,
         name,
@@ -162,9 +161,8 @@ export function FeatureTabGroup({
         p.id === project.id
           ? {
               ...p,
-              features: [...p.features, { ...feature, seq: counter, description: description || undefined }],
+              features: [...p.features, feature],
               active_feature_id: feature.id,
-              feature_counter: counter,
               view_mode: "features" as const,
             }
           : p
@@ -174,6 +172,7 @@ export function FeatureTabGroup({
         ...workspace,
         projects: newProjects,
         active_project_id: project.id,
+        feature_counter: feature.seq,
       };
 
       setWorkspace(newWorkspace);
@@ -277,7 +276,7 @@ export function FeatureTabGroup({
         <CreateFeatureDialog
           open={showCreateDialog}
           onOpenChange={setShowCreateDialog}
-          defaultName={defaultFeatureName}
+          seq={nextSeq}
           onSubmit={handleCreateFeature}
         />
       </>
@@ -332,17 +331,15 @@ export function FeatureTabGroup({
             </SortableContext>
           )}
 
-          {/* Add button - only show for active project */}
-          {isActiveProject && (
-            <button
-              onClick={handleAddFeature}
-              onPointerDown={(e) => e.stopPropagation()}
-              className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
-              title="New Feature"
-            >
-              <PlusIcon className="w-3.5 h-3.5" />
-            </button>
-          )}
+          {/* Add button */}
+          <button
+            onClick={handleAddFeature}
+            onPointerDown={(e) => e.stopPropagation()}
+            className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
+            title="New Feature"
+          >
+            <PlusIcon className="w-3.5 h-3.5" />
+          </button>
         </div>
 
         {/* Separator between project groups */}
@@ -351,7 +348,7 @@ export function FeatureTabGroup({
       <CreateFeatureDialog
         open={showCreateDialog}
         onOpenChange={setShowCreateDialog}
-        defaultName={defaultFeatureName}
+        seq={nextSeq}
         onSubmit={handleCreateFeature}
       />
     </>
