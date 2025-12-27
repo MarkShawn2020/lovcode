@@ -30,6 +30,8 @@ export {
 
 // Workspace atoms
 export {
+  primaryFeatureAtom,
+  workspaceDataAtom, workspaceLoadingAtom, collapsedProjectGroupsAtom,
   featureSidebarExpandedPanelsAtom, featureSidebarPinnedExpandedAtom, featureSidebarFilesExpandedAtom,
 } from "./atoms/workspace";
 

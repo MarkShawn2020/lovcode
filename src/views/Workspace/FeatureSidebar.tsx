@@ -4,10 +4,11 @@ import { featureSidebarExpandedPanelsAtom, featureSidebarPinnedExpandedAtom, fea
 import {
   PlusIcon,
   DrawingPinFilledIcon,
-  ChevronLeftIcon,
   ChevronRightIcon,
   ChevronDownIcon,
   FileIcon,
+  DoubleArrowLeftIcon,
+  DoubleArrowRightIcon,
 } from "@radix-ui/react-icons";
 import { SessionPanel } from "../../components/PanelGrid/SessionPanel";
 import { FileTree } from "../../components/FileTree/FileTree";
@@ -162,72 +163,68 @@ export function FeatureSidebar({
   // Collapsed state
   if (collapsed) {
     return (
-      <div className="h-full flex flex-col bg-canvas-alt border-r border-border w-8">
-        <button
-          onClick={() => onCollapsedChange(false)}
-          className="p-2 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors"
-          title="Expand sidebar"
-        >
-          <ChevronRightIcon className="w-4 h-4" />
-        </button>
-        <div className="flex-1 flex flex-col items-center pt-2 gap-2">
-          {/* Pinned section with status dots */}
-          <div className="flex flex-col items-center gap-1">
-            <button
-              onClick={() => {
-                onCollapsedChange(false);
-                setPinnedExpanded(true);
-              }}
-              title={`${totalSessionsCount} sessions`}
-              className="hover:bg-card-alt rounded p-0.5 transition-colors"
-            >
-              <DrawingPinFilledIcon className="w-3 h-3 text-primary/70" />
-            </button>
-            {/* Status dots for each session - clickable to expand and focus */}
-            <div className="flex flex-col items-center gap-1">
-              {pinnedPanels.flatMap((panel) =>
-                panel.sessions.map((session) => {
-                  const isRunning = ptyStatusMap.get(session.ptyId) ?? true;
-                  return (
-                    <button
-                      key={session.id}
-                      onClick={() => {
-                        onCollapsedChange(false);
-                        setPinnedExpanded(true);
-                        onPanelFocus?.(panel.id);
-                        onSessionSelect(panel.id, session.id);
-                      }}
-                      title={`${session.title || "Terminal"}: ${isRunning ? "running" : "stopped"}`}
-                      className={`w-2 h-2 rounded-full hover:ring-2 hover:ring-primary/50 transition-all ${
-                        isRunning ? "bg-green-500" : "bg-muted-foreground/40"
-                      }`}
-                    />
-                  );
-                })
-              )}
-            </div>
-          </div>
-          {/* Add button */}
+      <div className="h-full flex flex-col bg-card border-r border-border w-10">
+        <div className="flex-1 flex flex-col items-center pt-2 gap-1 overflow-y-auto">
+          <button
+            onClick={() => onCollapsedChange(false)}
+            className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
+            title="Expand sidebar"
+          >
+            <DoubleArrowRightIcon className="w-3.5 h-3.5" />
+          </button>
+          <div className="w-6 border-t border-border my-1" />
+          <button
+            onClick={() => {
+              onCollapsedChange(false);
+              setPinnedExpanded(true);
+            }}
+            title={`Pinned (${totalSessionsCount} sessions)`}
+            className="p-1.5 rounded transition-colors text-muted-foreground hover:text-ink hover:bg-card-alt"
+          >
+            <DrawingPinFilledIcon className="w-4 h-4" />
+          </button>
+          {/* Status dots */}
+          {pinnedPanels.flatMap((panel) =>
+            panel.sessions.map((session) => {
+              const isRunning = ptyStatusMap.get(session.ptyId) ?? true;
+              return (
+                <button
+                  key={session.id}
+                  onClick={() => {
+                    onCollapsedChange(false);
+                    setPinnedExpanded(true);
+                    onPanelFocus?.(panel.id);
+                    onSessionSelect(panel.id, session.id);
+                  }}
+                  title={`${session.title || "Terminal"}: ${isRunning ? "running" : "stopped"}`}
+                  className={`w-2 h-2 rounded-full hover:ring-2 hover:ring-primary/50 transition-all ${
+                    isRunning ? "bg-green-500" : "bg-muted-foreground/40"
+                  }`}
+                />
+              );
+            })
+          )}
           <button
             onClick={() => {
               onCollapsedChange(false);
               setPinnedExpanded(true);
               onAddPinnedPanel();
             }}
-            className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
             title="New pinned session"
+            className="p-1.5 rounded transition-colors text-muted-foreground hover:text-ink hover:bg-card-alt"
           >
-            <PlusIcon className="w-3 h-3" />
+            <PlusIcon className="w-4 h-4" />
           </button>
+          <div className="w-6 border-t border-border my-1" />
           <button
             onClick={() => {
               onCollapsedChange(false);
               setFilesExpanded(true);
             }}
             title="Files"
-            className="hover:bg-card-alt rounded p-0.5 transition-colors"
+            className="p-1.5 rounded transition-colors text-muted-foreground hover:text-ink hover:bg-card-alt"
           >
-            <FileIcon className="w-3 h-3 text-muted-foreground" />
+            <FileIcon className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -255,7 +252,7 @@ export function FeatureSidebar({
             className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors rounded"
             title="Collapse sidebar"
           >
-            <ChevronLeftIcon className="w-4 h-4" />
+            <DoubleArrowLeftIcon className="w-3.5 h-3.5" />
           </button>
           {isRenaming ? (
             <span className="flex-1 flex items-center text-sm font-medium text-ink px-1 min-w-0">

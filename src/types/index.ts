@@ -5,6 +5,7 @@
 export type FeatureType =
   | "chat"
   | "workspace"
+  | "features"
   | "settings"
   | "commands"
   | "mcp"
@@ -193,6 +194,7 @@ export type TemplateCategory =
 export type View =
   | { type: "home" }
   | { type: "workspace" }
+  | { type: "features" }
   | { type: "chat-projects" }
   | { type: "chat-sessions"; projectId: string; projectPath: string }
   | { type: "chat-messages"; projectId: string; sessionId: string; summary: string | null }
