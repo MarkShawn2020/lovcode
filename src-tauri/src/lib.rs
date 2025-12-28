@@ -4352,11 +4352,11 @@ fn detect_claude_code_install_type() -> (ClaudeCodeInstallType, Option<String>) 
     {
         if output.status.success() {
             let version_str = String::from_utf8_lossy(&output.stdout);
-            // Parse version from output like "claude 1.0.58" or "1.0.58"
+            // Parse version from output like "2.0.76 (Claude Code)" - take first token
             let version = version_str
                 .trim()
                 .split_whitespace()
-                .last()
+                .next()
                 .map(|s| s.to_string());
 
             // Check if it's Native install (check for ~/.claude-code directory)
