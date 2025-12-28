@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.17.1
+
+### Patch Changes
+
+- feat(diagnostics): 添加文件行数统计和诊断视图增强
+
 ## 0.17.0
 
 ### Minor Changes
