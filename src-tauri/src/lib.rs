@@ -1,3 +1,4 @@
+mod diagnostics;
 mod hook_watcher;
 mod pty_manager;
 mod workspace_store;
@@ -1995,31 +1996,110 @@ pub struct ReferenceDoc {
     pub group: Option<String>,
 }
 
-#[tauri::command]
-fn list_reference_sources() -> Result<Vec<ReferenceSource>, String> {
-    let ref_dir = get_reference_dir();
-    if !ref_dir.exists() {
-        return Ok(vec![]);
+/// Scan a directory for reference sources (subdirectories with markdown files)
+fn scan_reference_dir(dir: &Path) -> Vec<ReferenceSource> {
+    if !dir.exists() {
+        return vec![];
     }
 
     let mut sources = Vec::new();
-    for entry in fs::read_dir(&ref_dir).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Follow symlinks and check if it's a directory
+            if let Ok(metadata) = fs::metadata(&path) {
+                if metadata.is_dir() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let doc_count = fs::read_dir(&path)
+                        .map(|entries| {
+                            entries
+                                .filter(|e| {
+                                    e.as_ref()
+                                        .ok()
+                                        .map(|e| {
+                                            e.path().extension().map(|ext| ext == "md").unwrap_or(false)
+                                        })
+                                        .unwrap_or(false)
+                                })
+                                .count()
+                        })
+                        .unwrap_or(0);
 
-        // Follow symlinks and check if it's a directory
-        let metadata = fs::metadata(&path).map_err(|e| e.to_string())?;
-        if metadata.is_dir() {
-            let name = entry.file_name().to_string_lossy().to_string();
+                    sources.push(ReferenceSource {
+                        name,
+                        path: path.to_string_lossy().to_string(),
+                        doc_count,
+                    });
+                }
+            }
+        }
+    }
+    sources
+}
+
+/// Get bundled reference docs directories from app resources
+fn get_bundled_reference_dirs(app_handle: &tauri::AppHandle) -> Vec<(String, PathBuf)> {
+    let bundled_docs = [
+        ("claude-code", "third-parties/claude-code-docs/docs"),
+        ("codex", "third-parties/codex/docs"),
+    ];
+
+    let mut result = Vec::new();
+
+    // Try resource directory (production)
+    if let Ok(resource_path) = app_handle.path().resource_dir() {
+        for (name, rel_path) in &bundled_docs {
+            let path = resource_path.join(rel_path);
+            if path.exists() {
+                result.push((name.to_string(), path));
+            }
+        }
+    }
+
+    // If not found in resources, try development paths
+    if result.is_empty() {
+        let candidates = [
+            std::env::current_dir().ok(),
+            std::env::current_dir()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf())),
+        ];
+
+        for candidate in candidates.into_iter().flatten() {
+            for (name, rel_path) in &bundled_docs {
+                let path = candidate.join(rel_path);
+                if path.exists() && !result.iter().any(|(n, _)| n == *name) {
+                    result.push((name.to_string(), path));
+                }
+            }
+        }
+    }
+
+    result
+}
+
+#[tauri::command]
+fn list_reference_sources(app_handle: tauri::AppHandle) -> Result<Vec<ReferenceSource>, String> {
+    let mut sources = Vec::new();
+    let mut seen_names = std::collections::HashSet::new();
+
+    // 1. Scan user's custom reference directory first (higher priority)
+    let ref_dir = get_reference_dir();
+    for source in scan_reference_dir(&ref_dir) {
+        seen_names.insert(source.name.clone());
+        sources.push(source);
+    }
+
+    // 2. Add bundled reference docs (if not overridden by user)
+    for (name, path) in get_bundled_reference_dirs(&app_handle) {
+        if !seen_names.contains(&name) {
             let doc_count = fs::read_dir(&path)
                 .map(|entries| {
                     entries
                         .filter(|e| {
                             e.as_ref()
                                 .ok()
-                                .map(|e| {
-                                    e.path().extension().map(|ext| ext == "md").unwrap_or(false)
-                                })
+                                .map(|e| e.path().extension().map(|ext| ext == "md").unwrap_or(false))
                                 .unwrap_or(false)
                         })
                         .count()
@@ -2038,14 +2118,30 @@ fn list_reference_sources() -> Result<Vec<ReferenceSource>, String> {
     Ok(sources)
 }
 
-#[tauri::command]
-fn list_reference_docs(source: String) -> Result<Vec<ReferenceDoc>, String> {
-    let ref_dir = get_reference_dir();
-    let source_dir = ref_dir.join(&source);
-
-    if !source_dir.exists() {
-        return Ok(vec![]);
+/// Find reference source directory by name (checks user dir first, then bundled)
+fn find_reference_source_dir(app_handle: &tauri::AppHandle, source: &str) -> Option<PathBuf> {
+    // 1. Check user's custom reference directory first
+    let user_dir = get_reference_dir().join(source);
+    if user_dir.exists() {
+        return Some(user_dir);
     }
+
+    // 2. Check bundled reference docs
+    for (name, path) in get_bundled_reference_dirs(app_handle) {
+        if name == source {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+#[tauri::command]
+fn list_reference_docs(app_handle: tauri::AppHandle, source: String) -> Result<Vec<ReferenceDoc>, String> {
+    let source_dir = match find_reference_source_dir(&app_handle, &source) {
+        Some(dir) => dir,
+        None => return Ok(vec![]),
+    };
 
     // Read _order.txt if exists, parse groups from comments
     let order_file = source_dir.join("_order.txt");
@@ -2493,7 +2589,7 @@ fn load_plugin_directory(
 
                             components.push(TemplateComponent {
                                 name: name.clone(),
-                                path: format!("{}/{}/commands/{}.md", subdir, plugin_name, name),
+                                path: cmd_path.to_string_lossy().to_string(),
                                 category: plugin_name.clone(),
                                 component_type: "command".to_string(),
                                 description: plugin_desc.clone(),
@@ -2532,10 +2628,7 @@ fn load_plugin_directory(
 
                                 components.push(TemplateComponent {
                                     name: parsed_name.unwrap_or(name.clone()),
-                                    path: format!(
-                                        "{}/{}/skills/{}/SKILL.md",
-                                        subdir, plugin_name, name
-                                    ),
+                                    path: skill_md.to_string_lossy().to_string(),
                                     category: plugin_name.clone(),
                                     component_type: "skill".to_string(),
                                     description: parsed_desc.or_else(|| plugin_desc.clone()),
@@ -2569,7 +2662,7 @@ fn load_plugin_directory(
 
                             components.push(TemplateComponent {
                                 name: name.clone(),
-                                path: format!("{}/{}/agents/{}.md", subdir, plugin_name, name),
+                                path: agent_path.to_string_lossy().to_string(),
                                 category: plugin_name.clone(),
                                 component_type: "agent".to_string(),
                                 description: plugin_desc.clone(),
@@ -2592,7 +2685,7 @@ fn load_plugin_directory(
                 let content = fs::read_to_string(&mcp_json).ok();
                 components.push(TemplateComponent {
                     name: plugin_name.clone(),
-                    path: format!("{}/{}/.mcp.json", subdir, plugin_name),
+                    path: mcp_json.to_string_lossy().to_string(),
                     category: plugin_name.clone(),
                     component_type: "mcp".to_string(),
                     description: plugin_desc.clone(),
@@ -2660,7 +2753,7 @@ fn load_single_plugin(
 
                         components.push(TemplateComponent {
                             name: parsed_name.unwrap_or_else(|| format!("{}:{}", plugin_name, name)),
-                            path: format!("skills/{}/SKILL.md", name),
+                            path: skill_md.to_string_lossy().to_string(),
                             category: plugin_name.clone(),
                             component_type: "skill".to_string(),
                             description: parsed_desc.or_else(|| plugin_desc.clone()),
@@ -2694,7 +2787,7 @@ fn load_single_plugin(
 
                     components.push(TemplateComponent {
                         name: name.clone(),
-                        path: format!("commands/{}.md", name),
+                        path: cmd_path.to_string_lossy().to_string(),
                         category: plugin_name.clone(),
                         component_type: "command".to_string(),
                         description: plugin_desc.clone(),
@@ -2717,7 +2810,7 @@ fn load_single_plugin(
         let content = fs::read_to_string(&hooks_json).ok();
         components.push(TemplateComponent {
             name: format!("{}-hooks", plugin_name),
-            path: "hooks/hooks.json".to_string(),
+            path: hooks_json.to_string_lossy().to_string(),
             category: plugin_name.clone(),
             component_type: "hook".to_string(),
             description: Some("Automation hooks configuration".to_string()),
@@ -2754,7 +2847,7 @@ fn load_single_plugin(
 
                     components.push(TemplateComponent {
                         name: name.clone(),
-                        path: format!("statuslines/{}.sh", name),
+                        path: path.to_string_lossy().to_string(),
                         category: plugin_name.clone(),
                         component_type: "statusline".to_string(),
                         description,
@@ -2767,6 +2860,61 @@ fn load_single_plugin(
                         author: author.clone(),
                     });
                 }
+            }
+        }
+    }
+
+    components
+}
+
+/// Load personal/installed statuslines from ~/.lovstudio/lovcode/statusline/
+fn load_personal_statuslines() -> Vec<TemplateComponent> {
+    let statusline_dir = get_lovstudio_dir().join("statusline");
+    let mut components = Vec::new();
+
+    if !statusline_dir.exists() {
+        return components;
+    }
+
+    if let Ok(entries) = fs::read_dir(&statusline_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "sh") {
+                let name = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy();
+
+                // Skip backup files (starting with _)
+                if name.starts_with('_') {
+                    continue;
+                }
+
+                let name = name
+                    .to_string();
+                let content = fs::read_to_string(&path).ok();
+
+                // Parse description from script header comment
+                let description = content.as_ref().and_then(|c| {
+                    c.lines()
+                        .find(|l| l.starts_with("# Description:"))
+                        .map(|l| l.trim_start_matches("# Description:").trim().to_string())
+                });
+
+                components.push(TemplateComponent {
+                    name: name.clone(),
+                    path: path.to_string_lossy().to_string(),
+                    category: "personal".to_string(),
+                    component_type: "statusline".to_string(),
+                    description,
+                    downloads: None,
+                    content,
+                    source_id: Some("personal".to_string()),
+                    source_name: Some("Installed".to_string()),
+                    source_icon: Some("📦".to_string()),
+                    plugin_name: None,
+                    author: None,
+                });
             }
         }
     }
@@ -2818,8 +2966,13 @@ fn get_templates_catalog(app_handle: tauri::AppHandle) -> Result<TemplatesCatalo
         }
     }
 
+    // Add personal/installed statuslines
+    let personal_statuslines = load_personal_statuslines();
+    let personal_count = personal_statuslines.len();
+    statuslines.extend(personal_statuslines);
+
     // Build source info
-    let sources: Vec<SourceInfo> = PLUGIN_SOURCES
+    let mut sources: Vec<SourceInfo> = PLUGIN_SOURCES
         .iter()
         .map(|s| SourceInfo {
             id: s.id.to_string(),
@@ -2828,6 +2981,16 @@ fn get_templates_catalog(app_handle: tauri::AppHandle) -> Result<TemplatesCatalo
             count: *source_counts.get(s.id).unwrap_or(&0),
         })
         .collect();
+
+    // Add personal source if there are installed statuslines
+    if personal_count > 0 {
+        sources.insert(0, SourceInfo {
+            id: "personal".to_string(),
+            name: "Installed".to_string(),
+            icon: "📦".to_string(),
+            count: personal_count,
+        });
+    }
 
     Ok(TemplatesCatalog {
         agents,
@@ -3079,6 +3242,115 @@ fn write_statusline_script(content: String) -> Result<String, String> {
     }
 
     Ok(script_path.to_string_lossy().to_string())
+}
+
+/// Install statusline template to ~/.lovstudio/lovcode/statusline/{name}.sh
+#[tauri::command]
+fn install_statusline_template(name: String, content: String) -> Result<String, String> {
+    let statusline_dir = get_lovstudio_dir().join("statusline");
+    fs::create_dir_all(&statusline_dir).map_err(|e| e.to_string())?;
+
+    let script_path = statusline_dir.join(format!("{}.sh", name));
+    fs::write(&script_path, &content).map_err(|e| e.to_string())?;
+
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).map_err(|e| e.to_string())?;
+    }
+
+    Ok(script_path.to_string_lossy().to_string())
+}
+
+/// Apply statusline: copy from ~/.lovstudio/lovcode/statusline/{name}.sh to ~/.claude/statusline.sh
+/// If ~/.claude/statusline.sh exists and is not already installed, backup to ~/.lovstudio/lovcode/statusline/_previous.sh
+#[tauri::command]
+fn apply_statusline(name: String) -> Result<String, String> {
+    let source_path = get_lovstudio_dir().join("statusline").join(format!("{}.sh", name));
+    if !source_path.exists() {
+        return Err(format!("Statusline template not found: {}", name));
+    }
+
+    let target_path = get_claude_dir().join("statusline.sh");
+    let backup_dir = get_lovstudio_dir().join("statusline");
+    fs::create_dir_all(&backup_dir).map_err(|e| e.to_string())?;
+
+    // Backup existing statusline.sh if it exists and differs from source
+    if target_path.exists() {
+        let existing_content = fs::read_to_string(&target_path).unwrap_or_default();
+        let new_content = fs::read_to_string(&source_path).map_err(|e| e.to_string())?;
+
+        if existing_content != new_content {
+            let backup_path = backup_dir.join("_previous.sh");
+            fs::copy(&target_path, &backup_path).map_err(|e| e.to_string())?;
+        }
+    }
+
+    let content = fs::read_to_string(&source_path).map_err(|e| e.to_string())?;
+    fs::write(&target_path, &content).map_err(|e| e.to_string())?;
+
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&target_path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&target_path, perms).map_err(|e| e.to_string())?;
+    }
+
+    Ok(target_path.to_string_lossy().to_string())
+}
+
+/// Restore previous statusline from backup
+#[tauri::command]
+fn restore_previous_statusline() -> Result<String, String> {
+    let backup_path = get_lovstudio_dir().join("statusline").join("_previous.sh");
+    if !backup_path.exists() {
+        return Err("No previous statusline to restore".to_string());
+    }
+
+    let content = fs::read_to_string(&backup_path).map_err(|e| e.to_string())?;
+    let target_path = get_claude_dir().join("statusline.sh");
+    fs::write(&target_path, &content).map_err(|e| e.to_string())?;
+
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&target_path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&target_path, perms).map_err(|e| e.to_string())?;
+    }
+
+    // Remove backup after restore
+    fs::remove_file(&backup_path).ok();
+
+    Ok(target_path.to_string_lossy().to_string())
+}
+
+/// Check if previous statusline backup exists
+#[tauri::command]
+fn has_previous_statusline() -> bool {
+    get_lovstudio_dir().join("statusline").join("_previous.sh").exists()
+}
+
+/// Remove installed statusline template
+#[tauri::command]
+fn remove_statusline_template(name: String) -> Result<(), String> {
+    let script_path = get_lovstudio_dir().join("statusline").join(format!("{}.sh", name));
+    if script_path.exists() {
+        fs::remove_file(&script_path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 // ============================================================================
@@ -3564,6 +3836,84 @@ fn reveal_session_file(project_id: String, session_id: String) -> Result<(), Str
     {
         std::process::Command::new("xdg-open")
             .arg(session_path.parent().unwrap_or(&session_path))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn reveal_path(path: String) -> Result<(), String> {
+    let expanded = if path.starts_with("~") {
+        let home = dirs::home_dir().ok_or("Cannot get home dir")?;
+        home.join(&path[2..])
+    } else {
+        std::path::PathBuf::from(&path)
+    };
+
+    if !expanded.exists() {
+        return Err(format!("Path not found: {}", path));
+    }
+
+    let path_str = expanded.to_string_lossy().to_string();
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path_str])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path_str])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(expanded.parent().unwrap_or(&expanded))
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn open_path(path: String) -> Result<(), String> {
+    let expanded = if path.starts_with("~") {
+        let home = dirs::home_dir().ok_or("Cannot get home dir")?;
+        home.join(&path[2..])
+    } else {
+        std::path::PathBuf::from(&path)
+    };
+
+    if !expanded.exists() {
+        return Err(format!("Path not found: {}", path));
+    }
+
+    let path_str = expanded.to_string_lossy().to_string();
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&path_str)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "", &path_str])
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&path_str)
             .spawn()
             .map_err(|e| e.to_string())?;
     }
@@ -4746,6 +5096,20 @@ fn git_generate_changelog(
 }
 
 // ============================================================================
+// Diagnostics Commands
+// ============================================================================
+
+#[tauri::command]
+fn diagnostics_detect_stack(project_path: String) -> Result<diagnostics::TechStack, String> {
+    diagnostics::detect_tech_stack(&project_path)
+}
+
+#[tauri::command]
+fn diagnostics_check_env(project_path: String) -> Result<diagnostics::EnvCheckResult, String> {
+    diagnostics::check_env_vars(&project_path)
+}
+
+// ============================================================================
 // macOS Window Configuration
 // ============================================================================
 
@@ -4974,9 +5338,16 @@ pub fn run() {
             update_settings_statusline,
             remove_settings_statusline,
             write_statusline_script,
+            install_statusline_template,
+            apply_statusline,
+            restore_previous_statusline,
+            has_previous_statusline,
+            remove_statusline_template,
             open_in_editor,
             open_session_in_editor,
             reveal_session_file,
+            reveal_path,
+            open_path,
             get_session_file_path,
             copy_to_clipboard,
             get_settings_path,
@@ -5047,7 +5418,10 @@ pub fn run() {
             git_revert,
             git_has_changes,
             git_auto_commit,
-            git_generate_changelog
+            git_generate_changelog,
+            // Diagnostics commands
+            diagnostics_detect_stack,
+            diagnostics_check_env
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

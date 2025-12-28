@@ -43,8 +43,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": [
-      "../third-parties/claude-code-templates/docs/components.json"
-    ]
+    "resources": {
+      "../third-parties/claude-code-templates/docs/components.json": "third-parties/claude-code-templates/docs/components.json",
+      "../third-parties/claude-code-docs/docs": "third-parties/claude-code-docs/docs",
+      "../third-parties/codex/docs": "third-parties/codex/docs"
+    }
   }
 }
