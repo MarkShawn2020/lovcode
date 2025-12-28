@@ -53,7 +53,7 @@ export function WorkspaceView() {
 
     setWorkspace(newWorkspace);
     invoke("workspace_save", { data: newWorkspace }).catch(console.error);
-  }, [view]);
+  }, [view, workspace]);
 
   // Load workspace data and reset running features (PTY sessions don't survive restarts)
   useEffect(() => {
