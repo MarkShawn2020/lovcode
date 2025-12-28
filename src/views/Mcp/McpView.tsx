@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Component1Icon, ExternalLinkIcon } from "@radix-ui/react-icons";
+import { Component1Icon, ExternalLinkIcon, TrashIcon } from "@radix-ui/react-icons";
 import { Store } from "lucide-react";
 import type { McpServer, ClaudeSettings } from "../../types";
-import { useAppConfig } from "../../context";
 import {
   LoadingState,
   EmptyState,
@@ -14,6 +13,7 @@ import {
   MarketplaceSection,
   type MarketplaceItem,
 } from "../../components/config";
+import { FilePath } from "../../components/shared/FilePath";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
 
 function BrowseMarketplaceButton({ onClick }: { onClick?: () => void }) {
@@ -37,7 +37,6 @@ interface McpViewProps {
 }
 
 export function McpView({ marketplaceItems, onMarketplaceSelect, onBrowseMore }: McpViewProps) {
-  const { formatPath } = useAppConfig();
   const queryClient = useQueryClient();
   const { data: settings, isLoading: settingsLoading } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
   const { data: mcpConfigPath = "" } = useInvokeQuery<string>(["mcpConfigPath"], "get_mcp_config_path");
@@ -45,6 +44,17 @@ export function McpView({ marketplaceItems, onMarketplaceSelect, onBrowseMore }:
   const [search, setSearch] = useState("");
   const [editingEnv, setEditingEnv] = useState<{ server: string; key: string } | null>(null);
   const [editValue, setEditValue] = useState("");
+  const [uninstallingServer, setUninstallingServer] = useState<string | null>(null);
+
+  const handleUninstall = async (serverName: string) => {
+    setUninstallingServer(serverName);
+    try {
+      await invoke("uninstall_mcp_template", { name: serverName });
+      queryClient.invalidateQueries({ queryKey: ["settings"] });
+    } finally {
+      setUninstallingServer(null);
+    }
+  };
 
   const handleEnvClick = (serverName: string, key: string, currentValue: string) => {
     setEditingEnv({ server: serverName, key });
@@ -63,7 +73,7 @@ export function McpView({ marketplaceItems, onMarketplaceSelect, onBrowseMore }:
   };
 
   const getMcpUrl = (server: McpServer): string | null => {
-    if (server.command === "npx" && server.args.length > 0) {
+    if (server.command === "npx" && server.args?.length > 0) {
       const pkg = server.args.find((a) => a.startsWith("@") || a.startsWith("mcp-"));
       if (pkg) return `https://www.npmjs.com/package/${pkg}`;
     }
@@ -86,15 +96,7 @@ export function McpView({ marketplaceItems, onMarketplaceSelect, onBrowseMore }:
         action={
           <div className="flex items-center gap-2">
             <BrowseMarketplaceButton onClick={onBrowseMore} />
-            {mcpConfigPath && (
-              <button
-                onClick={() => invoke("open_in_editor", { path: mcpConfigPath })}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-lg transition-colors"
-                title={formatPath(mcpConfigPath)}
-              >
-                <span>Open .claude.json</span>
-              </button>
-            )}
+{mcpConfigPath && <FilePath path={mcpConfigPath} showIcon filenameOnly />}
           </div>
         }
       />
@@ -126,14 +128,31 @@ export function McpView({ marketplaceItems, onMarketplaceSelect, onBrowseMore }:
                     <p className="text-sm text-muted-foreground mt-1">{server.description}</p>
                   )}
                 </div>
+                <button
+                  onClick={() => handleUninstall(server.name)}
+                  disabled={uninstallingServer === server.name}
+                  className="p-1.5 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 rounded transition-colors disabled:opacity-50"
+                  title="Uninstall"
+                >
+                  <TrashIcon className="w-4 h-4" />
+                </button>
               </div>
               <div className="bg-card-alt rounded-lg p-3 font-mono text-xs">
-                <p className="text-muted-foreground">
-                  <span className="text-ink">{server.command}</span>
-                  {server.args.length > 0 && (
-                    <span className="text-muted-foreground"> {server.args.join(" ")}</span>
-                  )}
-                </p>
+                {server.url ? (
+                  <p className="text-muted-foreground">
+                    <span className="text-primary/60">{server.type || "http"}</span>
+                    <span className="text-ink ml-2">{server.url}</span>
+                  </p>
+                ) : server.command ? (
+                  <p className="text-muted-foreground">
+                    <span className="text-ink">{server.command}</span>
+                    {server.args.length > 0 && (
+                      <span className="text-muted-foreground"> {server.args.join(" ")}</span>
+                    )}
+                  </p>
+                ) : (
+                  <p className="text-muted-foreground italic">No command or URL configured</p>
+                )}
               </div>
               {Object.keys(server.env).length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">

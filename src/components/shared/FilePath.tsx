@@ -12,13 +12,16 @@ interface FilePathProps {
   basePath?: string;
   className?: string;
   showIcon?: boolean;
+  filenameOnly?: boolean;
 }
 
-export function FilePath({ path, basePath, className = "", showIcon = false }: FilePathProps) {
-  // 显示相对路径，hover 显示绝对路径
-  const displayPath = basePath && path.startsWith(basePath)
-    ? path.slice(basePath.length).replace(/^\//, '')
-    : path;
+export function FilePath({ path, basePath, className = "", showIcon = false, filenameOnly = false }: FilePathProps) {
+  // 显示文件名或相对路径，hover 显示绝对路径
+  const displayPath = filenameOnly
+    ? path.split('/').pop() || path
+    : basePath && path.startsWith(basePath)
+      ? path.slice(basePath.length).replace(/^\//, '')
+      : path;
 
   const handleReveal = async () => {
     try {
