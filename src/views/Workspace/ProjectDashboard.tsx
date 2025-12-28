@@ -16,6 +16,7 @@ import {
 import { KanbanBoard } from "./KanbanBoard";
 import { ProjectLogo } from "./ProjectLogo";
 import { GitHistory } from "./GitHistory";
+import { ProjectDiagnostics } from "./ProjectDiagnostics";
 import type { WorkspaceProject, FeatureStatus } from "./types";
 
 interface ProjectDashboardProps {
@@ -158,6 +159,9 @@ export function ProjectDashboard({
           />
         </div>
       </div>
+
+      {/* Diagnostics */}
+      <ProjectDiagnostics projectPath={project.path} />
 
       {/* Recent Activity */}
       {recentFeatures.length > 0 && (

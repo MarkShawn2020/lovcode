@@ -90,3 +90,31 @@ export interface CommitNote {
   feat_name?: string;
   override_assoc?: boolean;
 }
+
+// ============================================================================
+// Diagnostics Types
+// ============================================================================
+
+/** Detected tech stack */
+export interface TechStack {
+  runtime: string; // node, python, rust, unknown
+  package_manager?: string;
+  orm?: string;
+  frameworks: string[];
+}
+
+/** Leaked secret info */
+export interface LeakedSecret {
+  file: string;
+  line: number;
+  key_name: string;
+  preview: string;
+}
+
+/** Environment check result */
+export interface EnvCheckResult {
+  missing_keys: string[];
+  leaked_secrets: LeakedSecret[];
+  env_example_exists: boolean;
+  env_exists: boolean;
+}

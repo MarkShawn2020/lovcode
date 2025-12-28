@@ -355,7 +355,7 @@ function App() {
             {view.type === "output-styles" && <OutputStylesView />}
             {view.type === "statusline" && (
               <StatuslineView
-                marketplaceItems={catalog?.statuslines || []}
+                installedTemplates={catalog?.statuslines.filter(s => s.source_id === "personal") || []}
                 onBrowseMore={() => navigate({ type: "marketplace", category: "statuslines" })}
               />
             )}
@@ -683,7 +683,7 @@ function App() {
             {view.type === "output-styles" && <OutputStylesView />}
             {view.type === "statusline" && (
               <StatuslineView
-                marketplaceItems={catalog?.statuslines || []}
+                installedTemplates={catalog?.statuslines.filter(s => s.source_id === "personal") || []}
                 onBrowseMore={() => navigate({ type: "marketplace", category: "statuslines" })}
               />
             )}

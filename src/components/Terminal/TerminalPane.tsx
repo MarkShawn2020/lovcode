@@ -190,14 +190,15 @@ export function TerminalPane({
       }
     };
 
-    // Shift+Enter sends newline (\n) instead of carriage return (\r)
+    // Shift+Enter: bracketed paste with U+2028 (Line Separator)
+    // Note: leaves invisible char requiring one extra backspace - best working solution found
     term.attachCustomKeyEventHandler((event) => {
       if (event.type === 'keydown' && event.key === 'Enter' && event.shiftKey) {
         if (ptyReadySessions.has(sessionId)) {
-          const encoder = new TextEncoder();
-          invoke("pty_write", { id: sessionId, data: Array.from(encoder.encode('\n')) });
+          // ESC[200~ + U+2028 + ESC[201~
+          invoke("pty_write", { id: sessionId, data: [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e, 0xe2, 0x80, 0xa8, 0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e] });
         }
-        return false; // Prevent default Enter handling
+        return false;
       }
       return true;
     });

@@ -90,11 +90,8 @@ export function TemplateDetailView({
           await invoke("install_setting_template", { config: template.content });
           break;
         case "statuslines":
-          // Write script and update settings
-          await invoke("write_statusline_script", { content: template.content });
-          await invoke("update_settings_statusline", {
-            statusline: { type: "command", command: "~/.claude/statusline.sh", padding: 0 },
-          });
+          // Install to ~/.lovstudio/lovcode/statusline/{name}.sh
+          await invoke("install_statusline_template", { name: template.name, content: template.content });
           break;
       }
       setInstalled(true);

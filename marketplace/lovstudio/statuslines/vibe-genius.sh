@@ -160,8 +160,11 @@ detect_provider() {
 
     case "$base_url" in
         *"zenmux"*)      echo "zenmux" ;;
-        *"openrouter"*)  echo "openrouter" ;;
         *"modelgate"*)   echo "modelgate" ;;
+        *"qiniu"*)       echo "qiniu" ;;
+        *"siliconflow"*) echo "siliconflow" ;;
+        *"univibe"*)     echo "univibe" ;;
+        *"openrouter"*)  echo "openrouter" ;;
         *"openai"*)      echo "openai" ;;
         *"anthropic"*)   echo "anthropic" ;;
         *"localhost"*|*"127.0.0.1"*) echo "local" ;;

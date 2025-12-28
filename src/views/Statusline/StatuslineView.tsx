@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { RowsIcon, Pencil1Icon, CheckIcon, Cross1Icon, TrashIcon, RocketIcon, CodeIcon, ChevronDownIcon } from "@radix-ui/react-icons";
+import { RowsIcon, Pencil1Icon, CheckIcon, Cross1Icon, TrashIcon, RocketIcon, CodeIcon, ChevronDownIcon, ResetIcon } from "@radix-ui/react-icons";
 import { ConfigPage, PageHeader, EmptyState, LoadingState } from "../../components/config";
-import { CollapsibleCard, BrowseMarketplaceButton, CodePreview } from "../../components/shared";
+import { CollapsibleCard, BrowseMarketplaceButton, CodePreview, FilePath } from "../../components/shared";
 import { Button } from "../../components/ui/button";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../../components/ui/collapsible";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
@@ -40,11 +40,11 @@ interface StatusLineConfig {
 }
 
 interface StatuslineViewProps {
-  marketplaceItems?: TemplateComponent[];
+  installedTemplates?: TemplateComponent[];
   onBrowseMore?: () => void;
 }
 
-export function StatuslineView({ marketplaceItems = [], onBrowseMore }: StatuslineViewProps) {
+export function StatuslineView({ installedTemplates = [], onBrowseMore }: StatuslineViewProps) {
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
   const [editing, setEditing] = useState(false);
@@ -59,6 +59,12 @@ export function StatuslineView({ marketplaceItems = [], onBrowseMore }: Statusli
 
   const [scriptContent, setScriptContent] = useState<string | null>(null);
   const [loadingScript, setLoadingScript] = useState(false);
+  const [hasPrevious, setHasPrevious] = useState(false);
+
+  // Check if previous backup exists
+  useEffect(() => {
+    invoke<boolean>("has_previous_statusline").then(setHasPrevious).catch(() => setHasPrevious(false));
+  }, []);
 
   useEffect(() => {
     if (statusLine) {
@@ -121,13 +127,31 @@ export function StatuslineView({ marketplaceItems = [], onBrowseMore }: Statusli
     }
   };
 
+  const handleRestore = async () => {
+    setSaving(true);
+    try {
+      await invoke("restore_previous_statusline");
+      refreshSettings();
+      setHasPrevious(false);
+      // Reload script content
+      const homeDir = await invoke<string>("get_home_dir");
+      const scriptPath = "~/.claude/statusline.sh".replace(/^~/, homeDir);
+      const content = await invoke<string>("read_file", { path: scriptPath });
+      setScriptContent(content);
+    } catch (e) {
+      console.error("Failed to restore statusline:", e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleApplyTemplate = async (template: TemplateComponent) => {
     if (!template.content) return;
     setSelectedTemplate(template.name);
     try {
-      // Write script to ~/.claude/statusline.sh
+      // Apply: copy from ~/.lovstudio/lovcode/statusline/{name}.sh to ~/.claude/statusline.sh
       const scriptPath = "~/.claude/statusline.sh";
-      await invoke("write_statusline_script", { content: template.content });
+      await invoke("apply_statusline", { name: template.name });
 
       // Update settings
       const newStatusLine: StatusLineConfig = {
@@ -140,6 +164,9 @@ export function StatuslineView({ marketplaceItems = [], onBrowseMore }: Statusli
       setCommand(scriptPath);
       setPadding(0);
       setScriptContent(template.content);
+      // Check if backup was created
+      const hasBackup = await invoke<boolean>("has_previous_statusline");
+      setHasPrevious(hasBackup);
     } catch (e) {
       console.error("Failed to apply template:", e);
     } finally {
@@ -203,6 +230,12 @@ export function StatuslineView({ marketplaceItems = [], onBrowseMore }: Statusli
                 <TrashIcon className="w-4 h-4 mr-1" />
                 Remove
               </Button>
+              {hasPrevious && (
+                <Button size="sm" variant="outline" onClick={handleRestore} disabled={saving}>
+                  <ResetIcon className="w-4 h-4 mr-1" />
+                  Restore Previous
+                </Button>
+              )}
             </div>
           </div>
         ) : (
@@ -253,16 +286,16 @@ export function StatuslineView({ marketplaceItems = [], onBrowseMore }: Statusli
         )}
       </CollapsibleCard>
 
-      {marketplaceItems.length > 0 && (
-        <CollapsibleCard
-          storageKey="lovcode:statusline:templatesOpen"
-          title="Templates"
-          subtitle={`${marketplaceItems.length} statusline templates available`}
-          bodyClassName="p-4"
-          defaultOpen
-        >
+      <CollapsibleCard
+        storageKey="lovcode:statusline:templatesOpen"
+        title="Installed Templates"
+        subtitle={installedTemplates.length > 0 ? `${installedTemplates.length} statusline templates` : "No templates installed"}
+        bodyClassName="p-4"
+        defaultOpen
+      >
+        {installedTemplates.length > 0 ? (
           <div className="grid gap-3">
-            {marketplaceItems.map((template) => (
+            {installedTemplates.map((template) => (
               <Collapsible key={template.path}>
                 <div className="rounded-lg border border-border bg-card-alt hover:border-primary/30 transition-colors overflow-hidden">
                   <div className="flex items-start gap-3 p-3">
@@ -277,6 +310,7 @@ export function StatuslineView({ marketplaceItems = [], onBrowseMore }: Statusli
                       {template.author && (
                         <p className="text-[10px] text-muted-foreground/70 mt-1">by {template.author}</p>
                       )}
+                      <FilePath path={template.path} className="text-[10px] mt-1" />
                     </div>
                     <div className="flex items-center gap-2">
                       <CollapsibleTrigger className="h-8 w-8 p-0 flex items-center justify-center rounded-md hover:bg-muted">
@@ -302,8 +336,22 @@ export function StatuslineView({ marketplaceItems = [], onBrowseMore }: Statusli
               </Collapsible>
             ))}
           </div>
-        </CollapsibleCard>
-      )}
+        ) : (
+          <div className="text-center py-6">
+            <EmptyState
+              icon={CodeIcon}
+              message="No templates installed"
+              hint="Browse the marketplace to find and install statusline templates"
+            />
+            {onBrowseMore && (
+              <Button className="mt-4" variant="outline" onClick={onBrowseMore}>
+                <RocketIcon className="w-4 h-4 mr-1" />
+                Browse Marketplace
+              </Button>
+            )}
+          </div>
+        )}
+      </CollapsibleCard>
 
       <CollapsibleCard
         storageKey="lovcode:statusline:helpOpen"
