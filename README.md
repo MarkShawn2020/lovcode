@@ -53,8 +53,8 @@ Download the latest release for your platform from [Releases](https://github.com
 ### From Source
 
 ```bash
-# Clone the repository
-git clone https://github.com/markshawn2020/lovcode.git
+# Clone the repository (with submodules)
+git clone --recursive https://github.com/markshawn2020/lovcode.git
 cd lovcode
 
 # Install dependencies
