@@ -48,13 +48,13 @@
 
 ### From Release
 
-Download the latest release for your platform from [Releases](https://github.com/nicepkg/lovcode/releases).
+Download the latest release for your platform from [Releases](https://github.com/markshawn2020/lovcode/releases).
 
 ### From Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/nicepkg/lovcode.git
+git clone https://github.com/markshawn2020/lovcode.git
 cd lovcode
 
 # Install dependencies
