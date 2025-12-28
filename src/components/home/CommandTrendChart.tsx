@@ -27,11 +27,10 @@ const COLORS = [
   "hsl(160, 40%, 50%)",
 ];
 
-export function CommandTrendChart({ data, weeks = 12 }: CommandTrendChartProps) {
-  // Debug: log raw data
-  console.log("CommandTrendChart raw data:", data);
+const MAX_COMMANDS = 8; // Only show top N commands in chart
 
-  const { chartData, commands } = useMemo(() => {
+export function CommandTrendChart({ data, weeks = 12 }: CommandTrendChartProps) {
+  const { chartData, commands, totalCommands } = useMemo(() => {
     // Collect all week keys from the actual data
     const weekKeySet = new Set<string>();
     Object.values(data).forEach((weekData) => {
@@ -48,7 +47,9 @@ export function CommandTrendChart({ data, weeks = 12 }: CommandTrendChartProps) 
       Object.values(weekData).reduce((sum, count) => sum + count, 0),
     ]);
     commandTotals.sort((a, b) => b[1] - a[1]);
-    const commands = commandTotals.map(([cmd]) => cmd);
+    const totalCommands = commandTotals.length;
+    // Only take top N commands for display
+    const commands = commandTotals.slice(0, MAX_COMMANDS).map(([cmd]) => cmd);
 
     // Build chart data
     const chartData = weekKeys.map((week) => {
@@ -59,7 +60,7 @@ export function CommandTrendChart({ data, weeks = 12 }: CommandTrendChartProps) 
       return point;
     });
 
-    return { chartData, commands };
+    return { chartData, commands, totalCommands };
   }, [data, weeks]);
 
   if (commands.length === 0) {
@@ -77,7 +78,7 @@ export function CommandTrendChart({ data, weeks = 12 }: CommandTrendChartProps) 
           Command Trends
         </span>
         <span className="text-xs text-muted-foreground">
-          {commands.length} commands
+          Top {commands.length} of {totalCommands}
         </span>
       </div>
 

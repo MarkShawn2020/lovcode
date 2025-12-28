@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.18.0
+
+### Minor Changes
+
+- feat(home): 添加命令趋势图表组件
+
+  - 新增 CommandTrendChart 组件，使用 recharts 展示命令使用趋势
+  - 集成到 Home 页面
+
 ## 0.17.1
 
 ### Patch Changes
