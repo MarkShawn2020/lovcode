@@ -85,7 +85,7 @@ export function Home({ onFeatureClick, onProjectClick, onSessionClick, onSearch 
             {/* Command Trend Chart */}
             {commandWeeklyStats && Object.keys(commandWeeklyStats).length > 0 && (
               <div className="mt-4 pt-4 border-t border-border/40">
-                <CommandTrendChart data={commandWeeklyStats} weeks={13} />
+                <CommandTrendChart data={commandWeeklyStats} />
               </div>
             )}
             {/* Inline Stats */}

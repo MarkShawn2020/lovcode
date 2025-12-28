@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.18.1
+
+### Patch Changes
+
+- Fix CommandTrendChart parameters and recharts tooltip styles
+
 ## 0.18.0
 
 ### Minor Changes

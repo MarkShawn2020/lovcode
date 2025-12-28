@@ -14,7 +14,6 @@ import { commandRangeAtom, commandModeAtom } from "@/store";
 interface CommandTrendChartProps {
   /** Map of command_name -> { week_key -> count } */
   data: Record<string, Record<string, number>>;
-  weeks?: number;
 }
 
 // Color palette for commands
@@ -46,7 +45,6 @@ function getISOWeek(date: Date): { year: number; week: number } {
   return { year: d.getUTCFullYear(), week: weekNo };
 }
 
-type ChartMode = "weekly" | "cumulative";
 type TimeRange = "1m" | "3m" | "all";
 
 const RANGE_WEEKS: Record<TimeRange, number | null> = {
@@ -55,7 +53,7 @@ const RANGE_WEEKS: Record<TimeRange, number | null> = {
   "all": null,
 };
 
-export function CommandTrendChart({ data, weeks = 13 }: CommandTrendChartProps) {
+export function CommandTrendChart({ data }: CommandTrendChartProps) {
   const [hoverData, setHoverData] = useState<HoverData | null>(null);
   const [mode, setMode] = useAtom(commandModeAtom);
   const [range, setRange] = useAtom(commandRangeAtom);
@@ -97,9 +95,11 @@ export function CommandTrendChart({ data, weeks = 13 }: CommandTrendChartProps) 
     const commands = commandTotals.slice(0, MAX_COMMANDS).map(([cmd]) => cmd);
 
     // Build chart data based on mode
-    const chartData = weekKeys.map((week, idx) => {
-      const isCurrentWeek = idx === weekKeys.length - 1;
-      const point: Record<string, string | number | null> = {
+    // In weekly mode, exclude the current (incomplete) week
+    const weeksToRender = mode === "weekly" ? weekKeys.slice(0, -1) : weekKeys;
+
+    const chartData = weeksToRender.map((week, idx) => {
+      const point: Record<string, string | number> = {
         week: week.replace(/^\d{4}-W/, "W"),
       };
 
@@ -108,19 +108,14 @@ export function CommandTrendChart({ data, weeks = 13 }: CommandTrendChartProps) 
         commands.forEach((cmd) => {
           let cumulative = 0;
           for (let i = 0; i <= idx; i++) {
-            cumulative += data[cmd]?.[weekKeys[i]] || 0;
+            cumulative += data[cmd]?.[weeksToRender[i]] || 0;
           }
           point[cmd] = cumulative;
         });
       } else {
-        // Weekly: show each week's data, current week as dot
+        // Weekly: show each week's data
         commands.forEach((cmd) => {
-          if (isCurrentWeek) {
-            point[cmd] = null; // Break the line
-            point[`${cmd}_current`] = data[cmd]?.[week] || 0;
-          } else {
-            point[cmd] = data[cmd]?.[week] || 0;
-          }
+          point[cmd] = data[cmd]?.[week] || 0;
         });
       }
       return point;
@@ -212,24 +207,13 @@ export function CommandTrendChart({ data, weeks = 13 }: CommandTrendChartProps) 
             />
             <Tooltip
               content={({ active, payload, label }) => {
-                // Update external state when tooltip is active
                 if (active && payload && payload.length > 0) {
-                  // Merge _current entries with main entries
-                  const merged = new Map<string, { value: number; color: string }>();
-                  payload.forEach((p) => {
-                    const name = (p.name as string).replace(/_current$/, "");
-                    const value = (p.value as number) ?? 0;
-                    const existing = merged.get(name);
-                    if (!existing || value > 0) {
-                      merged.set(name, { value, color: (p.color as string) || "#999" });
-                    }
-                  });
                   const newData: HoverData = {
                     label: label as string,
-                    items: Array.from(merged.entries()).map(([name, { value, color }]) => ({
-                      name,
-                      value,
-                      color,
+                    items: payload.map((p) => ({
+                      name: p.name as string,
+                      value: (p.value as number) ?? 0,
+                      color: (p.color as string) || "#999",
                     })),
                   };
                   // Use setTimeout to avoid setState during render
@@ -251,20 +235,6 @@ export function CommandTrendChart({ data, weeks = 13 }: CommandTrendChartProps) 
                 strokeWidth={1.5}
                 dot={false}
                 activeDot={{ r: 3 }}
-                connectNulls={false}
-              />
-            ))}
-            {/* Current week points - shown as dots only in weekly mode */}
-            {mode === "weekly" && commands.map((cmd, i) => (
-              <Line
-                key={`${cmd}_current`}
-                type="monotone"
-                dataKey={`${cmd}_current`}
-                stroke={COLORS[i % COLORS.length]}
-                strokeWidth={0}
-                dot={{ r: 3, fill: COLORS[i % COLORS.length], strokeWidth: 0 }}
-                activeDot={{ r: 4 }}
-                legendType="none"
               />
             ))}
           </LineChart>
