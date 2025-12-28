@@ -4365,16 +4365,30 @@ fn detect_claude_code_install_type() -> (ClaudeCodeInstallType, Option<String>) 
                 .next()
                 .map(|s| s.to_string());
 
-            // Check if it's Native install (check for ~/.claude-code directory)
-            let home = dirs::home_dir().unwrap_or_default();
-            let native_dir = home.join(".claude-code");
-            let native_bin = home.join(".local/bin/claude");
+            // Determine install type by checking the actual path of claude binary
+            if let Ok(which_output) = run_shell_command("which claude 2>/dev/null") {
+                if which_output.status.success() {
+                    let claude_path = String::from_utf8_lossy(&which_output.stdout);
+                    let claude_path = claude_path.trim();
 
-            if native_dir.exists() || native_bin.exists() {
-                return (ClaudeCodeInstallType::Native, version);
+                    // NPM install: path contains node_modules, .nvm, or npm
+                    if claude_path.contains("node_modules")
+                        || claude_path.contains(".nvm")
+                        || claude_path.contains("/npm/")
+                    {
+                        return (ClaudeCodeInstallType::Npm, version);
+                    }
+
+                    // Native install: path is ~/.local/bin/claude or contains .claude-code
+                    if claude_path.contains(".local/bin/claude")
+                        || claude_path.contains(".claude-code")
+                    {
+                        return (ClaudeCodeInstallType::Native, version);
+                    }
+                }
             }
 
-            // Check if it's NPM install
+            // Fallback: check npm list
             if let Ok(npm_output) = run_shell_command("npm list -g @anthropic-ai/claude-code --depth=0 2>/dev/null") {
                 if npm_output.status.success() {
                     let stdout = String::from_utf8_lossy(&npm_output.stdout);
