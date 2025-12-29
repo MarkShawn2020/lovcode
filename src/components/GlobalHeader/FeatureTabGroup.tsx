@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { useAtom } from "jotai";
 import { PlusIcon, ArchiveIcon, DashboardIcon } from "@radix-ui/react-icons";
 import { SortableContext, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
@@ -16,10 +15,14 @@ import {
   ContextMenuSubContent,
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { ProjectLogo } from "@/views/Workspace/ProjectLogo";
 import { SortableFeatureTab } from "./FeatureTab";
 import { CreateFeatureDialog } from "./CreateFeatureDialog";
-import { useState } from "react";
 import type { WorkspaceProject, Feature, WorkspaceData } from "@/views/Workspace/types";
 
 interface FeatureTabGroupProps {
@@ -42,7 +45,6 @@ export function FeatureTabGroup({
   const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
   const [collapsedGroups, setCollapsedGroups] = useAtom(collapsedProjectGroupsAtom);
   const navigate = useNavigate();
-  const [hasLogo, setHasLogo] = useState(true); // Default true to hide name initially
   const {
     showCreateDialog,
     setShowCreateDialog,
@@ -50,12 +52,6 @@ export function FeatureTabGroup({
     openCreateDialog,
     createFeature,
   } = useFeatureCreation(project);
-
-  useEffect(() => {
-    invoke<string | null>("get_project_logo", { projectPath: project.path })
-      .then((logo) => setHasLogo(!!logo))
-      .catch(() => setHasLogo(false));
-  }, [project.path]);
 
   const archivedFeatures = project.features.filter(f => f.archived);
 
@@ -218,31 +214,31 @@ export function FeatureTabGroup({
     return (
       <>
         <div className={`flex items-center flex-shrink-0 ${isDragging ? "opacity-50" : ""}`}>
-          <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <button
-                onClick={features.length > 0 ? toggleCollapsed : handleSelectProject}
-                className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors cursor-grab active:cursor-grabbing ${
-                  isDragging
-                    ? "bg-primary/20 shadow-lg"
-                    : isActiveProject
-                      ? "bg-primary/10 text-primary"
-                      : "text-muted-foreground hover:text-ink hover:bg-card-alt"
-                }`}
-                title={projectDisplayName}
-                {...dragHandleProps}
-              >
-                <ProjectLogo projectPath={project.path} size="sm" />
-                {!hasLogo && (
-                  <span className="text-xs font-medium truncate max-w-[80px]">{projectDisplayName}</span>
-                )}
-                {features.length > 0 && (
-                  <span className="text-xs text-muted-foreground">{features.length}</span>
-                )}
-              </button>
-            </ContextMenuTrigger>
-            {contextMenuContent}
-          </ContextMenu>
+          <Tooltip delayDuration={100}>
+            <ContextMenu>
+              <TooltipTrigger asChild>
+                <ContextMenuTrigger asChild>
+                  <button
+                    onClick={features.length > 0 ? toggleCollapsed : handleSelectProject}
+                    className={`flex items-center gap-1.5 px-2 py-1 rounded-lg transition-colors cursor-grab active:cursor-grabbing ${
+                      isDragging
+                        ? "bg-primary/20 shadow-lg"
+                        : isActiveProject
+                          ? "bg-primary/10 text-primary"
+                          : "text-muted-foreground hover:text-ink hover:bg-card-alt"
+                    }`}
+                    {...dragHandleProps}
+                  >
+                    <ProjectLogo projectPath={project.path} size="sm" />
+                  </button>
+                </ContextMenuTrigger>
+              </TooltipTrigger>
+              {contextMenuContent}
+            </ContextMenu>
+            <TooltipContent side="bottom" className="text-xs">
+              {projectDisplayName}
+            </TooltipContent>
+          </Tooltip>
           <div className="h-4 border-l border-border mx-1" />
         </div>
         <CreateFeatureDialog
@@ -269,21 +265,27 @@ export function FeatureTabGroup({
           }`}
         >
           {/* Project header with context menu */}
-          <ContextMenu>
-            <ContextMenuTrigger asChild>
-              <button
-                onClick={features.length > 0 ? toggleCollapsed : handleSelectProject}
-                className={`flex items-center px-1 py-1 rounded transition-colors flex-shrink-0 cursor-grab active:cursor-grabbing ${
-                  isActiveProject ? "text-primary" : "text-muted-foreground hover:text-ink"
-                }`}
-                title={projectDisplayName}
-                {...dragHandleProps}
-              >
-                <ProjectLogo projectPath={project.path} size="sm" />
-              </button>
-            </ContextMenuTrigger>
-            {contextMenuContent}
-          </ContextMenu>
+          <Tooltip delayDuration={100}>
+            <ContextMenu>
+              <TooltipTrigger asChild>
+                <ContextMenuTrigger asChild>
+                  <button
+                    onClick={features.length > 0 ? toggleCollapsed : handleSelectProject}
+                    className={`flex items-center px-1 py-1 rounded transition-colors flex-shrink-0 cursor-grab active:cursor-grabbing ${
+                      isActiveProject ? "text-primary" : "text-muted-foreground hover:text-ink"
+                    }`}
+                    {...dragHandleProps}
+                  >
+                    <ProjectLogo projectPath={project.path} size="sm" />
+                  </button>
+                </ContextMenuTrigger>
+              </TooltipTrigger>
+              {contextMenuContent}
+            </ContextMenu>
+            <TooltipContent side="bottom" className="text-xs">
+              {projectDisplayName}
+            </TooltipContent>
+          </Tooltip>
 
           {/* Feature tabs */}
           {features.length > 0 && (
@@ -308,14 +310,20 @@ export function FeatureTabGroup({
           )}
 
           {/* Add button */}
-          <button
-            onClick={openCreateDialog}
-            onPointerDown={(e) => e.stopPropagation()}
-            className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
-            title="New Feature"
-          >
-            <PlusIcon className="w-3.5 h-3.5" />
-          </button>
+          <Tooltip delayDuration={100}>
+            <TooltipTrigger asChild>
+              <button
+                onClick={openCreateDialog}
+                onPointerDown={(e) => e.stopPropagation()}
+                className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
+              >
+                <PlusIcon className="w-3.5 h-3.5" />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="text-xs">
+              New Feature
+            </TooltipContent>
+          </Tooltip>
         </div>
 
         {/* Separator between project groups */}
