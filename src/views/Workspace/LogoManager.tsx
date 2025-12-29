@@ -5,7 +5,6 @@ import {
   UploadIcon,
   MagicWandIcon,
   CheckIcon,
-  Cross2Icon,
 } from "@radix-ui/react-icons";
 import {
   Dialog,
@@ -172,8 +171,8 @@ export function LogoManager({ projectPath, embedded = false }: LogoManagerProps)
     }
   };
 
-  // Delete a logo version
-  const handleDelete = async (version: LogoVersion) => {
+  // Delete a logo version (reserved for future UI)
+  const _handleDelete = async (version: LogoVersion) => {
     try {
       await invoke("delete_project_logo", {
         projectPath,
@@ -184,6 +183,7 @@ export function LogoManager({ projectPath, embedded = false }: LogoManagerProps)
       console.error("Failed to delete logo:", err);
     }
   };
+  void _handleDelete; // Suppress unused warning
 
   if (embedded) {
     return (
@@ -262,8 +262,7 @@ export function LogoManager({ projectPath, embedded = false }: LogoManagerProps)
           if (!open) {
             setUseCustomPrompt(false);
             setGenPrompt("");
-            setGenPreviews([]);
-            setSelectedPreview(null);
+            // Keep genPreviews - don't clear on close
             setError(null);
           }
         }}>
