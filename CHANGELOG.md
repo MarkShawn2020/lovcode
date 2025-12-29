@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.19.0
+
+### Minor Changes
+
+- 新增 Logo 生成与管理面板，优化折叠状态下的 tab group 显示
+
 ## 0.18.2
 
 ### Patch Changes
