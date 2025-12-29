@@ -19,6 +19,7 @@ import { KanbanBoard } from "./KanbanBoard";
 import { ProjectLogo } from "./ProjectLogo";
 import { GitHistory } from "./GitHistory";
 import { ProjectDiagnostics } from "./ProjectDiagnostics";
+import { LogoManager } from "./LogoManager";
 import type { WorkspaceProject, FeatureStatus } from "./types";
 
 interface ProjectDashboardProps {
@@ -213,18 +214,22 @@ export function ProjectDashboard({
             </BentoCard>
           </div>
 
-          {/* Diagnostics - right side top */}
-          <div className="col-span-4">
-            <BentoCard title="Diagnostics" className="h-full max-h-[300px]">
+          {/* Right sidebar - stacked cards */}
+          <div className="col-span-4 row-span-2 flex flex-col gap-4">
+            {/* Logo Manager */}
+            <BentoCard title="Logo" className="flex-shrink-0">
+              <LogoManager projectPath={project.path} embedded />
+            </BentoCard>
+
+            {/* Diagnostics */}
+            <BentoCard title="Diagnostics" className="flex-1 min-h-0 max-h-[200px]">
               <div className="overflow-y-auto h-full">
                 <ProjectDiagnostics projectPath={project.path} embedded />
               </div>
             </BentoCard>
-          </div>
 
-          {/* Git History - right side bottom */}
-          <div className="col-span-4">
-            <BentoCard title="Git History" className="h-full max-h-[250px]">
+            {/* Git History */}
+            <BentoCard title="Git History" className="flex-1 min-h-0 max-h-[200px]">
               <div className="overflow-y-auto h-full">
                 <GitHistory
                   projectPath={project.path}
