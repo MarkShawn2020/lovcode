@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.21.0
+
+### Minor Changes
+
+- Add command count stats and improve share card UI for annual report
+
 ## 0.20.0
 
 ### Minor Changes
