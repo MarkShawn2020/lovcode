@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { FeatureType, Project, Session, LocalCommand } from "../../types";
 import { FEATURES, FEATURE_ICONS } from "../../constants";
-import { ActivityHeatmap, RecentActivity, QuickActions, CommandTrendChart, FeaturedCarousel } from "../../components/home";
+import { ActivityHeatmap, RecentActivity, QuickActions, FeaturedCarousel } from "../../components/home";
 import { useInvokeQuery } from "../../hooks";
 
 interface HomeProps {
@@ -23,11 +23,6 @@ export function Home({ onFeatureClick, onProjectClick, onSessionClick, onSearch,
   const { data: sessions } = useInvokeQuery<Session[]>(["sessions"], "list_all_sessions");
   const { data: commands } = useInvokeQuery<LocalCommand[]>(["commands"], "list_local_commands");
   const { data: activityStats } = useInvokeQuery<ActivityStats>(["activityStats"], "get_activity_stats");
-  const { data: commandWeeklyStats } = useInvokeQuery<Record<string, Record<string, number>>>(
-    ["commandWeeklyStats"],
-    "get_command_weekly_stats",
-    { weeks: 0 }  // 0 = all time, filtering done in CommandTrendChart
-  );
 
   const data = projects && sessions && commands ? { projects, sessions, commands } : null;
 
@@ -87,12 +82,6 @@ export function Home({ onFeatureClick, onProjectClick, onSessionClick, onSearch,
                 daily={activityStats.daily}
                 detailed={activityStats.detailed}
               />
-            )}
-            {/* Command Trend Chart */}
-            {commandWeeklyStats && Object.keys(commandWeeklyStats).length > 0 && (
-              <div className="mt-4 pt-4 border-t border-border/40">
-                <CommandTrendChart data={commandWeeklyStats} />
-              </div>
             )}
             {/* Inline Stats */}
             {stats && (

@@ -11,6 +11,7 @@ import {
   type DragEndEvent,
 } from "@dnd-kit/core";
 import { Terminal, Folder, FolderTree, List } from "lucide-react";
+import { CommandTrendChart } from "../../components/home";
 import {
   LightningBoltIcon,
   DotsHorizontalIcon,
@@ -72,6 +73,11 @@ export function CommandsView({
   const queryClient = useQueryClient();
   const { data: commands = [], isLoading } = useInvokeQuery<LocalCommand[]>(["commands"], "list_local_commands");
   const { data: commandStats = {} } = useInvokeQuery<Record<string, number>>(["commandStats"], "get_command_stats");
+  const { data: commandWeeklyStats } = useInvokeQuery<Record<string, Record<string, number>>>(
+    ["commandWeeklyStats"],
+    "get_command_weekly_stats",
+    { weeks: 0 }
+  );
   const [sortKey, setSortKey] = useAtom(commandsSortKeyAtom);
   const [sortDir, setSortDir] = useAtom(commandsSortDirAtom);
   const [showDeprecated, setShowDeprecated] = useAtom(commandsShowDeprecatedAtom);
@@ -387,6 +393,14 @@ export function CommandsView({
         subtitle={`${activeCount} active, ${deprecatedCount} deprecated`}
         action={<BrowseMarketplaceButton onClick={onBrowseMore} />}
       />
+
+      {/* Command Trend Chart */}
+      {commandWeeklyStats && Object.keys(commandWeeklyStats).length > 0 && (
+        <div className="mb-6 p-4 bg-card/50 rounded-xl border border-border/40">
+          <CommandTrendChart data={commandWeeklyStats} />
+        </div>
+      )}
+
       <div className="flex items-center gap-3 mb-6">
         <SearchInput
           placeholder="Search local & marketplace..."
