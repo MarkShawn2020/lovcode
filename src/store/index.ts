@@ -1,5 +1,5 @@
 // App atoms
-export { sidebarCollapsedAtom, marketplaceCategoryAtom, shortenPathsAtom, profileAtom } from "./atoms/app";
+export { sidebarCollapsedAtom, marketplaceCategoryAtom, shortenPathsAtom, profileAtom, featureTabsLayoutAtom, verticalTabsSidebarWidthAtom, type FeatureTabsLayout } from "./atoms/app";
 
 // UI atoms
 export { selectedFileAtom, fileViewModeAtom, activePanelIdAtom, navigationStateAtom, viewAtom, viewHistoryAtom, historyIndexAtom } from "./atoms/ui";

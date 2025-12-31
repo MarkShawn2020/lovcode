@@ -3,12 +3,11 @@ import { useAtom } from "jotai";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   PersonIcon, ChevronLeftIcon, ChevronRightIcon,
-  GearIcon, LayersIcon, CubeIcon,
-  RocketIcon, CounterClockwiseClockIcon, BookmarkIcon,
+  RocketIcon, CounterClockwiseClockIcon, BookmarkIcon, LayersIcon,
 } from "@radix-ui/react-icons";
 import { Avatar, AvatarImage, AvatarFallback } from "../ui/avatar";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
-import { sidebarCollapsedAtom, profileAtom, workspaceDataAtom, primaryFeatureAtom } from "@/store";
+import { sidebarCollapsedAtom, profileAtom, workspaceDataAtom, primaryFeatureAtom, featureTabsLayoutAtom } from "@/store";
 import { GlobalFeatureTabs } from "./GlobalFeatureTabs";
 import type { View, FeatureType } from "@/types";
 
@@ -39,9 +38,10 @@ export function GlobalHeader({
   const [profile] = useAtom(profileAtom);
   const [workspace] = useAtom(workspaceDataAtom);
   const [primaryFeature, setPrimaryFeature] = useAtom(primaryFeatureAtom);
+  const [featureTabsLayout] = useAtom(featureTabsLayoutAtom);
 
-  // Always show feature tabs when workspace data is available
-  const showFeatureTabs = !!workspace;
+  // Show horizontal feature tabs when workspace data is available AND layout is horizontal
+  const showFeatureTabs = !!workspace && featureTabsLayout === "horizontal";
 
   // Main nav features - use primaryFeature for active state (not affected by profile menu clicks)
   const mainNavFeatures = ["workspace", "chat", "kb-distill", "kb-reference"] as const;
@@ -128,7 +128,6 @@ export function GlobalHeader({
           profile={profile}
           onShowProfileDialog={onShowProfileDialog}
           onShowSettings={onShowSettings}
-          onFeatureClick={onFeatureClick}
         />
       </div>
     );
@@ -176,12 +175,10 @@ function ProfileMenu({
   profile,
   onShowProfileDialog,
   onShowSettings,
-  onFeatureClick,
 }: {
   profile: { nickname: string; avatarUrl: string };
   onShowProfileDialog: () => void;
   onShowSettings: () => void;
-  onFeatureClick?: (feature: FeatureType) => void;
 }) {
   return (
     <div className="pr-4">
@@ -211,32 +208,6 @@ function ProfileMenu({
             >
               Settings
             </button>
-            {onFeatureClick && (
-              <>
-                <div className="h-px bg-border my-1" />
-                <button
-                  onClick={() => onFeatureClick("settings")}
-                  className="w-full text-left px-2 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-md transition-colors flex items-center gap-2"
-                >
-                  <GearIcon className="w-4 h-4" />
-                  Configuration
-                </button>
-                <button
-                  onClick={() => onFeatureClick("features")}
-                  className="w-full text-left px-2 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-md transition-colors flex items-center gap-2"
-                >
-                  <LayersIcon className="w-4 h-4" />
-                  Features
-                </button>
-                <button
-                  onClick={() => onFeatureClick("marketplace")}
-                  className="w-full text-left px-2 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-md transition-colors flex items-center gap-2"
-                >
-                  <CubeIcon className="w-4 h-4" />
-                  Marketplace
-                </button>
-              </>
-            )}
           </div>
         </PopoverContent>
       </Popover>

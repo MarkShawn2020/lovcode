@@ -6,7 +6,7 @@ import {
   HomeIcon, ReaderIcon, GearIcon, LayersIcon, CubeIcon, ChatBubbleIcon,
   DoubleArrowLeftIcon,
 } from "@radix-ui/react-icons";
-import { GlobalHeader } from "./components/GlobalHeader";
+import { GlobalHeader, VerticalFeatureTabs } from "./components/GlobalHeader";
 import { setAutoCopyOnSelect, getAutoCopyOnSelect } from "./components/Terminal";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent as CollapsibleBody } from "./components/ui/collapsible";
 import { Switch } from "./components/ui/switch";
@@ -24,7 +24,7 @@ import type {
   TemplatesCatalog, UserProfile,
 } from "./types";
 import { useAtom } from "jotai";
-import { sidebarCollapsedAtom, marketplaceCategoryAtom, shortenPathsAtom, profileAtom, navigationStateAtom, viewAtom, viewHistoryAtom, historyIndexAtom } from "./store";
+import { sidebarCollapsedAtom, marketplaceCategoryAtom, shortenPathsAtom, profileAtom, navigationStateAtom, viewAtom, viewHistoryAtom, historyIndexAtom, featureTabsLayoutAtom, workspaceDataAtom } from "./store";
 import { AppConfigContext, useAppConfig, type AppConfig } from "./context";
 import { FEATURES, FEATURE_ICONS } from "./constants";
 // Modular views
@@ -103,6 +103,8 @@ function App() {
   }, [setNavigationState]);
 
   const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom);
+  const [featureTabsLayout] = useAtom(featureTabsLayoutAtom);
+  const [workspace] = useAtom(workspaceDataAtom);
   const [marketplaceCategory, setMarketplaceCategory] = useAtom(marketplaceCategoryAtom);
   const [catalog, setCatalog] = useState<TemplatesCatalog | null>(null);
   const [homeDir, setHomeDir] = useState("");
@@ -246,6 +248,9 @@ function App() {
           onShowProfileDialog={() => setShowProfileDialog(true)}
           onShowSettings={() => setShowSettings(true)}
         />
+        <div className="flex-1 flex overflow-hidden">
+        {/* Vertical Feature Tabs Sidebar */}
+        {featureTabsLayout === "vertical" && workspace && <VerticalFeatureTabs />}
         <main className="flex-1 overflow-auto">
         {view.type === "home" && (
           <Home
@@ -432,6 +437,7 @@ function App() {
         )}
         {view.type === "feature-todo" && <FeatureTodo feature={view.feature} />}
         </main>
+        </div>
       </div>
     ) : (
     <div className="h-screen bg-canvas flex">
@@ -785,6 +791,7 @@ function App() {
 function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { shortenPaths, setShortenPaths } = useAppConfig();
   const [autoCopy, setAutoCopy] = useState(getAutoCopyOnSelect);
+  const [featureTabsLayout, setFeatureTabsLayout] = useAtom(featureTabsLayoutAtom);
 
   const handleAutoCopyChange = (checked: boolean) => {
     setAutoCopy(checked);
@@ -811,6 +818,34 @@ function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => vo
                 <p className="text-xs text-muted-foreground">Replace home directory with ~</p>
               </div>
               <Switch checked={shortenPaths} onCheckedChange={setShortenPaths} />
+            </div>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-ink">Project tabs layout</p>
+                <p className="text-xs text-muted-foreground">Position of project/feature tabs</p>
+              </div>
+              <div className="flex gap-0.5 p-0.5 bg-muted rounded-lg">
+                <button
+                  onClick={() => setFeatureTabsLayout("horizontal")}
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                    featureTabsLayout === "horizontal"
+                      ? "bg-background text-ink shadow-sm"
+                      : "text-muted-foreground hover:text-ink"
+                  }`}
+                >
+                  Horizontal
+                </button>
+                <button
+                  onClick={() => setFeatureTabsLayout("vertical")}
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                    featureTabsLayout === "vertical"
+                      ? "bg-background text-ink shadow-sm"
+                      : "text-muted-foreground hover:text-ink"
+                  }`}
+                >
+                  Vertical
+                </button>
+              </div>
             </div>
           </div>
           {/* Terminal */}

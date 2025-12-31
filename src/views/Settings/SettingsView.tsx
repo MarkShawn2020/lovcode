@@ -32,7 +32,7 @@ import {
 import { BrowseMarketplaceButton, CollapsibleCard } from "../../components/shared";
 import { ContextFileItem, ConfigFileItem } from "../../components/ContextFileItem";
 import { useAtom } from "jotai";
-import { routerTestStatusAtom, routerTestMessageAtom } from "../../store";
+import { routerTestStatusAtom, routerTestMessageAtom, featureTabsLayoutAtom, type FeatureTabsLayout } from "../../store";
 import type { ClaudeSettings, ContextFile } from "../../types";
 import { ClaudeCodeVersionSection } from "./ClaudeCodeVersionSection";
 import { trackProviderEvent, isAnalyticsEnabled, setAnalyticsEnabled } from "../../lib/analytics";
@@ -78,6 +78,7 @@ export function SettingsView({
   const [applyHint, setApplyHint] = useState<Record<string, string>>({});
   const [testStatus, setTestStatus] = useAtom(routerTestStatusAtom);
   const [testMessage, setTestMessage] = useAtom(routerTestMessageAtom);
+  const [featureTabsLayout, setFeatureTabsLayout] = useAtom(featureTabsLayoutAtom);
   const [testMissingKeys, setTestMissingKeys] = useState<Record<string, string[]>>({});
   const [testMissingValues, setTestMissingValues] = useState<Record<string, Record<string, string>>>({});
   const [editingEnvKey, setEditingEnvKey] = useState<string | null>(null);
@@ -1224,6 +1225,44 @@ export function SettingsView({
           </div>
         </CollapsibleCard>
       )}
+
+      <CollapsibleCard
+        storageKey="lovcode:settings:appearanceOpen"
+        title="Appearance"
+        subtitle="Customize the app layout and display"
+        bodyClassName="p-3 space-y-3"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs font-medium text-ink">Project Tabs Layout</p>
+            <p className="text-[10px] text-muted-foreground">
+              Choose how project and feature tabs are displayed
+            </p>
+          </div>
+          <div className="flex gap-1 p-0.5 bg-muted rounded-lg">
+            <button
+              onClick={() => setFeatureTabsLayout("horizontal")}
+              className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                featureTabsLayout === "horizontal"
+                  ? "bg-background text-ink shadow-sm"
+                  : "text-muted-foreground hover:text-ink"
+              }`}
+            >
+              Horizontal
+            </button>
+            <button
+              onClick={() => setFeatureTabsLayout("vertical")}
+              className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                featureTabsLayout === "vertical"
+                  ? "bg-background text-ink shadow-sm"
+                  : "text-muted-foreground hover:text-ink"
+              }`}
+            >
+              Vertical
+            </button>
+          </div>
+        </div>
+      </CollapsibleCard>
 
       <ClaudeCodeVersionSection />
 
