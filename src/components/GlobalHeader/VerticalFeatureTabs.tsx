@@ -699,106 +699,114 @@ function ProjectSessionsGroup({
   };
 
   const handleResumeSession = async (session: Session) => {
-    if (!workspace) return;
+    // Use functional update to avoid race conditions with stale closure values
+    let savedWorkspace: WorkspaceData | null = null;
 
-    // Select this project first
-    navigate({ type: "workspace", projectId: project.id, mode: "features" });
+    setWorkspace((currentWorkspace) => {
+      if (!currentWorkspace) return currentWorkspace;
 
-    // Find or create a feature to add the session terminal
-    const targetFeature = project.features.find((f) => !f.archived);
+      // Find current project from latest state
+      const currentProject = currentWorkspace.projects.find((p) => p.id === project.id);
+      if (!currentProject) return currentWorkspace;
 
-    // If no active feature, just navigate to the project
-    if (!targetFeature) {
-      const newWorkspace: WorkspaceData = {
-        ...workspace,
-        active_project_id: project.id,
-      };
-      setWorkspace(newWorkspace);
-      await invoke("workspace_save", { data: newWorkspace });
-      return;
-    }
+      // Find or create a feature to add the session terminal
+      const targetFeature = currentProject.features.find((f) => !f.archived);
 
-    // Create a new terminal session with cc --resume command
-    const panelId = targetFeature.panels[0]?.id;
-    const title = session.summary || "CC Session";
-    const command = `cc --resume "${session.id}"`;
-
-    if (!panelId) {
-      // No panel exists, create one with the resume command
-      const newPanelId = crypto.randomUUID();
-      const ptySessionId = crypto.randomUUID();
-      const ptyId = crypto.randomUUID();
-
-      const newPanel = {
-        id: newPanelId,
-        sessions: [{ id: ptySessionId, pty_id: ptyId, title, command }],
-        active_session_id: ptySessionId,
-        is_shared: false,
-        cwd: project.path,
-      };
-
-      const newProjects = workspace.projects.map((p) => {
-        if (p.id !== project.id) return p;
-        return {
-          ...p,
-          features: p.features.map((f) => {
-            if (f.id !== targetFeature!.id) return f;
-            return {
-              ...f,
-              panels: [...f.panels, newPanel],
-              layout: { type: "panel" as const, panelId: newPanelId },
-            };
-          }),
-          active_feature_id: targetFeature!.id,
-          view_mode: "features" as const,
+      // If no active feature, just set active project
+      if (!targetFeature) {
+        savedWorkspace = {
+          ...currentWorkspace,
+          active_project_id: project.id,
         };
-      });
+        return savedWorkspace;
+      }
 
-      const newWorkspace: WorkspaceData = {
-        ...workspace,
-        projects: newProjects,
-        active_project_id: project.id,
-      };
-      setWorkspace(newWorkspace);
-      await invoke("workspace_save", { data: newWorkspace });
-    } else {
-      // Add a new session tab to the first panel
-      const ptySessionId = crypto.randomUUID();
-      const ptyId = crypto.randomUUID();
+      // Create a new terminal session with claude --resume command
+      const panelId = targetFeature.panels[0]?.id;
+      const title = session.summary || "Untitled";
+      const command = `claude --resume "${session.id}"`;
 
-      const newProjects = workspace.projects.map((p) => {
-        if (p.id !== project.id) return p;
-        return {
-          ...p,
-          features: p.features.map((f) => {
-            if (f.id !== targetFeature!.id) return f;
-            return {
-              ...f,
-              panels: f.panels.map((panel) => {
-                if (panel.id !== panelId) return panel;
-                return {
-                  ...panel,
-                  sessions: [
-                    ...(panel.sessions || []),
-                    { id: ptySessionId, pty_id: ptyId, title, command },
-                  ],
-                  active_session_id: ptySessionId,
-                };
-              }),
-            };
-          }),
-          active_feature_id: targetFeature!.id,
-          view_mode: "features" as const,
+      if (!panelId) {
+        // No panel exists, create one with the resume command
+        const newPanelId = crypto.randomUUID();
+        const ptySessionId = crypto.randomUUID();
+        const ptyId = crypto.randomUUID();
+
+        const newPanel = {
+          id: newPanelId,
+          sessions: [{ id: ptySessionId, pty_id: ptyId, title, command }],
+          active_session_id: ptySessionId,
+          is_shared: false,
+          cwd: project.path,
         };
-      });
 
-      const newWorkspace: WorkspaceData = {
-        ...workspace,
-        projects: newProjects,
-        active_project_id: project.id,
-      };
-      setWorkspace(newWorkspace);
-      await invoke("workspace_save", { data: newWorkspace });
+        const newProjects = currentWorkspace.projects.map((p) => {
+          if (p.id !== project.id) return p;
+          return {
+            ...p,
+            features: p.features.map((f) => {
+              if (f.id !== targetFeature.id) return f;
+              return {
+                ...f,
+                panels: [...f.panels, newPanel],
+                layout: { type: "panel" as const, panelId: newPanelId },
+              };
+            }),
+            active_feature_id: targetFeature.id,
+            view_mode: "features" as const,
+          };
+        });
+
+        savedWorkspace = {
+          ...currentWorkspace,
+          projects: newProjects,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      } else {
+        // Add a new session tab to the first panel
+        const ptySessionId = crypto.randomUUID();
+        const ptyId = crypto.randomUUID();
+
+        const newProjects = currentWorkspace.projects.map((p) => {
+          if (p.id !== project.id) return p;
+          return {
+            ...p,
+            features: p.features.map((f) => {
+              if (f.id !== targetFeature.id) return f;
+              return {
+                ...f,
+                panels: f.panels.map((panel) => {
+                  if (panel.id !== panelId) return panel;
+                  return {
+                    ...panel,
+                    sessions: [
+                      ...(panel.sessions || []),
+                      { id: ptySessionId, pty_id: ptyId, title, command },
+                    ],
+                    active_session_id: ptySessionId,
+                  };
+                }),
+              };
+            }),
+            active_feature_id: targetFeature.id,
+            view_mode: "features" as const,
+          };
+        });
+
+        savedWorkspace = {
+          ...currentWorkspace,
+          projects: newProjects,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      }
+    });
+
+    // Save after state update - use the captured workspace from functional update
+    if (savedWorkspace) {
+      await invoke("workspace_save", { data: savedWorkspace });
+      navigate({ type: "workspace", projectId: project.id, mode: "features" });
     }
   };
 

@@ -41,20 +41,12 @@ fn get_scrollback_path(id: &str) -> PathBuf {
 /// Load scrollback from disk
 fn load_scrollback_from_disk(id: &str) -> Option<VecDeque<u8>> {
     let path = get_scrollback_path(id);
-    println!("[DEBUG][pty_manager] load_scrollback_from_disk: id={}, path={:?}, exists={}", id, path, path.exists());
     if path.exists() {
         match fs::read(&path) {
-            Ok(data) => {
-                println!("[DEBUG][pty_manager] load_scrollback_from_disk: loaded {} bytes", data.len());
-                Some(VecDeque::from(data))
-            }
-            Err(e) => {
-                eprintln!("[DEBUG][pty_manager] load_scrollback_from_disk: failed to read: {}", e);
-                None
-            }
+            Ok(data) => Some(VecDeque::from(data)),
+            Err(_) => None,
         }
     } else {
-        println!("[DEBUG][pty_manager] load_scrollback_from_disk: file not found");
         None
     }
 }
@@ -66,7 +58,6 @@ fn save_scrollback_to_disk(id: &str, data: &VecDeque<u8>) -> Result<(), String> 
 
     let path = get_scrollback_path(id);
     let bytes: Vec<u8> = data.iter().copied().collect();
-    println!("[DEBUG][pty_manager] save_scrollback_to_disk: id={}, path={:?}, bytes={}", id, path, bytes.len());
     fs::write(&path, &bytes).map_err(|e| format!("Failed to write scrollback: {}", e))?;
     Ok(())
 }
@@ -74,7 +65,6 @@ fn save_scrollback_to_disk(id: &str, data: &VecDeque<u8>) -> Result<(), String> 
 /// Delete scrollback file
 fn delete_scrollback_from_disk(id: &str) {
     let path = get_scrollback_path(id);
-    println!("[DEBUG][pty_manager] delete_scrollback_from_disk: id={}, path={:?}", id, path);
     let _ = fs::remove_file(path);
 }
 
@@ -211,11 +201,9 @@ pub fn create_session(
 
     // Initialize scrollback buffer - load from disk if exists (for app restart recovery)
     {
-        println!("[DEBUG][pty_manager] create_session: loading scrollback for id={}", id);
         let mut scrollback = PTY_SCROLLBACK.lock().map_err(|e| e.to_string())?;
         let buffer = load_scrollback_from_disk(&id)
             .unwrap_or_else(|| VecDeque::with_capacity(SCROLLBACK_MAX_BYTES));
-        println!("[DEBUG][pty_manager] create_session: scrollback buffer size={}", buffer.len());
         scrollback.insert(id.clone(), buffer);
     }
     // Initialize last save timestamp

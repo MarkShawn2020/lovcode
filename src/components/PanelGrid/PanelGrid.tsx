@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
-import { ChevronLeftIcon, ChevronRightIcon, DrawingPinFilledIcon } from "@radix-ui/react-icons";
+import { ChevronLeftIcon, ChevronRightIcon, DrawingPinFilledIcon, PlusIcon } from "@radix-ui/react-icons";
 import { SessionPanel } from "./SessionPanel";
 import type { LayoutNode } from "../../views/Workspace/types";
 
@@ -164,12 +164,6 @@ export function PanelGrid({
     }
   }, [controlledOnPanelFocus, controlledActivePanelId]);
 
-  // Auto-create terminal when empty
-  useEffect(() => {
-    if (panels.length === 0 && onInitialPanelCreate) {
-      onInitialPanelCreate();
-    }
-  }, [panels.length, onInitialPanelCreate]);
 
   // Auto-select first panel if current active is gone
   useEffect(() => {
@@ -179,7 +173,22 @@ export function PanelGrid({
   }, [panels, activePanelId]);
 
   if (panels.length === 0) {
-    return null;
+    return (
+      <div className="h-full w-full flex items-center justify-center bg-canvas">
+        <div className="text-center">
+          <p className="text-muted-foreground mb-4">No terminals open</p>
+          {onInitialPanelCreate && (
+            <button
+              onClick={onInitialPanelCreate}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
+            >
+              <PlusIcon className="w-4 h-4" />
+              New Terminal
+            </button>
+          )}
+        </div>
+      </div>
+    );
   }
 
   // Use tree layout if available

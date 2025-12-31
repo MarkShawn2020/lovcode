@@ -135,23 +135,18 @@ export function TerminalPane({
 
       try {
         const exists = await invoke<boolean>("pty_exists", { id: sessionId });
-        console.log('[DEBUG][TerminalPane] initPty: sessionId=%s, exists=%s', sessionId, exists);
 
         if (!mountState.isMounted) return;
 
         if (!exists) {
-          console.log('[DEBUG][TerminalPane] initPty: creating new PTY');
           await invoke("pty_create", { id: sessionId, cwd: cwdRef.current, command: commandRef.current });
         }
 
         // Replay scrollback buffer (works for both page refresh and app restart)
-        console.log('[DEBUG][TerminalPane] initPty: fetching scrollback');
         const scrollback = await invoke<number[]>("pty_scrollback", { id: sessionId });
-        console.log('[DEBUG][TerminalPane] initPty: scrollback length=%d', scrollback.length);
         if (scrollback.length > 0 && mountState.isMounted) {
           const bytes = new Uint8Array(scrollback);
           const text = new TextDecoder().decode(bytes);
-          console.log('[DEBUG][TerminalPane] initPty: replaying scrollback, text length=%d', text.length);
           term.write(text);
         }
 
@@ -298,12 +293,9 @@ export function TerminalPane({
       if (pendingBytes.length === 0 || !mountState.isMounted) return;
 
       writeCount++;
-      const bytesToWrite = pendingBytes.length;
       const bytes = new Uint8Array(pendingBytes);
       pendingBytes = [];
       const text = decoder.decode(bytes, { stream: true });
-
-      console.log('[DEBUG][TerminalPane] write:', { writeCount, batchCount, bytesToWrite });
 
       // Lock scroll position during write to prevent flicker from intermediate states
       const viewport = pooled.container.querySelector('.xterm-viewport') as HTMLElement;
@@ -337,7 +329,11 @@ export function TerminalPane({
     // Listen for PTY exit events
     const unlistenExit = listen<PtyExitEvent>("pty-exit", (event) => {
       if (event.payload.id === sessionId && mountState.isMounted) {
-        onExitRef.current?.();
+        // Don't auto-close sessions that ran a command - keep scrollback visible
+        // User can manually close or reload. Only auto-close shell sessions.
+        if (!commandRef.current) {
+          onExitRef.current?.();
+        }
       }
     });
 
@@ -365,21 +361,9 @@ export function TerminalPane({
     const pooled = attachTerminal(ptyId, containerRef.current!);
     if (!pooled) return;
 
-    const oldCols = pooled.term.cols;
-    const oldRows = pooled.term.rows;
     pooled.fitAddon.fit();
     const newCols = pooled.term.cols;
     const newRows = pooled.term.rows;
-
-    console.log('[DEBUG][TerminalPane] handleResize:', {
-      ptyId,
-      oldSize: { cols: oldCols, rows: oldRows },
-      newSize: { cols: newCols, rows: newRows },
-      containerSize: containerRef.current ? {
-        width: containerRef.current.offsetWidth,
-        height: containerRef.current.offsetHeight,
-      } : null,
-    });
 
     if (ptyReadySessions.has(ptyId)) {
       invoke("pty_resize", { id: ptyId, cols: newCols, rows: newRows }).catch(console.error);
@@ -391,15 +375,7 @@ export function TerminalPane({
     if (!containerRef.current) return;
 
     let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-    const resizeObserver = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      console.log('[DEBUG][TerminalPane] ResizeObserver triggered:', {
-        ptyId,
-        contentRect: entry?.contentRect ? {
-          width: entry.contentRect.width,
-          height: entry.contentRect.height,
-        } : null,
-      });
+    const resizeObserver = new ResizeObserver(() => {
       if (resizeTimer) clearTimeout(resizeTimer);
       resizeTimer = setTimeout(handleResize, 100);
     });
