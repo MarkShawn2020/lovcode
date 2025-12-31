@@ -282,7 +282,11 @@ export function ProjectList({ onSelectProject, onSelectSession, onSelectChat }: 
         </div>
       ) : (
         <VirtualChatList
-          chats={searchResults !== null ? searchResults : allChats || []}
+          chats={
+            searchResults !== null
+              ? [...searchResults].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+              : allChats || []
+          }
           onSelectChat={onSelectChat}
           formatPath={formatPath}
           hasMore={searchResults === null && (allChats?.length || 0) < totalChats}
