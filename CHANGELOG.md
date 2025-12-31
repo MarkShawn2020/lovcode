@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.22.0
+
+### Minor Changes
+
+- Add vertical feature tabs sidebar layout option
+
+  - New layout mode: vertical sidebar for project/feature tabs
+  - Resizable sidebar width (180-400px, persisted)
+  - Project drag-and-drop reordering in vertical mode
+  - Toggle in Settings → Display → Project tabs layout
+  - Default changed to vertical layout
+
 ## 0.21.1
 
 ### Patch Changes
