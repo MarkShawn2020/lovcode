@@ -1,23 +1,22 @@
 import { useState, useEffect, useMemo } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { DotsHorizontalIcon, ExternalLinkIcon, DownloadIcon } from "@radix-ui/react-icons";
-import { FolderOpen, Copy, FileCode } from "lucide-react";
+import { DotsHorizontalIcon } from "@radix-ui/react-icons";
+import { FileCode, Copy } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
   ContextMenuTrigger,
-  ContextMenuSeparator,
-  ContextMenuCheckboxItem,
 } from "../../components/ui/context-menu";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-  DropdownMenuSeparator,
-  DropdownMenuCheckboxItem,
 } from "../../components/ui/dropdown-menu";
+import {
+  SessionContextMenuItems,
+  SessionDropdownMenuItems,
+} from "../../components/shared/SessionMenuItems";
 import { useAtom } from "jotai";
 import { originalChatAtom, markdownPreviewAtom } from "../../store";
 import { CollapsibleContent } from "./CollapsibleContent";
@@ -34,10 +33,12 @@ interface MessageViewProps {
   onBack: () => void;
 }
 
-export function MessageView({ projectId, projectPath, sessionId, summary, onBack }: MessageViewProps) {
+export function MessageView({ projectId, projectPath, sessionId, summary: initialSummary, onBack }: MessageViewProps) {
   const { formatPath } = useAppConfig();
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
+  const [freshSummary, setFreshSummary] = useState<string | null>(initialSummary);
+  const displaySummary = freshSummary ? restoreSlashCommand(freshSummary) : "Session";
   const [originalChat, setOriginalChat] = useAtom(originalChatAtom);
   const [markdownPreview, setMarkdownPreview] = useAtom(markdownPreviewAtom);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -51,16 +52,14 @@ export function MessageView({ projectId, projectPath, sessionId, summary, onBack
     invoke<string>("get_session_file_path", { projectId, sessionId })
       .then(setSessionFilePath)
       .catch(() => {});
+    // Fetch fresh summary to avoid stale cache from navigation state
+    invoke<string | null>("get_session_summary", { projectId, sessionId })
+      .then((s) => s && setFreshSummary(s))
+      .catch(() => {});
   }, [projectId, sessionId]);
 
   const processContent = (content: string) => {
     return originalChat ? restoreSlashCommand(content) : content;
-  };
-
-  const handleCopyPath = () => {
-    if (sessionFilePath) {
-      invoke("copy_to_clipboard", { text: sessionFilePath });
-    }
   };
 
   const handleCopyContent = (content: string) => {
@@ -98,7 +97,7 @@ export function MessageView({ projectId, projectPath, sessionId, summary, onBack
           </button>
           <span className="text-muted-foreground/50">/</span>
           <span className="text-foreground truncate max-w-[300px]">
-            {summary || "Session"}
+            {displaySummary}
           </span>
         </nav>
         <div className="flex items-start justify-between gap-4">
@@ -106,36 +105,21 @@ export function MessageView({ projectId, projectPath, sessionId, summary, onBack
             <ContextMenuTrigger asChild>
               <div className="cursor-context-menu flex-1 min-w-0">
                 <h1 className="font-serif text-2xl font-semibold text-ink leading-tight mb-1">
-                  {summary || "Session"}
+                  {displaySummary}
                 </h1>
                 <p className="text-primary text-xs font-mono truncate">{sessionId}</p>
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-48">
-              <ContextMenuItem onClick={() => invoke("reveal_session_file", { projectId, sessionId })}>
-                <FolderOpen size={14} />
-                Reveal in Finder
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => invoke("open_session_in_editor", { projectId, sessionId })}>
-                <ExternalLinkIcon width={14} />
-                Open in Editor
-              </ContextMenuItem>
-              <ContextMenuItem onClick={handleCopyPath}>
-                <Copy size={14} />
-                Copy Path
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-                Original View
-              </ContextMenuCheckboxItem>
-              <ContextMenuCheckboxItem checked={markdownPreview} onCheckedChange={setMarkdownPreview}>
-                Markdown Preview
-              </ContextMenuCheckboxItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => setExportDialogOpen(true)}>
-                <DownloadIcon width={14} />
-                Export
-              </ContextMenuItem>
+              <SessionContextMenuItems
+                projectId={projectId}
+                sessionId={sessionId}
+                originalChat={originalChat}
+                setOriginalChat={setOriginalChat}
+                markdownPreview={markdownPreview}
+                setMarkdownPreview={setMarkdownPreview}
+                onExport={() => setExportDialogOpen(true)}
+              />
             </ContextMenuContent>
           </ContextMenu>
           <DropdownMenu>
@@ -145,30 +129,15 @@ export function MessageView({ projectId, projectPath, sessionId, summary, onBack
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuItem onClick={() => invoke("reveal_session_file", { projectId, sessionId })}>
-                <FolderOpen size={14} />
-                Reveal in Finder
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => invoke("open_session_in_editor", { projectId, sessionId })}>
-                <ExternalLinkIcon width={14} />
-                Open in Editor
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={handleCopyPath}>
-                <Copy size={14} />
-                Copy Path
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-                Original View
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={markdownPreview} onCheckedChange={setMarkdownPreview}>
-                Markdown Preview
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => setExportDialogOpen(true)}>
-                <DownloadIcon width={14} />
-                Export
-              </DropdownMenuItem>
+              <SessionDropdownMenuItems
+                projectId={projectId}
+                sessionId={sessionId}
+                originalChat={originalChat}
+                setOriginalChat={setOriginalChat}
+                markdownPreview={markdownPreview}
+                setMarkdownPreview={setMarkdownPreview}
+                onExport={() => setExportDialogOpen(true)}
+              />
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

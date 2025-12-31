@@ -1,5 +1,6 @@
 export function restoreSlashCommand(content: string): string {
-  const pattern = /<command-message>[^<]*<\/command-message>\s*<command-name>(\/[^<]+)<\/command-name>(?:\s*<command-args>([^<]*)<\/command-args>)?/g;
+  // Use [\s\S]*? to match any chars including newlines between tags
+  const pattern = /<command-message>[\s\S]*?<\/command-message>[\s\S]*?<command-name>(\/[^\n<]+)<\/command-name>(?:[\s\S]*?<command-args>([\s\S]*?)<\/command-args>)?/g;
   return content.replace(pattern, (_match, cmd, args) => {
     const trimmedArgs = (args || "").trim();
     return trimmedArgs ? `${cmd} ${trimmedArgs}` : cmd;

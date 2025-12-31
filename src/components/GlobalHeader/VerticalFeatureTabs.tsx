@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useMemo } from "react";
 import { useAtom } from "jotai";
 import {
   DndContext,
@@ -20,15 +20,20 @@ import {
   ChevronRightIcon,
   DashboardIcon,
   DrawingPinFilledIcon,
+  ChatBubbleIcon,
+  LayersIcon,
+  DotsVerticalIcon,
 } from "@radix-ui/react-icons";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   workspaceDataAtom,
   collapsedProjectGroupsAtom,
   verticalTabsSidebarWidthAtom,
+  sidebarModeAtom,
 } from "@/store";
-import { useNavigate, useFeatureCreation } from "@/hooks";
+import { useNavigate, useFeatureCreation, useInvokeQuery } from "@/hooks";
 import { invoke } from "@tauri-apps/api/core";
+import type { Session } from "@/types";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,6 +52,7 @@ import {
 } from "@/components/ui/context-menu";
 import { ProjectLogo } from "@/views/Workspace/ProjectLogo";
 import { CreateFeatureDialog } from "./CreateFeatureDialog";
+import { SessionDropdownMenuItems } from "@/components/shared/SessionMenuItems";
 import type { Feature, WorkspaceData, WorkspaceProject } from "@/views/Workspace/types";
 
 const MIN_WIDTH = 180;
@@ -56,6 +62,7 @@ export function VerticalFeatureTabs() {
   const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
   const [collapsedGroups, setCollapsedGroups] = useAtom(collapsedProjectGroupsAtom);
   const [sidebarWidth, setSidebarWidth] = useAtom(verticalTabsSidebarWidthAtom);
+  const [sidebarMode, setSidebarMode] = useAtom(sidebarModeAtom);
   const navigate = useNavigate();
   const [activeDragProject, setActiveDragProject] = useState<WorkspaceProject | null>(null);
   const [isResizing, setIsResizing] = useState(false);
@@ -197,9 +204,35 @@ export function VerticalFeatureTabs() {
       >
         {/* Header */}
         <div className="h-[40px] shrink-0 flex items-center justify-between px-3 border-b border-border">
-          <span className="text-xs font-medium text-muted-foreground">Projects</span>
+          {/* Mode Tabs */}
+          <div className="flex items-center gap-0.5 bg-card-alt rounded p-0.5">
+            <button
+              onClick={() => setSidebarMode("feats")}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
+                sidebarMode === "feats"
+                  ? "bg-card text-ink shadow-sm"
+                  : "text-muted-foreground hover:text-ink"
+              }`}
+              title="Features"
+            >
+              <LayersIcon className="w-3 h-3" />
+              <span>Feats</span>
+            </button>
+            <button
+              onClick={() => setSidebarMode("sessions")}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
+                sidebarMode === "sessions"
+                  ? "bg-card text-ink shadow-sm"
+                  : "text-muted-foreground hover:text-ink"
+              }`}
+              title="Sessions"
+            >
+              <ChatBubbleIcon className="w-3 h-3" />
+              <span>Sessions</span>
+            </button>
+          </div>
           <div className="flex items-center gap-1">
-            {archivedProjects.length > 0 && (
+            {sidebarMode === "feats" && archivedProjects.length > 0 && (
               <DropdownMenu>
                 <DropdownMenuTrigger
                   onPointerDown={(e) => e.stopPropagation()}
@@ -220,38 +253,61 @@ export function VerticalFeatureTabs() {
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
-            <button
-              onClick={handleAddProject}
-              className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
-              title="Add Project"
-            >
-              <PlusIcon className="w-3.5 h-3.5" />
-            </button>
+            {sidebarMode === "feats" && (
+              <button
+                onClick={handleAddProject}
+                className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
+                title="Add Project"
+              >
+                <PlusIcon className="w-3.5 h-3.5" />
+              </button>
+            )}
           </div>
         </div>
 
         {/* Projects List */}
         <div className="flex-1 overflow-y-auto py-2">
-          <SortableContext
-            items={activeProjects.map((p) => `project-${p.id}`)}
-            strategy={verticalListSortingStrategy}
-          >
-            {activeProjects.map((project) => (
-              <SortableVerticalProjectGroup
-                key={project.id}
-                project={project}
-                isActiveProject={project.id === workspace.active_project_id}
-                isCollapsed={collapsedGroups.includes(project.id)}
-                onToggleCollapse={() => {
-                  if (collapsedGroups.includes(project.id)) {
-                    setCollapsedGroups(collapsedGroups.filter((id) => id !== project.id));
-                  } else {
-                    setCollapsedGroups([...collapsedGroups, project.id]);
-                  }
-                }}
-              />
-            ))}
-          </SortableContext>
+          {sidebarMode === "feats" ? (
+            <SortableContext
+              items={activeProjects.map((p) => `project-${p.id}`)}
+              strategy={verticalListSortingStrategy}
+            >
+              {activeProjects.map((project) => (
+                <SortableVerticalProjectGroup
+                  key={project.id}
+                  project={project}
+                  isActiveProject={project.id === workspace.active_project_id}
+                  isCollapsed={collapsedGroups.includes(project.id)}
+                  onToggleCollapse={() => {
+                    if (collapsedGroups.includes(project.id)) {
+                      setCollapsedGroups(collapsedGroups.filter((id) => id !== project.id));
+                    } else {
+                      setCollapsedGroups([...collapsedGroups, project.id]);
+                    }
+                  }}
+                />
+              ))}
+            </SortableContext>
+          ) : (
+            /* Sessions Mode */
+            <div className="space-y-1">
+              {activeProjects.map((project) => (
+                <ProjectSessionsGroup
+                  key={project.id}
+                  project={project}
+                  isActiveProject={project.id === workspace.active_project_id}
+                  isCollapsed={collapsedGroups.includes(project.id)}
+                  onToggleCollapse={() => {
+                    if (collapsedGroups.includes(project.id)) {
+                      setCollapsedGroups(collapsedGroups.filter((id) => id !== project.id));
+                    } else {
+                      setCollapsedGroups([...collapsedGroups, project.id]);
+                    }
+                  }}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Resize Handle */}
@@ -581,5 +637,296 @@ function VerticalFeatureItem({ feature, isActive, onSelect }: VerticalFeatureIte
         {feature.name}
       </span>
     </button>
+  );
+}
+
+// ============================================================================
+// Sessions Mode Components
+// ============================================================================
+
+interface ProjectSessionsGroupProps {
+  project: WorkspaceProject;
+  isActiveProject: boolean;
+  isCollapsed: boolean;
+  onToggleCollapse: () => void;
+}
+
+function ProjectSessionsGroup({
+  project,
+  isActiveProject,
+  isCollapsed,
+  onToggleCollapse,
+}: ProjectSessionsGroupProps) {
+  const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
+  const navigate = useNavigate();
+
+  // Fetch all CC sessions, then filter by project path
+  const { data: allSessions = [], isLoading } = useInvokeQuery<Session[]>(
+    ["sessions"],
+    "list_all_sessions"
+  );
+
+  // Filter to sessions matching this project's path
+  const filteredSessions = useMemo(() => {
+    // Normalize paths for comparison (remove trailing slashes)
+    const normalizePath = (p: string) => p.replace(/\/+$/, "");
+    const projectPathNorm = normalizePath(project.path);
+
+    return allSessions
+      .filter((s) => {
+        if (!s.project_path) return false;
+        return normalizePath(s.project_path) === projectPathNorm && s.message_count > 0;
+      })
+      .sort((a, b) => b.last_modified - a.last_modified)
+      .slice(0, 20); // Limit to recent 20
+  }, [allSessions, project.path]);
+
+  const handleSelectProject = async () => {
+    if (!workspace) return;
+
+    const activeFeatureId = project.active_feature_id;
+    const mode = project.view_mode || "features";
+    navigate({ type: "workspace", projectId: project.id, featureId: activeFeatureId, mode });
+
+    if (workspace.active_project_id === project.id) return;
+
+    const newWorkspace: WorkspaceData = {
+      ...workspace,
+      active_project_id: project.id,
+    };
+    setWorkspace(newWorkspace);
+    await invoke("workspace_save", { data: newWorkspace });
+  };
+
+  const handleResumeSession = async (session: Session) => {
+    if (!workspace) return;
+
+    // Select this project first
+    navigate({ type: "workspace", projectId: project.id, mode: "features" });
+
+    // Find or create a feature to add the session terminal
+    const targetFeature = project.features.find((f) => !f.archived);
+
+    // If no active feature, just navigate to the project
+    if (!targetFeature) {
+      const newWorkspace: WorkspaceData = {
+        ...workspace,
+        active_project_id: project.id,
+      };
+      setWorkspace(newWorkspace);
+      await invoke("workspace_save", { data: newWorkspace });
+      return;
+    }
+
+    // Create a new terminal session with cc --resume command
+    const panelId = targetFeature.panels[0]?.id;
+    const title = session.summary || "CC Session";
+    const command = `cc --resume "${session.id}"`;
+
+    if (!panelId) {
+      // No panel exists, create one with the resume command
+      const newPanelId = crypto.randomUUID();
+      const ptySessionId = crypto.randomUUID();
+      const ptyId = crypto.randomUUID();
+
+      const newPanel = {
+        id: newPanelId,
+        sessions: [{ id: ptySessionId, pty_id: ptyId, title, command }],
+        active_session_id: ptySessionId,
+        is_shared: false,
+        cwd: project.path,
+      };
+
+      const newProjects = workspace.projects.map((p) => {
+        if (p.id !== project.id) return p;
+        return {
+          ...p,
+          features: p.features.map((f) => {
+            if (f.id !== targetFeature!.id) return f;
+            return {
+              ...f,
+              panels: [...f.panels, newPanel],
+              layout: { type: "panel" as const, panelId: newPanelId },
+            };
+          }),
+          active_feature_id: targetFeature!.id,
+          view_mode: "features" as const,
+        };
+      });
+
+      const newWorkspace: WorkspaceData = {
+        ...workspace,
+        projects: newProjects,
+        active_project_id: project.id,
+      };
+      setWorkspace(newWorkspace);
+      await invoke("workspace_save", { data: newWorkspace });
+    } else {
+      // Add a new session tab to the first panel
+      const ptySessionId = crypto.randomUUID();
+      const ptyId = crypto.randomUUID();
+
+      const newProjects = workspace.projects.map((p) => {
+        if (p.id !== project.id) return p;
+        return {
+          ...p,
+          features: p.features.map((f) => {
+            if (f.id !== targetFeature!.id) return f;
+            return {
+              ...f,
+              panels: f.panels.map((panel) => {
+                if (panel.id !== panelId) return panel;
+                return {
+                  ...panel,
+                  sessions: [
+                    ...(panel.sessions || []),
+                    { id: ptySessionId, pty_id: ptyId, title, command },
+                  ],
+                  active_session_id: ptySessionId,
+                };
+              }),
+            };
+          }),
+          active_feature_id: targetFeature!.id,
+          view_mode: "features" as const,
+        };
+      });
+
+      const newWorkspace: WorkspaceData = {
+        ...workspace,
+        projects: newProjects,
+        active_project_id: project.id,
+      };
+      setWorkspace(newWorkspace);
+      await invoke("workspace_save", { data: newWorkspace });
+    }
+  };
+
+  const projectDisplayName = project.name
+    .split(/[-_]/)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+
+  return (
+    <div className="px-2">
+      {/* Project Header */}
+      <div
+        className={`flex items-center gap-1 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
+          isActiveProject
+            ? "bg-primary/10 text-primary"
+            : "text-ink hover:bg-card-alt"
+        }`}
+        onClick={handleSelectProject}
+      >
+        {/* Collapse Toggle */}
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleCollapse();
+          }}
+          className="p-0.5 text-muted-foreground hover:text-ink"
+        >
+          {isCollapsed ? (
+            <ChevronRightIcon className="w-3.5 h-3.5" />
+          ) : (
+            <ChevronDownIcon className="w-3.5 h-3.5" />
+          )}
+        </button>
+
+        {/* Project Logo */}
+        <ProjectLogo projectPath={project.path} size="sm" />
+
+        {/* Project Name */}
+        <span className="text-sm font-medium truncate flex-1" title={projectDisplayName}>
+          {projectDisplayName}
+        </span>
+
+        {/* Session Count */}
+        <span className="text-xs text-muted-foreground">
+          {isLoading ? "..." : filteredSessions.length}
+        </span>
+      </div>
+
+      {/* Sessions List */}
+      {!isCollapsed && (
+        <div className="ml-4 mt-1 space-y-0.5">
+          {isLoading ? (
+            <div className="text-xs text-muted-foreground px-2 py-1">Loading...</div>
+          ) : filteredSessions.length === 0 ? (
+            <div className="text-xs text-muted-foreground px-2 py-1">No sessions</div>
+          ) : (
+            filteredSessions.map((session) => (
+              <SessionItem
+                key={session.id}
+                session={session}
+                onResume={() => handleResumeSession(session)}
+              />
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface SessionItemProps {
+  session: Session;
+  onResume: () => void;
+}
+
+function SessionItem({ session, onResume }: SessionItemProps) {
+  const formatDate = (ts: number) => {
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 0) {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } else if (diffDays === 1) {
+      return "Yesterday";
+    } else if (diffDays < 7) {
+      return `${diffDays}d ago`;
+    } else {
+      return d.toLocaleDateString([], { month: "short", day: "numeric" });
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-0.5 group">
+      <button
+        onClick={onResume}
+        className="flex-1 flex items-center gap-1.5 px-2 py-1 rounded text-left transition-colors text-muted-foreground hover:text-ink hover:bg-card-alt min-w-0"
+        title={`Resume: ${session.summary || "Untitled"}`}
+      >
+        <ChatBubbleIcon className="w-2.5 h-2.5 flex-shrink-0" />
+        <span className="text-xs truncate flex-1">
+          {session.summary || "Untitled"}
+        </span>
+        <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+          {formatDate(session.last_modified)}
+        </span>
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            className="p-0.5 rounded text-muted-foreground hover:text-ink hover:bg-card-alt opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <DotsVerticalIcon className="w-3 h-3" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[180px]">
+          <div className="px-2 py-1.5 text-[10px] text-muted-foreground font-mono border-b border-border mb-1">
+            #{session.id.slice(0, 8)}
+          </div>
+          <SessionDropdownMenuItems
+            projectId={session.project_id}
+            sessionId={session.id}
+            onResume={onResume}
+          />
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
   );
 }

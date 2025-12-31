@@ -498,6 +498,7 @@ fn read_session_head(path: &Path, max_lines: usize) -> (Option<String>, usize) {
 
     let reader = BufReader::new(file);
     let mut summary = None;
+    let mut first_user_message: Option<String> = None;
     let mut message_count = 0;
 
     for line in reader.lines().take(max_lines) {
@@ -509,15 +510,90 @@ fn read_session_head(path: &Path, max_lines: usize) -> (Option<String>, usize) {
             if parsed.line_type.as_deref() == Some("summary") {
                 summary = parsed.summary;
             }
-            if parsed.line_type.as_deref() == Some("user")
-                || parsed.line_type.as_deref() == Some("assistant")
-            {
+            if parsed.line_type.as_deref() == Some("user") {
+                message_count += 1;
+                // Capture first user message as fallback summary
+                if first_user_message.is_none() {
+                    if let Some(msg) = &parsed.message {
+                        if let Some(content) = &msg.content {
+                            // Extract text from content (can be string or array)
+                            let text_content = match content {
+                                serde_json::Value::String(s) => Some(s.clone()),
+                                serde_json::Value::Array(arr) => {
+                                    // Find first text block
+                                    arr.iter().find_map(|item| {
+                                        if item.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                            item.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                }
+                                _ => None,
+                            };
+                            if let Some(text) = text_content {
+                                // Apply restore_slash_command BEFORE truncation to preserve XML structure
+                                let restored = restore_slash_command(&text);
+                                // Truncate to reasonable length for display (UTF-8 safe)
+                                let display = if restored.chars().count() > 80 {
+                                    format!("{}...", restored.chars().take(80).collect::<String>())
+                                } else {
+                                    restored
+                                };
+                                first_user_message = Some(display);
+                            }
+                        }
+                    }
+                }
+            }
+            if parsed.line_type.as_deref() == Some("assistant") {
                 message_count += 1;
             }
         }
     }
 
-    (summary, message_count)
+    // Use summary if available, otherwise fall back to first user message
+    let final_summary = summary.or(first_user_message).map(|s| restore_slash_command(&s));
+    (final_summary, message_count)
+}
+
+/// Convert <command-message>...</command-message><command-name>/cmd</command-name> to /cmd format
+fn restore_slash_command(content: &str) -> String {
+    use regex::Regex;
+    lazy_static::lazy_static! {
+        // Extract command name
+        static ref NAME_RE: Regex = Regex::new(r"<command-name>(/[^<]+)</command-name>").unwrap();
+        // Extract args (handles multi-line)
+        static ref ARGS_RE: Regex = Regex::new(r"(?s)<command-args>(.*?)</command-args>").unwrap();
+        // Strip all command-related XML tags
+        static ref STRIP_RE: Regex = Regex::new(r"(?s)<command-message>.*?</command-message>|</?command-[^>]*>").unwrap();
+    }
+
+    // Extract command name and args first
+    let cmd = NAME_RE.captures(content)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().to_string());
+    let args = ARGS_RE.captures(content)
+        .and_then(|c| c.get(1))
+        .map(|m| m.as_str().trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    // Build result: command + args, then strip remaining tags
+    let prefix = match (cmd, args) {
+        (Some(c), Some(a)) => format!("{} {}", c, a),
+        (Some(c), None) => c,
+        _ => String::new(),
+    };
+
+    // Strip all command tags from original content
+    let cleaned = STRIP_RE.replace_all(content, "").trim().to_string();
+
+    // If we extracted a command, return it; otherwise return cleaned content
+    if prefix.is_empty() {
+        cleaned
+    } else {
+        prefix
+    }
 }
 
 /// Build session index from history.jsonl (fast: only reads one file)
@@ -591,8 +667,8 @@ async fn list_all_sessions() -> Result<Vec<Session>, String> {
             // Only read head for summary (first 20 lines should be enough)
             let (summary, head_msg_count) = read_session_head(&session_path, 20);
 
-            // Use display as fallback summary
-            let final_summary = summary.or_else(|| display.clone());
+            // Use display as fallback summary (also needs restore_slash_command)
+            let final_summary = summary.or_else(|| display.clone().map(|d| restore_slash_command(&d)));
 
             // Use file mtime for accurate last_modified
             let metadata = fs::metadata(&session_path).ok();
@@ -4292,6 +4368,16 @@ fn get_session_file_path(project_id: String, session_id: String) -> Result<Strin
 }
 
 #[tauri::command]
+fn get_session_summary(project_id: String, session_id: String) -> Result<Option<String>, String> {
+    let path = get_session_path(&project_id, &session_id);
+    if !path.exists() {
+        return Err("Session file not found".to_string());
+    }
+    let (summary, _) = read_session_head(&path, 20);
+    Ok(summary)
+}
+
+#[tauri::command]
 fn copy_to_clipboard(text: String) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     clipboard.set_text(text).map_err(|e| e.to_string())
@@ -6171,6 +6257,7 @@ pub fn run() {
             reveal_path,
             open_path,
             get_session_file_path,
+            get_session_summary,
             copy_to_clipboard,
             get_settings_path,
             get_mcp_config_path,

@@ -2522,6 +2522,7 @@ dependencies = [
  "cocoa",
  "dirs",
  "jieba-rs",
+ "lazy_static",
  "notify",
  "objc",
  "portable-pty",

@@ -14,3 +14,7 @@ export const collapsedProjectGroupsAtom = atomWithStorage<string[]>("collapsed-p
 export const featureSidebarExpandedPanelsAtom = atomWithStorage<string[]>("feature-sidebar-expanded-panels", []);
 export const featureSidebarPinnedExpandedAtom = atomWithStorage("feature-sidebar-pinned-expanded", true);
 export const featureSidebarFilesExpandedAtom = atomWithStorage("feature-sidebar-files-expanded", false);
+
+// VerticalFeatureTabs sidebar mode
+export type SidebarMode = "feats" | "sessions";
+export const sidebarModeAtom = atomWithStorage<SidebarMode>("sidebar-mode", "feats");
