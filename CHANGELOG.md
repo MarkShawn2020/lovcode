@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.23.0
+
+### Minor Changes
+
+- Remove debug logs and improve terminal exit behavior
+
+  - Remove debug logs from pty_manager.rs and TerminalPane.tsx
+  - Keep sessions with commands open after PTY exit for scrollback visibility
+  - Refactor workspace and panel components
+
 ## 0.22.1
 
 ### Patch Changes
