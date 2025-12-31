@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.22.1
+
+### Patch Changes
+
+- fix(chat): sort search results by timestamp descending
+
 ## 0.22.0
 
 ### Minor Changes
