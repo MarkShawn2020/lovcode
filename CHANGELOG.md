@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.1
+
+### Patch Changes
+
+- Add split-button for new terminal with Terminal/Claude Code/Codex options
+
 ## 0.23.0
 
 ### Minor Changes
