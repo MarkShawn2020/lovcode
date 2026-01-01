@@ -53,6 +53,7 @@ import {
 import { ProjectLogo } from "@/views/Workspace/ProjectLogo";
 import { CreateFeatureDialog } from "./CreateFeatureDialog";
 import { SessionDropdownMenuItems } from "@/components/shared/SessionMenuItems";
+import { NewTerminalSplitButton } from "@/components/ui/new-terminal-button";
 import type { Feature, WorkspaceData, WorkspaceProject } from "@/views/Workspace/types";
 
 const MIN_WIDTH = 180;
@@ -810,6 +811,109 @@ function ProjectSessionsGroup({
     }
   };
 
+  const handleNewTerminal = async (command?: string) => {
+    let savedWorkspace: WorkspaceData | null = null;
+
+    setWorkspace((currentWorkspace) => {
+      if (!currentWorkspace) return currentWorkspace;
+
+      const currentProject = currentWorkspace.projects.find((p) => p.id === project.id);
+      if (!currentProject) return currentWorkspace;
+
+      const targetFeature = currentProject.features.find((f) => !f.archived);
+
+      if (!targetFeature) {
+        savedWorkspace = {
+          ...currentWorkspace,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      }
+
+      const panelId = targetFeature.panels[0]?.id;
+      const title = command === "claude" ? "Claude Code" : command === "codex" ? "Codex" : "Terminal";
+
+      if (!panelId) {
+        const newPanelId = crypto.randomUUID();
+        const ptySessionId = crypto.randomUUID();
+        const ptyId = crypto.randomUUID();
+
+        const newPanel = {
+          id: newPanelId,
+          sessions: [{ id: ptySessionId, pty_id: ptyId, title, command }],
+          active_session_id: ptySessionId,
+          is_shared: false,
+          cwd: project.path,
+        };
+
+        const newProjects = currentWorkspace.projects.map((p) => {
+          if (p.id !== project.id) return p;
+          return {
+            ...p,
+            features: p.features.map((f) => {
+              if (f.id !== targetFeature.id) return f;
+              return {
+                ...f,
+                panels: [...f.panels, newPanel],
+                layout: { type: "panel" as const, panelId: newPanelId },
+              };
+            }),
+            active_feature_id: targetFeature.id,
+            view_mode: "features" as const,
+          };
+        });
+
+        savedWorkspace = {
+          ...currentWorkspace,
+          projects: newProjects,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      } else {
+        const ptySessionId = crypto.randomUUID();
+        const ptyId = crypto.randomUUID();
+
+        const newProjects = currentWorkspace.projects.map((p) => {
+          if (p.id !== project.id) return p;
+          return {
+            ...p,
+            features: p.features.map((f) => {
+              if (f.id !== targetFeature.id) return f;
+              return {
+                ...f,
+                panels: f.panels.map((panel) => {
+                  if (panel.id !== panelId) return panel;
+                  return {
+                    ...panel,
+                    sessions: [
+                      ...(panel.sessions || []),
+                      { id: ptySessionId, pty_id: ptyId, title, command },
+                    ],
+                    active_session_id: ptySessionId,
+                  };
+                }),
+              };
+            }),
+            active_feature_id: targetFeature.id,
+            view_mode: "features" as const,
+          };
+        });
+
+        savedWorkspace = {
+          ...currentWorkspace,
+          projects: newProjects,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      }
+    });
+
+    if (savedWorkspace) {
+      await invoke("workspace_save", { data: savedWorkspace });
+      navigate({ type: "workspace", projectId: project.id, mode: "features" });
+    }
+  };
+
   const projectDisplayName = project.name
     .split(/[-_]/)
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
@@ -819,7 +923,7 @@ function ProjectSessionsGroup({
     <div className="px-2">
       {/* Project Header */}
       <div
-        className={`flex items-center gap-1 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
+        className={`group flex items-center gap-1 px-2 py-1.5 rounded-lg cursor-pointer transition-colors ${
           isActiveProject
             ? "bg-primary/10 text-primary"
             : "text-ink hover:bg-card-alt"
@@ -853,6 +957,13 @@ function ProjectSessionsGroup({
         <span className="text-xs text-muted-foreground">
           {isLoading ? "..." : filteredSessions.length}
         </span>
+
+        {/* New Terminal Button */}
+        <NewTerminalSplitButton
+          variant="icon"
+          onSelect={handleNewTerminal}
+          className="opacity-0 group-hover:opacity-100"
+        />
       </div>
 
       {/* Sessions List */}

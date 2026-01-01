@@ -708,16 +708,17 @@ export function WorkspaceView() {
     (panelId: string, sessionId: string) => {
       if (!activeProject) return;
 
-      // Find and kill the PTY session, dispose terminal instance, purge scrollback
+      // Find the panel and check session count
+      let sessionCount = 0;
       let ptyIdToPurge: string | null = null;
+
       for (const feature of activeProject.features) {
         const panel = feature.panels.find((p) => p.id === panelId);
         if (panel) {
+          sessionCount = (panel.sessions || []).length;
           const session = (panel.sessions || []).find((s) => s.id === sessionId);
           if (session) {
             ptyIdToPurge = session.pty_id;
-            disposeTerminal(session.pty_id);
-            invoke("pty_kill", { id: session.pty_id }).catch(console.error);
           }
           break;
         }
@@ -725,30 +726,30 @@ export function WorkspaceView() {
       if (!ptyIdToPurge) {
         const sharedPanel = (activeProject.shared_panels || []).find((p) => p.id === panelId);
         if (sharedPanel) {
+          sessionCount = (sharedPanel.sessions || []).length;
           const session = (sharedPanel.sessions || []).find((s) => s.id === sessionId);
           if (session) {
             ptyIdToPurge = session.pty_id;
-            disposeTerminal(session.pty_id);
-            invoke("pty_kill", { id: session.pty_id }).catch(console.error);
           }
         }
       }
-      // Purge scrollback file since this session is being closed
+
+      // If this is the last session, close the entire panel (it handles PTY cleanup)
+      if (sessionCount <= 1) {
+        handlePanelClose(panelId);
+        return;
+      }
+
+      // Kill PTY, dispose terminal, purge scrollback for this session
       if (ptyIdToPurge) {
+        disposeTerminal(ptyIdToPurge);
+        invoke("pty_kill", { id: ptyIdToPurge }).catch(console.error);
         invoke("pty_purge_scrollback", { id: ptyIdToPurge }).catch(console.error);
       }
 
       const projectId = activeProject.id;
 
       saveWorkspace((current) => {
-        // Helper: ensure at least one session exists after close
-        const ensureSessions = (sessions: StoredSessionState[], closedId: string): StoredSessionState[] => {
-          const remaining = sessions.filter((s) => s.id !== closedId);
-          if (remaining.length > 0) return remaining;
-          // Create a fresh session when last one closes
-          return [{ id: crypto.randomUUID(), pty_id: crypto.randomUUID(), title: "Untitled" }];
-        };
-
         const newProjects = current.projects.map((p) => {
           if (p.id !== projectId) return p;
           return {
@@ -757,7 +758,7 @@ export function WorkspaceView() {
               ...f,
               panels: f.panels.map((panel) => {
                 if (panel.id !== panelId) return panel;
-                const newSessions = ensureSessions(panel.sessions || [], sessionId);
+                const newSessions = (panel.sessions || []).filter((s) => s.id !== sessionId);
                 const newActiveId = panel.active_session_id === sessionId
                   ? newSessions[0]?.id || ""
                   : panel.active_session_id;
@@ -766,7 +767,7 @@ export function WorkspaceView() {
             })),
             shared_panels: (p.shared_panels || []).map((panel) => {
               if (panel.id !== panelId) return panel;
-              const newSessions = ensureSessions(panel.sessions || [], sessionId);
+              const newSessions = (panel.sessions || []).filter((s) => s.id !== sessionId);
               const newActiveId = panel.active_session_id === sessionId
                 ? newSessions[0]?.id || ""
                 : panel.active_session_id;
@@ -780,7 +781,7 @@ export function WorkspaceView() {
       // Keep focus on the panel where session was closed
       setActivePanelId(panelId);
     },
-    [activeProject, saveWorkspace, setActivePanelId]
+    [activeProject, saveWorkspace, setActivePanelId, handlePanelClose]
   );
 
   // Select session handler

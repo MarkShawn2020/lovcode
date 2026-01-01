@@ -144,20 +144,18 @@ export const SessionPanel = memo(function SessionPanel({
                 fallback={titleFallback}
                 onRename={handleTitleChange(session.id)}
               />
-              {panel.sessions.length > 1 && (
-                <span
-                  role="button"
-                  tabIndex={-1}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    e.preventDefault();
-                    onSessionClose(session.id);
-                  }}
-                  className="absolute right-1 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-card-alt transition-opacity cursor-pointer"
-                >
-                  <Cross2Icon className="w-3 h-3" />
-                </span>
-              )}
+              <span
+                role="button"
+                tabIndex={-1}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  onSessionClose(session.id);
+                }}
+                className="absolute right-1 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-card-alt transition-opacity cursor-pointer"
+              >
+                <Cross2Icon className="w-3 h-3" />
+              </span>
             </TabsTrigger>
           ))}
         </TabsList>
