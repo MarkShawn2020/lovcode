@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.2
+
+### Patch Changes
+
+- Add multi-shell type support for terminal creation button
+
 ## 0.23.1
 
 ### Patch Changes
