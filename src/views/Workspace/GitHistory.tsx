@@ -24,14 +24,14 @@ import type { CommitInfo, Feature } from "./types";
 
 interface GitHistoryProps {
   projectPath: string;
-  features: Feature[];
+  features?: Feature[];
   onRefresh?: () => void;
   embedded?: boolean;
 }
 
 type ViewMode = "feats" | "timeline";
 
-export function GitHistory({ projectPath, features, onRefresh, embedded = false }: GitHistoryProps) {
+export function GitHistory({ projectPath, features = [], onRefresh, embedded = false }: GitHistoryProps) {
   const [commits, setCommits] = useState<CommitInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>("feats");

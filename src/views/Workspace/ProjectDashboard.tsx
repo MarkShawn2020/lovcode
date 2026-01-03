@@ -1,32 +1,26 @@
 import { useMemo } from "react";
-import {
-  CheckCircledIcon,
-  UpdateIcon,
-  ExclamationTriangleIcon,
-  TimerIcon,
-  PlusIcon,
-  ArchiveIcon,
-} from "@radix-ui/react-icons";
+import { useAtom } from "jotai";
+import { ChatBubbleIcon, DotsVerticalIcon } from "@radix-ui/react-icons";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { CreateFeatureDialog } from "@/components/GlobalHeader/CreateFeatureDialog";
-import { useFeatureCreation } from "@/hooks";
-import { KanbanBoard } from "./KanbanBoard";
+import { useInvokeQuery } from "@/hooks";
+import { workspaceDataAtom } from "@/store";
+import { invoke } from "@tauri-apps/api/core";
 import { ProjectLogo } from "./ProjectLogo";
 import { GitHistory } from "./GitHistory";
 import { ProjectDiagnostics } from "./ProjectDiagnostics";
 import { LogoManager } from "./LogoManager";
-import type { WorkspaceProject, FeatureStatus } from "./types";
+import { SessionDropdownMenuItems } from "@/components/shared/SessionMenuItems";
+import { NewTerminalSplitButton } from "@/components/ui/new-terminal-button";
+import type { WorkspaceProject } from "./types";
+import type { Session } from "@/types";
+import type { WorkspaceData } from "./types";
 
 interface ProjectDashboardProps {
   project: WorkspaceProject;
-  onFeatureClick: (featureId: string) => void;
-  onFeatureStatusChange: (featureId: string, status: FeatureStatus) => void;
-  onUnarchiveFeature: (featureId: string) => void;
 }
 
 function BentoCard({
@@ -58,43 +52,251 @@ function BentoCard({
   );
 }
 
-export function ProjectDashboard({
-  project,
-  onFeatureClick,
-  onFeatureStatusChange,
-  onUnarchiveFeature,
-}: ProjectDashboardProps) {
-  const {
-    showCreateDialog,
-    setShowCreateDialog,
-    nextSeq,
-    openCreateDialog,
-    createFeature,
-  } = useFeatureCreation(project);
+export function ProjectDashboard({ project }: ProjectDashboardProps) {
+  const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
 
-  const stats = useMemo(() => {
-    const activeFeatures = project.features.filter((f) => !f.archived);
-    return {
-      pending: activeFeatures.filter((f) => f.status === "pending").length,
-      running: activeFeatures.filter((f) => f.status === "running").length,
-      needsReview: activeFeatures.filter((f) => f.status === "needs-review").length,
-      completed: activeFeatures.filter((f) => f.status === "completed").length,
-      total: activeFeatures.length,
-    };
-  }, [project.features]);
+  // Fetch all CC sessions
+  const { data: allSessions = [], isLoading } = useInvokeQuery<Session[]>(
+    ["sessions"],
+    "list_all_sessions"
+  );
 
-  const archivedFeatures = useMemo(() => {
-    return project.features.filter((f) => f.archived);
-  }, [project.features]);
+  // Filter to sessions matching this project's path
+  const filteredSessions = useMemo(() => {
+    const normalizePath = (p: string) => p.replace(/\/+$/, "");
+    const projectPathNorm = normalizePath(project.path);
 
-  const recentFeatures = useMemo(() => {
-    return [...project.features]
-      .filter((f) => !f.archived)
-      .sort((a, b) => b.created_at - a.created_at)
-      .slice(0, 5);
-  }, [project.features]);
+    return allSessions
+      .filter((s) => {
+        if (!s.project_path) return false;
+        return normalizePath(s.project_path) === projectPathNorm && s.message_count > 0;
+      })
+      .sort((a, b) => b.last_modified - a.last_modified);
+  }, [allSessions, project.path]);
 
-  const activeFeatures = project.features.filter((f) => !f.archived);
+  const recentSessions = filteredSessions.slice(0, 5);
+
+  const handleResumeSession = async (session: Session) => {
+    let savedWorkspace: WorkspaceData | null = null;
+
+    setWorkspace((currentWorkspace) => {
+      if (!currentWorkspace) return currentWorkspace;
+
+      const currentProject = currentWorkspace.projects.find((p) => p.id === project.id);
+      if (!currentProject) return currentWorkspace;
+
+      const targetFeature = currentProject.features.find((f) => !f.archived);
+
+      if (!targetFeature) {
+        savedWorkspace = {
+          ...currentWorkspace,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      }
+
+      const panelId = targetFeature.panels[0]?.id;
+      const title = session.summary || "Untitled";
+      const command = `claude --resume "${session.id}"`;
+
+      if (!panelId) {
+        const newPanelId = crypto.randomUUID();
+        const ptySessionId = crypto.randomUUID();
+        const ptyId = crypto.randomUUID();
+
+        const newPanel = {
+          id: newPanelId,
+          sessions: [{ id: ptySessionId, pty_id: ptyId, title, command }],
+          active_session_id: ptySessionId,
+          is_shared: false,
+          cwd: project.path,
+        };
+
+        const newProjects = currentWorkspace.projects.map((p) => {
+          if (p.id !== project.id) return p;
+          return {
+            ...p,
+            features: p.features.map((f) => {
+              if (f.id !== targetFeature.id) return f;
+              return {
+                ...f,
+                panels: [...f.panels, newPanel],
+                layout: { type: "panel" as const, panelId: newPanelId },
+              };
+            }),
+            active_feature_id: targetFeature.id,
+            view_mode: "features" as const,
+          };
+        });
+
+        savedWorkspace = {
+          ...currentWorkspace,
+          projects: newProjects,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      } else {
+        const ptySessionId = crypto.randomUUID();
+        const ptyId = crypto.randomUUID();
+
+        const newProjects = currentWorkspace.projects.map((p) => {
+          if (p.id !== project.id) return p;
+          return {
+            ...p,
+            features: p.features.map((f) => {
+              if (f.id !== targetFeature.id) return f;
+              return {
+                ...f,
+                panels: f.panels.map((panel) => {
+                  if (panel.id !== panelId) return panel;
+                  return {
+                    ...panel,
+                    sessions: [
+                      ...(panel.sessions || []),
+                      { id: ptySessionId, pty_id: ptyId, title, command },
+                    ],
+                    active_session_id: ptySessionId,
+                  };
+                }),
+              };
+            }),
+            active_feature_id: targetFeature.id,
+            view_mode: "features" as const,
+          };
+        });
+
+        savedWorkspace = {
+          ...currentWorkspace,
+          projects: newProjects,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      }
+    });
+
+    if (savedWorkspace) {
+      await invoke("workspace_save", { data: savedWorkspace });
+    }
+  };
+
+  const handleNewTerminal = async (command?: string) => {
+    let savedWorkspace: WorkspaceData | null = null;
+
+    setWorkspace((currentWorkspace) => {
+      if (!currentWorkspace) return currentWorkspace;
+
+      const currentProject = currentWorkspace.projects.find((p) => p.id === project.id);
+      if (!currentProject) return currentWorkspace;
+
+      const targetFeature = currentProject.features.find((f) => !f.archived);
+
+      if (!targetFeature) {
+        savedWorkspace = {
+          ...currentWorkspace,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      }
+
+      const panelId = targetFeature.panels[0]?.id;
+      const title = command === "claude" ? "Claude Code" : command === "codex" ? "Codex" : "Terminal";
+
+      if (!panelId) {
+        const newPanelId = crypto.randomUUID();
+        const ptySessionId = crypto.randomUUID();
+        const ptyId = crypto.randomUUID();
+
+        const newPanel = {
+          id: newPanelId,
+          sessions: [{ id: ptySessionId, pty_id: ptyId, title, command }],
+          active_session_id: ptySessionId,
+          is_shared: false,
+          cwd: project.path,
+        };
+
+        const newProjects = currentWorkspace.projects.map((p) => {
+          if (p.id !== project.id) return p;
+          return {
+            ...p,
+            features: p.features.map((f) => {
+              if (f.id !== targetFeature.id) return f;
+              return {
+                ...f,
+                panels: [...f.panels, newPanel],
+                layout: { type: "panel" as const, panelId: newPanelId },
+              };
+            }),
+            active_feature_id: targetFeature.id,
+            view_mode: "features" as const,
+          };
+        });
+
+        savedWorkspace = {
+          ...currentWorkspace,
+          projects: newProjects,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      } else {
+        const ptySessionId = crypto.randomUUID();
+        const ptyId = crypto.randomUUID();
+
+        const newProjects = currentWorkspace.projects.map((p) => {
+          if (p.id !== project.id) return p;
+          return {
+            ...p,
+            features: p.features.map((f) => {
+              if (f.id !== targetFeature.id) return f;
+              return {
+                ...f,
+                panels: f.panels.map((panel) => {
+                  if (panel.id !== panelId) return panel;
+                  return {
+                    ...panel,
+                    sessions: [
+                      ...(panel.sessions || []),
+                      { id: ptySessionId, pty_id: ptyId, title, command },
+                    ],
+                    active_session_id: ptySessionId,
+                  };
+                }),
+              };
+            }),
+            active_feature_id: targetFeature.id,
+            view_mode: "features" as const,
+          };
+        });
+
+        savedWorkspace = {
+          ...currentWorkspace,
+          projects: newProjects,
+          active_project_id: project.id,
+        };
+        return savedWorkspace;
+      }
+    });
+
+    if (savedWorkspace) {
+      await invoke("workspace_save", { data: savedWorkspace });
+    }
+  };
+
+  const formatDate = (ts: number) => {
+    const d = new Date(ts * 1000);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 0) {
+      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    } else if (diffDays === 1) {
+      return "Yesterday";
+    } else if (diffDays < 7) {
+      return `${diffDays}d ago`;
+    } else {
+      return d.toLocaleDateString([], { month: "short", day: "numeric" });
+    }
+  };
 
   return (
     <div className="flex-1 h-full flex flex-col overflow-hidden bg-muted/30">
@@ -112,103 +314,94 @@ export function ProjectDashboard({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            {archivedFeatures.length > 0 && (
-              <DropdownMenu>
-                <DropdownMenuTrigger className="flex items-center gap-1.5 px-3 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-muted rounded-lg transition-colors">
-                  <ArchiveIcon className="w-4 h-4" />
-                  <span>Archived ({archivedFeatures.length})</span>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="min-w-[200px]">
-                  {archivedFeatures.map((feature) => (
-                    <DropdownMenuItem
-                      key={feature.id}
-                      onClick={() => onUnarchiveFeature(feature.id)}
-                      className="cursor-pointer"
-                    >
-                      <span className="truncate">
-                        {feature.seq > 0 && <span className="text-muted-foreground">#{feature.seq} </span>}
-                        {feature.name}
-                      </span>
-                    </DropdownMenuItem>
-                  ))}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )}
-          </div>
+          <NewTerminalSplitButton onSelect={handleNewTerminal} />
         </div>
       </div>
 
       {/* Bento Grid */}
       <div className="flex-1 min-h-0 p-4 overflow-y-auto">
         <div className="grid grid-cols-12 gap-4 h-full" style={{ minHeight: '600px' }}>
-          {/* Recent Features - spans full width */}
-          {recentFeatures.length > 0 && (
+          {/* Recent Sessions - spans full width */}
+          {recentSessions.length > 0 && (
             <div className="col-span-12 bg-card border border-border rounded-2xl px-4 py-3">
-              <h3 className="text-xs font-medium text-muted-foreground mb-2">Recent Features</h3>
+              <h3 className="text-xs font-medium text-muted-foreground mb-2">Recent Sessions</h3>
               <div className="flex gap-2 overflow-x-auto pb-1">
-                {recentFeatures.map((feature) => (
+                {recentSessions.map((session) => (
                   <button
-                    key={feature.id}
-                    onClick={() => onFeatureClick(feature.id)}
-                    className="flex-shrink-0 px-3 py-1.5 text-sm bg-muted hover:bg-muted/80 rounded-lg transition-colors"
+                    key={session.id}
+                    onClick={() => handleResumeSession(session)}
+                    className="flex-shrink-0 px-3 py-1.5 text-sm bg-muted hover:bg-muted/80 rounded-lg transition-colors flex items-center gap-1.5"
                   >
-                    {feature.seq > 0 && <span className="text-muted-foreground">#{feature.seq} </span>}
-                    {feature.name}
+                    <ChatBubbleIcon className="w-3 h-3 text-muted-foreground" />
+                    <span className="truncate max-w-[200px]">{session.summary || "Untitled"}</span>
                   </button>
                 ))}
               </div>
             </div>
           )}
 
-          {/* Main content area - Kanban on left, sidebar on right */}
+          {/* Main content area - Sessions list on left, sidebar on right */}
           <div className="col-span-8 row-span-2">
             <BentoCard
-              title="Features"
+              title="Sessions"
               className="h-full"
               subtitle={
-                <div className="flex items-center gap-2 text-[10px]">
-                  {stats.pending > 0 && (
-                    <span className="flex items-center gap-1 text-muted-foreground">
-                      <TimerIcon className="w-3 h-3" />{stats.pending}
-                    </span>
-                  )}
-                  {stats.running > 0 && (
-                    <span className="flex items-center gap-1 text-blue-500">
-                      <UpdateIcon className="w-3 h-3" />{stats.running}
-                    </span>
-                  )}
-                  {stats.needsReview > 0 && (
-                    <span className="flex items-center gap-1 text-amber-500">
-                      <ExclamationTriangleIcon className="w-3 h-3" />{stats.needsReview}
-                    </span>
-                  )}
-                  {stats.completed > 0 && (
-                    <span className="flex items-center gap-1 text-green-500">
-                      <CheckCircledIcon className="w-3 h-3" />{stats.completed}
-                    </span>
-                  )}
-                </div>
-              }
-              action={
-                <button
-                  onClick={openCreateDialog}
-                  className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-                >
-                  <PlusIcon className="w-3.5 h-3.5" />
-                  New Feature
-                </button>
+                <span className="text-[10px] text-muted-foreground">
+                  {isLoading ? "..." : `${filteredSessions.length} sessions`}
+                </span>
               }
             >
-              {activeFeatures.length > 0 ? (
-                <KanbanBoard
-                  features={activeFeatures}
-                  onFeatureClick={onFeatureClick}
-                  onFeatureStatusChange={onFeatureStatusChange}
-                />
+              {isLoading ? (
+                <div className="h-full flex items-center justify-center">
+                  <p className="text-muted-foreground text-sm">Loading sessions...</p>
+                </div>
+              ) : filteredSessions.length > 0 ? (
+                <div className="overflow-y-auto h-full p-2 space-y-1">
+                  {filteredSessions.map((session) => (
+                    <div
+                      key={session.id}
+                      className="flex items-center gap-2 group"
+                    >
+                      <button
+                        onClick={() => handleResumeSession(session)}
+                        className="flex-1 flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors hover:bg-muted min-w-0"
+                      >
+                        <ChatBubbleIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm truncate">
+                            {session.summary || "Untitled"}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {session.message_count} messages · {formatDate(session.last_modified)}
+                          </p>
+                        </div>
+                      </button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            className="p-1.5 rounded text-muted-foreground hover:text-ink hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <DotsVerticalIcon className="w-4 h-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[180px]">
+                          <div className="px-2 py-1.5 text-[10px] text-muted-foreground font-mono border-b border-border mb-1">
+                            #{session.id.slice(0, 8)}
+                          </div>
+                          <SessionDropdownMenuItems
+                            projectId={session.project_id}
+                            sessionId={session.id}
+                            onResume={() => handleResumeSession(session)}
+                          />
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <div className="h-full flex items-center justify-center">
-                  <p className="text-muted-foreground text-sm">No features yet</p>
+                  <p className="text-muted-foreground text-sm">No sessions yet</p>
                 </div>
               )}
             </BentoCard>
@@ -233,7 +426,6 @@ export function ProjectDashboard({
               <div className="overflow-y-auto h-full">
                 <GitHistory
                   projectPath={project.path}
-                  features={activeFeatures}
                   embedded
                 />
               </div>
@@ -241,13 +433,6 @@ export function ProjectDashboard({
           </div>
         </div>
       </div>
-
-      <CreateFeatureDialog
-        open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
-        seq={nextSeq}
-        onSubmit={createFeature}
-      />
     </div>
   );
 }

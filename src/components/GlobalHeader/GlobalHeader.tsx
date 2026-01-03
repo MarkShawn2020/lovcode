@@ -73,16 +73,16 @@ export function GlobalHeader({
               label="Lovcode"
             />
             <NavButton
-              isActive={primaryFeature === "features"}
-              onClick={() => handleMainNavClick("features")}
-              icon={<LayersIcon className="w-4 h-4" />}
-              label="Features"
-            />
-            <NavButton
               isActive={primaryFeature === "workspace"}
               onClick={() => handleMainNavClick("workspace")}
               icon={<RocketIcon className="w-4 h-4" />}
-              label="Workspace"
+              label="Dashboard"
+            />
+            <NavButton
+              isActive={primaryFeature === "features"}
+              onClick={() => handleMainNavClick("features")}
+              icon={<LayersIcon className="w-4 h-4" />}
+              label="Configuration"
             />
             <NavButton
               isActive={primaryFeature === "chat"}

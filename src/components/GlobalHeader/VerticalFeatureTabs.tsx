@@ -143,15 +143,15 @@ function ProjectSessionsGroup({
   const handleSelectProject = async () => {
     if (!workspace) return;
 
-    const activeFeatureId = project.active_feature_id;
-    const mode = project.view_mode || "features";
-    navigate({ type: "workspace", projectId: project.id, featureId: activeFeatureId, mode });
-
-    if (workspace.active_project_id === project.id) return;
+    // Always navigate to dashboard when clicking project name
+    navigate({ type: "workspace", projectId: project.id, mode: "dashboard" });
 
     const newWorkspace: WorkspaceData = {
       ...workspace,
       active_project_id: project.id,
+      projects: workspace.projects.map((p) =>
+        p.id === project.id ? { ...p, view_mode: "dashboard" as const } : p
+      ),
     };
     setWorkspace(newWorkspace);
     await invoke("workspace_save", { data: newWorkspace });

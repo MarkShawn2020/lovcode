@@ -910,12 +910,7 @@ export function WorkspaceView() {
     <div className="h-full flex flex-col bg-canvas">
       {activeProject ? (
         activeProject.view_mode === "dashboard" ? (
-          <ProjectDashboard
-            project={activeProject}
-            onFeatureClick={handleDashboardFeatureClick}
-            onFeatureStatusChange={handleDashboardFeatureStatusChange}
-            onUnarchiveFeature={handleUnarchiveFeature}
-          />
+          <ProjectDashboard project={activeProject} />
         ) : activeProject.view_mode === "home" ? (
           <ProjectHomeView
             projectPath={activeProject.path}
