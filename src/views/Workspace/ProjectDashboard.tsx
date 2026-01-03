@@ -53,7 +53,7 @@ function BentoCard({
 }
 
 export function ProjectDashboard({ project }: ProjectDashboardProps) {
-  const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
+  const [, setWorkspace] = useAtom(workspaceDataAtom);
 
   // Fetch all CC sessions
   const { data: allSessions = [], isLoading } = useInvokeQuery<Session[]>(

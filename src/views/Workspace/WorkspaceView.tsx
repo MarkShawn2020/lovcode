@@ -10,7 +10,7 @@ import { ProjectDashboard } from "./ProjectDashboard";
 import { PanelGrid } from "../../components/PanelGrid";
 import type { PanelState } from "../../components/PanelGrid";
 import { disposeTerminal } from "../../components/Terminal";
-import type { WorkspaceData, WorkspaceProject, Feature, FeatureStatus, PanelState as StoredPanelState, SessionState as StoredSessionState, LayoutNode } from "./types";
+import type { WorkspaceData, WorkspaceProject, Feature, PanelState as StoredPanelState, SessionState as StoredSessionState, LayoutNode } from "./types";
 
 export function WorkspaceView() {
   const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
@@ -216,70 +216,6 @@ export function WorkspaceView() {
       return undefined;
     }
   }, [activeProject, saveWorkspace]);
-
-  // Update feature status from dashboard (no auto-archive)
-  const handleDashboardFeatureStatusChange = useCallback(
-    (featureId: string, status: FeatureStatus) => {
-      if (!activeProject) return;
-      const projectId = activeProject.id;
-
-      saveWorkspace((current) => {
-        const newProjects = current.projects.map((p) => {
-          if (p.id !== projectId) return p;
-          return {
-            ...p,
-            features: p.features.map((f) =>
-              f.id === featureId ? { ...f, status } : f
-            ),
-          };
-        });
-        return { ...current, projects: newProjects };
-      });
-    },
-    [activeProject, saveWorkspace]
-  );
-
-  // Select feature from dashboard and switch to features view
-  const handleDashboardFeatureClick = useCallback(
-    (featureId: string) => {
-      if (!activeProject) return;
-      const projectId = activeProject.id;
-
-      saveWorkspace((current) => {
-        const newProjects = current.projects.map((p) =>
-          p.id === projectId
-            ? { ...p, active_feature_id: featureId, view_mode: "features" as const }
-            : p
-        );
-        return { ...current, projects: newProjects };
-      });
-    },
-    [activeProject, saveWorkspace]
-  );
-
-  // Unarchive feature from dashboard
-  const handleUnarchiveFeature = useCallback(
-    (featureId: string) => {
-      if (!activeProject) return;
-      const projectId = activeProject.id;
-
-      saveWorkspace((current) => {
-        const newProjects = current.projects.map((p) => {
-          if (p.id !== projectId) return p;
-          return {
-            ...p,
-            features: p.features.map((f) =>
-              f.id === featureId ? { ...f, archived: false } : f
-            ),
-            active_feature_id: featureId,
-            view_mode: "features" as const,
-          };
-        });
-        return { ...current, projects: newProjects };
-      });
-    },
-    [activeProject, saveWorkspace]
-  );
 
   // Layout tree utilities
   const splitLayoutNode = useCallback(
