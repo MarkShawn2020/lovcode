@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.4
+
+### Patch Changes
+
+- refactor(dashboard): 项目 Dashboard 从 Features 改为 Sessions 视图
+
 ## 0.23.3
 
 ### Patch Changes
