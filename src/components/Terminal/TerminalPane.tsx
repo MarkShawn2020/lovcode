@@ -154,24 +154,35 @@ export function TerminalPane({
 
         if (!mountState.isMounted) return;
 
-        await invoke("pty_resize", {
-          id: sessionId,
-          cols: term.cols,
-          rows: term.rows,
-        }).catch(() => {});
+        // Ensure terminal is properly sized before sending resize to PTY
+        // This must happen AFTER DOM is ready, so use double rAF
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => {
+            requestAnimationFrame(() => {
+              fitAddon.fit();
+              resolve();
+            });
+          });
+        });
+
+        // Only send resize if dimensions are valid (container must be visible)
+        const cols = term.cols;
+        const rows = term.rows;
+        if (cols >= 10 && rows >= 2) {
+          await invoke("pty_resize", {
+            id: sessionId,
+            cols,
+            rows,
+          }).catch(() => {});
+        }
 
         // Focus if autoFocus is true when PTY becomes ready
         if (autoFocusRef.current) {
-          // Use double rAF to ensure DOM is fully painted before focus
-          requestAnimationFrame(() => {
-            fitAddon.fit();
-            requestAnimationFrame(() => {
-              // Don't steal focus from input/textarea
-              const active = document.activeElement;
-              if (active?.tagName === 'INPUT' || active?.tagName === 'TEXTAREA') return;
-              term.focus();
-            });
-          });
+          // Don't steal focus from input/textarea
+          const active = document.activeElement;
+          if (active?.tagName !== 'INPUT' && active?.tagName !== 'TEXTAREA') {
+            term.focus();
+          }
         }
         onReadyRef.current?.();
       } catch (err) {

@@ -221,7 +221,7 @@ export const SessionPanel = memo(function SessionPanel({
               key={session.id}
               value={session.id}
               forceMount
-              className="absolute inset-0 m-0 data-[state=inactive]:hidden"
+              className="absolute inset-0 m-0 data-[state=inactive]:invisible data-[state=inactive]:pointer-events-none"
             >
               <TerminalPane
                 ptyId={session.ptyId}

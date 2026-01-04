@@ -1,6 +1,8 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 interface PooledTerminal {
@@ -50,7 +52,7 @@ const TERMINAL_THEME = {
   cursor: "#CC785C",
   cursorAccent: "#1a1a1a",
   selectionBackground: "#CC785C40",
-  black: "#1a1a1a",
+  black: "#4a4a4a", // Lighter than background to remain visible
   red: "#e06c75",
   green: "#98c379",
   yellow: "#d19a66",
@@ -97,6 +99,11 @@ export function getOrCreateTerminal(sessionId: string): PooledTerminal {
     openUrl(uri).catch(console.error);
   }));
 
+  // Unicode11 addon for proper CJK character width calculation
+  const unicode11Addon = new Unicode11Addon();
+  term.loadAddon(unicode11Addon);
+  term.unicode.activeVersion = "11";
+
   // Create a detached container for the terminal
   const container = document.createElement("div");
   container.style.width = "100%";
@@ -104,6 +111,18 @@ export function getOrCreateTerminal(sessionId: string): PooledTerminal {
 
   // Open terminal in the detached container
   term.open(container);
+
+  // WebGL addon for GPU-accelerated rendering (prevents flicker on high-throughput)
+  // Must be loaded AFTER term.open() - falls back to DOM renderer if WebGL unavailable
+  try {
+    const webglAddon = new WebglAddon();
+    webglAddon.onContextLoss(() => {
+      webglAddon.dispose();
+    });
+    term.loadAddon(webglAddon);
+  } catch {
+    // WebGL not available, use default DOM renderer
+  }
 
   // Note: macOS keyboard shortcuts (Cmd+Arrow, Cmd+Backspace, Option+Arrow, Option+Backspace)
   // are handled in TerminalPane.tsx using invoke("pty_write") for direct PTY communication
