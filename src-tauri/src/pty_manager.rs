@@ -160,6 +160,9 @@ pub fn create_session(
 
     // Set proper TERM for xterm.js
     cmd.env("TERM", "xterm-256color");
+    // Tell CLI tools we have a dark background (light foreground=15, dark background=0)
+    // Many tools (claude code, bat, delta, etc.) use this to choose color schemes
+    cmd.env("COLORFGBG", "15;0");
     // Mark as lovcode terminal (similar to ITERM_SESSION_ID for iTerm)
     cmd.env("LOVCODE_TERMINAL", "1");
 

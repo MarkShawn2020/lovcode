@@ -52,7 +52,7 @@ const TERMINAL_THEME = {
   cursor: "#CC785C",
   cursorAccent: "#1a1a1a",
   selectionBackground: "#CC785C40",
-  black: "#4a4a4a", // Lighter than background to remain visible
+  black: "#4a4a4a", // Lighter than background so ANSI black text remains visible
   red: "#e06c75",
   green: "#98c379",
   yellow: "#d19a66",
