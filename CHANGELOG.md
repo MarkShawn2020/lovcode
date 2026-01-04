@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.6
+
+### Patch Changes
+
+- fix(terminal): 修复 WebGL context 泄漏导致的过多 context 错误
+
 ## 0.23.5
 
 ### Patch Changes
