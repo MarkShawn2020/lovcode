@@ -43,8 +43,8 @@ let autoCopyEnabled = (() => {
 })();
 
 /** Global lock to prevent concurrent PTY initialization (survives HMR) */
-export const ptyInitLocks: Map<string, Promise<void>> =
-  window.__ptyInitLocks ?? (window.__ptyInitLocks = new Map());
+export const ptyInitLocks: Map<string, Promise<void>> = window.__ptyInitLocks ??
+(window.__ptyInitLocks = new Map());
 
 const TERMINAL_THEME = {
   background: "#1a1a1a",
@@ -52,7 +52,8 @@ const TERMINAL_THEME = {
   cursor: "#CC785C",
   cursorAccent: "#1a1a1a",
   selectionBackground: "#CC785C40",
-  black: "#4a4a4a", // Lighter than background so ANSI black text remains visible
+  // [ORIGINAL] black: "#4a4a4a",
+  black: "#636d83", // [NEW] Optimized for dark background (One Dark style)
   red: "#e06c75",
   green: "#98c379",
   yellow: "#d19a66",
@@ -90,14 +91,18 @@ export function getOrCreateTerminal(sessionId: string): PooledTerminal {
     macOptionIsMeta: false,
     allowProposedApi: true,
     scrollOnUserInput: false, // Let PTY output control scrolling, not user keystrokes
+    // [NEW] Ensure legibility on dark backgrounds
+    minimumContrastRatio: 4.5,
     theme: TERMINAL_THEME,
   });
 
   const fitAddon = new FitAddon();
   term.loadAddon(fitAddon);
-  term.loadAddon(new WebLinksAddon((_event, uri) => {
-    openUrl(uri).catch(console.error);
-  }));
+  term.loadAddon(
+    new WebLinksAddon((_event, uri) => {
+      openUrl(uri).catch(console.error);
+    })
+  );
 
   // Unicode11 addon for proper CJK character width calculation
   const unicode11Addon = new Unicode11Addon();
@@ -140,7 +145,10 @@ export function getOrCreateTerminal(sessionId: string): PooledTerminal {
  * Attach a pooled terminal to a target element.
  * Moves the terminal's container DOM into the target.
  */
-export function attachTerminal(sessionId: string, target: HTMLElement): PooledTerminal | null {
+export function attachTerminal(
+  sessionId: string,
+  target: HTMLElement
+): PooledTerminal | null {
   const pooled = terminalPool.get(sessionId);
   if (!pooled) return null;
 
