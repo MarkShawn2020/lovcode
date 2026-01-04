@@ -28,7 +28,7 @@ export function useFeatureCreation(project: WorkspaceProject) {
         description: description || undefined,
       });
 
-      navigate({ type: "workspace", projectId: project.id, featureId: feature.id, mode: "features" });
+      navigate({ type: "workspace", projectId: project.id, featureId: feature.id, mode: "terminal" });
 
       const newProjects = workspace.projects.map((p) =>
         p.id === project.id
@@ -36,7 +36,7 @@ export function useFeatureCreation(project: WorkspaceProject) {
               ...p,
               features: [...p.features, feature],
               active_feature_id: feature.id,
-              view_mode: "features" as const,
+              view_mode: "terminal" as const,
             }
           : p
       );

@@ -71,7 +71,7 @@ export function FeatureTabGroup({
     if (!workspace) return;
 
     const activeFeatureId = project.active_feature_id;
-    const mode = project.view_mode || "features";
+    const mode = project.view_mode || "terminal";
     navigate({ type: "workspace", projectId: project.id, featureId: activeFeatureId, mode });
 
     if (workspace.active_project_id === project.id) return;
@@ -123,7 +123,7 @@ export function FeatureTabGroup({
   const handleUnarchiveFeature = async (featureId: string) => {
     if (!workspace) return;
 
-    navigate({ type: "workspace", projectId: project.id, featureId, mode: "features" });
+    navigate({ type: "workspace", projectId: project.id, featureId, mode: "terminal" });
 
     const newProjects = workspace.projects.map((p) => {
       if (p.id !== project.id) return p;
@@ -133,7 +133,7 @@ export function FeatureTabGroup({
           f.id === featureId ? { ...f, archived: false } : f
         ),
         active_feature_id: featureId,
-        view_mode: "features" as const,
+        view_mode: "terminal" as const,
       };
     });
     const newWorkspace: WorkspaceData = {
@@ -148,11 +148,11 @@ export function FeatureTabGroup({
   const handleSelectFeature = async (featureId: string) => {
     if (!workspace) return;
 
-    navigate({ type: "workspace", projectId: project.id, featureId, mode: "features" });
+    navigate({ type: "workspace", projectId: project.id, featureId, mode: "terminal" });
 
     const newProjects = workspace.projects.map((p) =>
       p.id === project.id
-        ? { ...p, active_feature_id: featureId, view_mode: "features" as const }
+        ? { ...p, active_feature_id: featureId, view_mode: "terminal" as const }
         : p
     );
 

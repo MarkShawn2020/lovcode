@@ -53,7 +53,7 @@ export function GlobalFeatureTabs() {
 
   const handleUnarchiveProject = async (id: string) => {
     const proj = workspace.projects.find(p => p.id === id);
-    navigate({ type: "workspace", projectId: id, featureId: proj?.active_feature_id, mode: proj?.view_mode || "features" });
+    navigate({ type: "workspace", projectId: id, featureId: proj?.active_feature_id, mode: proj?.view_mode || "terminal" });
 
     const newProjects = workspace.projects.map((p) =>
       p.id === id ? { ...p, archived: false } : p

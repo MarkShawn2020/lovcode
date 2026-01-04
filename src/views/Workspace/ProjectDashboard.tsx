@@ -85,17 +85,8 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
       const currentProject = currentWorkspace.projects.find((p) => p.id === project.id);
       if (!currentProject) return currentWorkspace;
 
-      const targetFeature = currentProject.features.find((f) => !f.archived);
-
-      if (!targetFeature) {
-        savedWorkspace = {
-          ...currentWorkspace,
-          active_project_id: project.id,
-        };
-        return savedWorkspace;
-      }
-
-      const panelId = targetFeature.panels[0]?.id;
+      const panels = currentProject.panels || [];
+      const panelId = panels[0]?.id;
       const title = session.summary || "Untitled";
       const command = `claude --resume "${session.id}"`;
 
@@ -112,26 +103,13 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
           cwd: project.path,
         };
 
-        const newProjects = currentWorkspace.projects.map((p) => {
-          if (p.id !== project.id) return p;
-          return {
-            ...p,
-            features: p.features.map((f) => {
-              if (f.id !== targetFeature.id) return f;
-              return {
-                ...f,
-                panels: [...f.panels, newPanel],
-                layout: { type: "panel" as const, panelId: newPanelId },
-              };
-            }),
-            active_feature_id: targetFeature.id,
-            view_mode: "features" as const,
-          };
-        });
-
         savedWorkspace = {
           ...currentWorkspace,
-          projects: newProjects,
+          projects: currentWorkspace.projects.map((p) =>
+            p.id === project.id
+              ? { ...p, panels: [newPanel], layout: { type: "panel" as const, panelId: newPanelId }, view_mode: "terminal" as const }
+              : p
+          ),
           active_project_id: project.id,
         };
         return savedWorkspace;
@@ -139,35 +117,21 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
         const ptySessionId = crypto.randomUUID();
         const ptyId = crypto.randomUUID();
 
-        const newProjects = currentWorkspace.projects.map((p) => {
-          if (p.id !== project.id) return p;
-          return {
-            ...p,
-            features: p.features.map((f) => {
-              if (f.id !== targetFeature.id) return f;
-              return {
-                ...f,
-                panels: f.panels.map((panel) => {
-                  if (panel.id !== panelId) return panel;
-                  return {
-                    ...panel,
-                    sessions: [
-                      ...(panel.sessions || []),
-                      { id: ptySessionId, pty_id: ptyId, title, command },
-                    ],
-                    active_session_id: ptySessionId,
-                  };
-                }),
-              };
-            }),
-            active_feature_id: targetFeature.id,
-            view_mode: "features" as const,
-          };
-        });
-
         savedWorkspace = {
           ...currentWorkspace,
-          projects: newProjects,
+          projects: currentWorkspace.projects.map((p) =>
+            p.id === project.id
+              ? {
+                  ...p,
+                  panels: p.panels.map((panel) =>
+                    panel.id === panelId
+                      ? { ...panel, sessions: [...panel.sessions, { id: ptySessionId, pty_id: ptyId, title, command }], active_session_id: ptySessionId }
+                      : panel
+                  ),
+                  view_mode: "terminal" as const,
+                }
+              : p
+          ),
           active_project_id: project.id,
         };
         return savedWorkspace;
@@ -188,17 +152,8 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
       const currentProject = currentWorkspace.projects.find((p) => p.id === project.id);
       if (!currentProject) return currentWorkspace;
 
-      const targetFeature = currentProject.features.find((f) => !f.archived);
-
-      if (!targetFeature) {
-        savedWorkspace = {
-          ...currentWorkspace,
-          active_project_id: project.id,
-        };
-        return savedWorkspace;
-      }
-
-      const panelId = targetFeature.panels[0]?.id;
+      const panels = currentProject.panels || [];
+      const panelId = panels[0]?.id;
       const title = command === "claude" ? "Claude Code" : command === "codex" ? "Codex" : "Terminal";
 
       if (!panelId) {
@@ -214,26 +169,13 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
           cwd: project.path,
         };
 
-        const newProjects = currentWorkspace.projects.map((p) => {
-          if (p.id !== project.id) return p;
-          return {
-            ...p,
-            features: p.features.map((f) => {
-              if (f.id !== targetFeature.id) return f;
-              return {
-                ...f,
-                panels: [...f.panels, newPanel],
-                layout: { type: "panel" as const, panelId: newPanelId },
-              };
-            }),
-            active_feature_id: targetFeature.id,
-            view_mode: "features" as const,
-          };
-        });
-
         savedWorkspace = {
           ...currentWorkspace,
-          projects: newProjects,
+          projects: currentWorkspace.projects.map((p) =>
+            p.id === project.id
+              ? { ...p, panels: [newPanel], layout: { type: "panel" as const, panelId: newPanelId }, view_mode: "terminal" as const }
+              : p
+          ),
           active_project_id: project.id,
         };
         return savedWorkspace;
@@ -241,35 +183,21 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
         const ptySessionId = crypto.randomUUID();
         const ptyId = crypto.randomUUID();
 
-        const newProjects = currentWorkspace.projects.map((p) => {
-          if (p.id !== project.id) return p;
-          return {
-            ...p,
-            features: p.features.map((f) => {
-              if (f.id !== targetFeature.id) return f;
-              return {
-                ...f,
-                panels: f.panels.map((panel) => {
-                  if (panel.id !== panelId) return panel;
-                  return {
-                    ...panel,
-                    sessions: [
-                      ...(panel.sessions || []),
-                      { id: ptySessionId, pty_id: ptyId, title, command },
-                    ],
-                    active_session_id: ptySessionId,
-                  };
-                }),
-              };
-            }),
-            active_feature_id: targetFeature.id,
-            view_mode: "features" as const,
-          };
-        });
-
         savedWorkspace = {
           ...currentWorkspace,
-          projects: newProjects,
+          projects: currentWorkspace.projects.map((p) =>
+            p.id === project.id
+              ? {
+                  ...p,
+                  panels: p.panels.map((panel) =>
+                    panel.id === panelId
+                      ? { ...panel, sessions: [...panel.sessions, { id: ptySessionId, pty_id: ptyId, title, command }], active_session_id: ptySessionId }
+                      : panel
+                  ),
+                  view_mode: "terminal" as const,
+                }
+              : p
+          ),
           active_project_id: project.id,
         };
         return savedWorkspace;

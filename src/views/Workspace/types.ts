@@ -46,7 +46,7 @@ export interface Feature {
 }
 
 /** Project view mode */
-export type ProjectViewMode = "features" | "home" | "dashboard";
+export type ProjectViewMode = "terminal" | "dashboard";
 
 /** Project in the workspace */
 export interface WorkspaceProject {
@@ -54,9 +54,17 @@ export interface WorkspaceProject {
   name: string;
   path: string;
   archived?: boolean;
+  /** Terminal panels directly on project */
+  panels: PanelState[];
+  /** Tree-based layout for tmux-style splits */
+  layout?: LayoutNode;
+  /** @deprecated Use panels instead - kept for backward compatibility */
   features: Feature[];
+  /** @deprecated Merged into panels */
   shared_panels: PanelState[];
+  /** @deprecated */
   active_feature_id?: string;
+  /** @deprecated */
   feature_counter?: number;
   view_mode?: ProjectViewMode;
   created_at: number;

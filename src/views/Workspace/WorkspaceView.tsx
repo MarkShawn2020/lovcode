@@ -5,12 +5,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 
-import { ProjectHomeView } from "./ProjectHomeView";
 import { ProjectDashboard } from "./ProjectDashboard";
 import { PanelGrid } from "../../components/PanelGrid";
-import type { PanelState } from "../../components/PanelGrid";
 import { disposeTerminal } from "../../components/Terminal";
-import type { WorkspaceData, WorkspaceProject, Feature, PanelState as StoredPanelState, SessionState as StoredSessionState, LayoutNode } from "./types";
+import type { WorkspaceData, WorkspaceProject, PanelState as StoredPanelState, SessionState as StoredSessionState, LayoutNode } from "./types";
 
 export function WorkspaceView() {
   const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
@@ -142,11 +140,6 @@ export function WorkspaceView() {
     (p) => p.id === workspace.active_project_id
   );
 
-  // Get active feature
-  const activeFeature = activeProject?.features.find(
-    (f) => f.id === activeProject.active_feature_id
-  );
-
   // Add project handler
   const handleAddProject = useCallback(async () => {
     try {
@@ -171,51 +164,6 @@ export function WorkspaceView() {
       console.error("Failed to add project:", err);
     }
   }, [workspace, saveWorkspace]);
-
-
-  // Add new feature with auto-generated name
-  const handleAddFeature = useCallback(async (projectId?: string) => {
-    if (!workspace) return;
-    const targetProject = projectId
-      ? workspace.projects.find(p => p.id === projectId)
-      : activeProject;
-    if (!targetProject) return;
-
-    // Generate name based on global counter (backend will assign actual seq)
-    const counter = (workspace.feature_counter ?? 0) + 1;
-    const name = `#${counter}`;
-
-    try {
-      // Backend handles seq and feature_counter atomically (global)
-      const feature = await invoke<Feature>("workspace_create_feature", {
-        projectId: targetProject.id,
-        name,
-      });
-
-      const targetId = targetProject.id;
-      saveWorkspace((current) => {
-        const newProjects = current.projects.map((p) =>
-          p.id === targetId
-            ? {
-                ...p,
-                features: [...p.features, feature],
-                active_feature_id: feature.id,
-              }
-            : p
-        );
-        return {
-          ...current,
-          projects: newProjects,
-          active_project_id: targetId,
-          feature_counter: feature.seq,
-        };
-      });
-      return { featureId: feature.id, featureName: feature.name };
-    } catch (err) {
-      console.error("Failed to create feature:", err);
-      return undefined;
-    }
-  }, [activeProject, saveWorkspace]);
 
   // Layout tree utilities
   const splitLayoutNode = useCallback(
@@ -260,86 +208,69 @@ export function WorkspaceView() {
   // Split panel handler (tmux-style)
   const handlePanelSplit = useCallback(
     (targetPanelId: string, direction: "horizontal" | "vertical") => {
-      if (!activeProject || !activeFeature) return;
+      if (!activeProject) return;
 
       const panelId = crypto.randomUUID();
       const sessionId = crypto.randomUUID();
       const ptyId = crypto.randomUUID();
       const projectId = activeProject.id;
-      const featureId = activeFeature.id;
-      const projectPath = activeProject.path;
 
       const newPanel: StoredPanelState = {
         id: panelId,
         sessions: [{ id: sessionId, pty_id: ptyId, title: "Untitled" }],
         active_session_id: sessionId,
         is_shared: false,
-        cwd: projectPath,
+        cwd: activeProject.path,
       };
 
       saveWorkspace((current) => {
         const newProjects = current.projects.map((p) => {
           if (p.id !== projectId) return p;
+
+          const panels = p.panels || [];
+          let currentLayout = p.layout;
+          if (!currentLayout) {
+            if (panels.length === 0) {
+              currentLayout = { type: "panel", panelId: targetPanelId };
+            } else if (panels.length === 1) {
+              currentLayout = { type: "panel", panelId: panels[0].id };
+            } else {
+              currentLayout = panels.slice(1).reduce<LayoutNode>(
+                (acc, panel) => ({
+                  type: "split",
+                  direction: "horizontal",
+                  first: acc,
+                  second: { type: "panel", panelId: panel.id },
+                }),
+                { type: "panel", panelId: panels[0].id }
+              );
+            }
+          }
+
+          const newLayout = splitLayoutNode(currentLayout, targetPanelId, direction, panelId);
+
           return {
             ...p,
-            features: p.features.map((f) => {
-              if (f.id !== featureId) return f;
-
-              // Get or create layout tree
-              let currentLayout = f.layout;
-              if (!currentLayout) {
-                // Migrate from flat panels to tree layout
-                if (f.panels.length === 0) {
-                  currentLayout = { type: "panel", panelId: targetPanelId };
-                } else if (f.panels.length === 1) {
-                  currentLayout = { type: "panel", panelId: f.panels[0].id };
-                } else {
-                  // Build initial layout from existing panels using legacy direction
-                  const dir = f.layout_direction || "horizontal";
-                  currentLayout = f.panels.slice(1).reduce<LayoutNode>(
-                    (acc, panel) => ({
-                      type: "split",
-                      direction: dir,
-                      first: acc,
-                      second: { type: "panel", panelId: panel.id },
-                    }),
-                    { type: "panel", panelId: f.panels[0].id }
-                  );
-                }
-              }
-
-              // Split the target panel
-              const newLayout = splitLayoutNode(currentLayout, targetPanelId, direction, panelId);
-
-              return {
-                ...f,
-                panels: [...f.panels, newPanel],
-                layout: newLayout,
-              };
-            }),
+            panels: [...panels, newPanel],
+            layout: newLayout,
           };
         });
         return { ...current, projects: newProjects };
       });
 
-      // Focus the new panel
       setActivePanelId(panelId);
     },
-    [activeProject, activeFeature, saveWorkspace, splitLayoutNode, setActivePanelId]
+    [activeProject, saveWorkspace, splitLayoutNode, setActivePanelId]
   );
 
-  // Create initial panel (when feature has no panels)
+  // Create initial panel (when project has no panels)
   const handleInitialPanelCreate = useCallback((command?: string) => {
-    if (!activeProject || !activeFeature) return;
+    if (!activeProject) return;
 
     const panelId = crypto.randomUUID();
     const sessionId = crypto.randomUUID();
     const ptyId = crypto.randomUUID();
     const projectId = activeProject.id;
-    const featureId = activeFeature.id;
-    const projectPath = activeProject.path;
-
-    // Set title based on command type
     const title = command === "claude" ? "Claude Code" : command === "codex" ? "Codex" : "Terminal";
 
     const newPanel: StoredPanelState = {
@@ -347,54 +278,30 @@ export function WorkspaceView() {
       sessions: [{ id: sessionId, pty_id: ptyId, title, command }],
       active_session_id: sessionId,
       is_shared: false,
-      cwd: projectPath,
+      cwd: activeProject.path,
     };
 
     saveWorkspace((current) => {
-      const newProjects = current.projects.map((p) => {
-        if (p.id !== projectId) return p;
-        return {
-          ...p,
-          features: p.features.map((f) => {
-            if (f.id !== featureId) return f;
-            const layout: LayoutNode = { type: "panel", panelId };
-            return {
-              ...f,
-              panels: [newPanel],
-              layout,
-            };
-          }),
-        };
-      });
+      const newProjects = current.projects.map((p) =>
+        p.id === projectId
+          ? { ...p, panels: [newPanel], layout: { type: "panel" as const, panelId } }
+          : p
+      );
       return { ...current, projects: newProjects };
     });
 
-    // Focus the new panel
     setActivePanelId(panelId);
-  }, [activeProject, activeFeature, saveWorkspace, setActivePanelId]);
+  }, [activeProject, saveWorkspace, setActivePanelId]);
 
   // Close panel handler
   const handlePanelClose = useCallback(
     (panelId: string) => {
       if (!activeProject) return;
 
-      // Find the panel to get all its session pty_ids before removing
-      const ptyIdsToKill: string[] = [];
-      for (const feature of activeProject.features) {
-        const panel = feature.panels.find((p) => p.id === panelId);
-        if (panel) {
-          ptyIdsToKill.push(...(panel.sessions || []).map((s) => s.pty_id));
-          break;
-        }
-      }
-      if (ptyIdsToKill.length === 0) {
-        const sharedPanel = (activeProject.shared_panels || []).find((p) => p.id === panelId);
-        if (sharedPanel) {
-          ptyIdsToKill.push(...(sharedPanel.sessions || []).map((s) => s.pty_id));
-        }
-      }
+      const panels = activeProject.panels || [];
+      const panel = panels.find((p) => p.id === panelId);
+      const ptyIdsToKill = panel ? panel.sessions.map((s) => s.pty_id) : [];
 
-      // Kill all PTY sessions, dispose terminal instances, and purge scrollback
       for (const ptyId of ptyIdsToKill) {
         disposeTerminal(ptyId);
         invoke("pty_kill", { id: ptyId }).catch(console.error);
@@ -405,20 +312,9 @@ export function WorkspaceView() {
       saveWorkspace((current) => {
         const newProjects = current.projects.map((p) => {
           if (p.id !== projectId) return p;
-          return {
-            ...p,
-            features: p.features.map((f) => {
-              const newPanels = f.panels.filter((panel) => panel.id !== panelId);
-              // Update layout tree
-              const newLayout = f.layout ? removeFromLayout(f.layout, panelId) : undefined;
-              return {
-                ...f,
-                panels: newPanels,
-                layout: newLayout ?? undefined,
-              };
-            }),
-            shared_panels: (p.shared_panels || []).filter((panel) => panel.id !== panelId),
-          };
+          const newPanels = (p.panels || []).filter((panel) => panel.id !== panelId);
+          const newLayout = p.layout ? removeFromLayout(p.layout, panelId) : undefined;
+          return { ...p, panels: newPanels, layout: newLayout ?? undefined };
         });
         return { ...current, projects: newProjects };
       });
@@ -426,106 +322,12 @@ export function WorkspaceView() {
     [activeProject, saveWorkspace, removeFromLayout]
   );
 
-  // Toggle panel shared handler
+  // Toggle panel shared handler (no-op, feature removed)
   const handlePanelToggleShared = useCallback(
-    (panelId: string) => {
-      if (!activeProject) return;
-      const projectId = activeProject.id;
-
-      saveWorkspace((current) => {
-        const newProjects = current.projects.map((p) => {
-          if (p.id !== projectId) return p;
-
-          // Check if panel is in shared
-          const sharedPanels = p.shared_panels || [];
-          const sharedIndex = sharedPanels.findIndex((panel) => panel.id === panelId);
-          if (sharedIndex !== -1) {
-            // Move from shared to active feature
-            const panel = sharedPanels[sharedIndex];
-            const newSharedPanels = sharedPanels.filter((_, i) => i !== sharedIndex);
-            const newFeatures = p.features.map((f) => {
-              if (f.id !== p.active_feature_id) return f;
-              // If feature has existing panels, merge sessions into the first one
-              if (f.panels.length > 0) {
-                const [firstPanel, ...restPanels] = f.panels;
-                return {
-                  ...f,
-                  panels: [
-                    {
-                      ...firstPanel,
-                      sessions: [...firstPanel.sessions, ...panel.sessions],
-                      active_session_id: panel.sessions[0]?.id ?? firstPanel.active_session_id,
-                    },
-                    ...restPanels,
-                  ],
-                };
-              }
-              // Otherwise create new panel
-              return {
-                ...f,
-                panels: [{ ...panel, is_shared: false }],
-              };
-            });
-            return { ...p, shared_panels: newSharedPanels, features: newFeatures };
-          }
-
-          // Check if panel is in a feature - only pin active session, not entire panel
-          for (const feature of p.features) {
-            const panelIndex = feature.panels.findIndex((panel) => panel.id === panelId);
-            if (panelIndex !== -1) {
-              const panel = feature.panels[panelIndex];
-              const activeSessionId = panel.active_session_id;
-              const activeSession = panel.sessions.find((s) => s.id === activeSessionId) || panel.sessions[0];
-
-              if (!activeSession) return p;
-
-              // Create new shared panel with only the active session
-              const newSharedPanel = {
-                id: crypto.randomUUID(),
-                cwd: panel.cwd,
-                sessions: [activeSession],
-                active_session_id: activeSession.id,
-                is_shared: true,
-              };
-
-              const newFeatures = p.features.map((f) => {
-                if (f.id !== feature.id) return f;
-                const remainingSessions = panel.sessions.filter((s) => s.id !== activeSession.id);
-                // If no sessions left, remove the panel
-                if (remainingSessions.length === 0) {
-                  return {
-                    ...f,
-                    panels: f.panels.filter((_, i) => i !== panelIndex),
-                  };
-                }
-                // Otherwise keep panel with remaining sessions
-                return {
-                  ...f,
-                  panels: f.panels.map((pl, i) =>
-                    i !== panelIndex
-                      ? pl
-                      : {
-                          ...pl,
-                          sessions: remainingSessions,
-                          active_session_id: remainingSessions[0].id,
-                        }
-                  ),
-                };
-              });
-              return {
-                ...p,
-                features: newFeatures,
-                shared_panels: [...p.shared_panels, newSharedPanel],
-              };
-            }
-          }
-
-          return p;
-        });
-        return { ...current, projects: newProjects };
-      });
+    (_panelId: string) => {
+      // No-op: shared panels feature removed with feature layer
     },
-    [activeProject, saveWorkspace]
+    []
   );
 
   // Reload panel handler (kills active session's PTY and creates new one)
@@ -533,63 +335,31 @@ export function WorkspaceView() {
     (panelId: string) => {
       if (!activeProject) return;
 
-      // Find the panel and its active session
-      let activeSessionId: string | null = null;
-      let oldPtyId: string | null = null;
-      for (const feature of activeProject.features) {
-        const panel = feature.panels.find((p) => p.id === panelId);
-        if (panel) {
-          activeSessionId = panel.active_session_id;
-          const activeSession = (panel.sessions || []).find((s) => s.id === activeSessionId);
-          if (activeSession) oldPtyId = activeSession.pty_id;
-          break;
-        }
-      }
-      if (!oldPtyId) {
-        const sharedPanel = (activeProject.shared_panels || []).find((p) => p.id === panelId);
-        if (sharedPanel) {
-          activeSessionId = sharedPanel.active_session_id;
-          const activeSession = (sharedPanel.sessions || []).find((s) => s.id === activeSessionId);
-          if (activeSession) oldPtyId = activeSession.pty_id;
-        }
-      }
+      const panels = activeProject.panels || [];
+      const panel = panels.find((p) => p.id === panelId);
+      if (!panel) return;
+
+      const activeSessionId = panel.active_session_id;
+      const activeSession = panel.sessions.find((s) => s.id === activeSessionId);
+      const oldPtyId = activeSession?.pty_id;
+
       if (oldPtyId) {
         disposeTerminal(oldPtyId);
         invoke("pty_kill", { id: oldPtyId }).catch(console.error);
-        // Purge old scrollback since we're creating a new ptyId
         invoke("pty_purge_scrollback", { id: oldPtyId }).catch(console.error);
       }
 
       const newPtyId = crypto.randomUUID();
       const projectId = activeProject.id;
-      const targetActiveSessionId = activeSessionId;
 
       saveWorkspace((current) => {
         const newProjects = current.projects.map((p) => {
           if (p.id !== projectId) return p;
           return {
             ...p,
-            features: p.features.map((f) => ({
-              ...f,
-              panels: f.panels.map((panel) =>
-                panel.id === panelId
-                  ? {
-                      ...panel,
-                      sessions: (panel.sessions || []).map((s) =>
-                        s.id === targetActiveSessionId ? { ...s, pty_id: newPtyId } : s
-                      ),
-                    }
-                  : panel
-              ),
-            })),
-            shared_panels: (p.shared_panels || []).map((panel) =>
+            panels: (p.panels || []).map((panel) =>
               panel.id === panelId
-                ? {
-                    ...panel,
-                    sessions: (panel.sessions || []).map((s) =>
-                      s.id === targetActiveSessionId ? { ...s, pty_id: newPtyId } : s
-                    ),
-                  }
+                ? { ...panel, sessions: panel.sessions.map((s) => s.id === activeSessionId ? { ...s, pty_id: newPtyId } : s) }
                 : panel
             ),
           };
@@ -615,17 +385,9 @@ export function WorkspaceView() {
           if (p.id !== projectId) return p;
           return {
             ...p,
-            features: p.features.map((f) => ({
-              ...f,
-              panels: f.panels.map((panel) =>
-                panel.id === panelId
-                  ? { ...panel, sessions: [...(panel.sessions || []), newSession], active_session_id: sessionId }
-                  : panel
-              ),
-            })),
-            shared_panels: (p.shared_panels || []).map((panel) =>
+            panels: (p.panels || []).map((panel) =>
               panel.id === panelId
-                ? { ...panel, sessions: [...(panel.sessions || []), newSession], active_session_id: sessionId }
+                ? { ...panel, sessions: [...panel.sessions, newSession], active_session_id: sessionId }
                 : panel
             ),
           };
@@ -633,7 +395,6 @@ export function WorkspaceView() {
         return { ...current, projects: newProjects };
       });
 
-      // Focus the panel with new session
       setActivePanelId(panelId);
     },
     [activeProject, saveWorkspace, setActivePanelId]
@@ -644,39 +405,19 @@ export function WorkspaceView() {
     (panelId: string, sessionId: string) => {
       if (!activeProject) return;
 
-      // Find the panel and check session count
-      let sessionCount = 0;
-      let ptyIdToPurge: string | null = null;
+      const panels = activeProject.panels || [];
+      const panel = panels.find((p) => p.id === panelId);
+      if (!panel) return;
 
-      for (const feature of activeProject.features) {
-        const panel = feature.panels.find((p) => p.id === panelId);
-        if (panel) {
-          sessionCount = (panel.sessions || []).length;
-          const session = (panel.sessions || []).find((s) => s.id === sessionId);
-          if (session) {
-            ptyIdToPurge = session.pty_id;
-          }
-          break;
-        }
-      }
-      if (!ptyIdToPurge) {
-        const sharedPanel = (activeProject.shared_panels || []).find((p) => p.id === panelId);
-        if (sharedPanel) {
-          sessionCount = (sharedPanel.sessions || []).length;
-          const session = (sharedPanel.sessions || []).find((s) => s.id === sessionId);
-          if (session) {
-            ptyIdToPurge = session.pty_id;
-          }
-        }
-      }
+      const session = panel.sessions.find((s) => s.id === sessionId);
+      const ptyIdToPurge = session?.pty_id;
 
-      // If this is the last session, close the entire panel (it handles PTY cleanup)
-      if (sessionCount <= 1) {
+      // If this is the last session, close the entire panel
+      if (panel.sessions.length <= 1) {
         handlePanelClose(panelId);
         return;
       }
 
-      // Kill PTY, dispose terminal, purge scrollback for this session
       if (ptyIdToPurge) {
         disposeTerminal(ptyIdToPurge);
         invoke("pty_kill", { id: ptyIdToPurge }).catch(console.error);
@@ -690,23 +431,10 @@ export function WorkspaceView() {
           if (p.id !== projectId) return p;
           return {
             ...p,
-            features: p.features.map((f) => ({
-              ...f,
-              panels: f.panels.map((panel) => {
-                if (panel.id !== panelId) return panel;
-                const newSessions = (panel.sessions || []).filter((s) => s.id !== sessionId);
-                const newActiveId = panel.active_session_id === sessionId
-                  ? newSessions[0]?.id || ""
-                  : panel.active_session_id;
-                return { ...panel, sessions: newSessions, active_session_id: newActiveId };
-              }),
-            })),
-            shared_panels: (p.shared_panels || []).map((panel) => {
+            panels: (p.panels || []).map((panel) => {
               if (panel.id !== panelId) return panel;
-              const newSessions = (panel.sessions || []).filter((s) => s.id !== sessionId);
-              const newActiveId = panel.active_session_id === sessionId
-                ? newSessions[0]?.id || ""
-                : panel.active_session_id;
+              const newSessions = panel.sessions.filter((s) => s.id !== sessionId);
+              const newActiveId = panel.active_session_id === sessionId ? newSessions[0]?.id || "" : panel.active_session_id;
               return { ...panel, sessions: newSessions, active_session_id: newActiveId };
             }),
           };
@@ -714,7 +442,6 @@ export function WorkspaceView() {
         return { ...current, projects: newProjects };
       });
 
-      // Keep focus on the panel where session was closed
       setActivePanelId(panelId);
     },
     [activeProject, saveWorkspace, setActivePanelId, handlePanelClose]
@@ -731,13 +458,7 @@ export function WorkspaceView() {
           if (p.id !== projectId) return p;
           return {
             ...p,
-            features: p.features.map((f) => ({
-              ...f,
-              panels: f.panels.map((panel) =>
-                panel.id === panelId ? { ...panel, active_session_id: sessionId } : panel
-              ),
-            })),
-            shared_panels: (p.shared_panels || []).map((panel) =>
+            panels: (p.panels || []).map((panel) =>
               panel.id === panelId ? { ...panel, active_session_id: sessionId } : panel
             ),
           };
@@ -759,27 +480,9 @@ export function WorkspaceView() {
           if (p.id !== projectId) return p;
           return {
             ...p,
-            features: p.features.map((f) => ({
-              ...f,
-              panels: f.panels.map((panel) =>
-                panel.id === panelId
-                  ? {
-                      ...panel,
-                      sessions: (panel.sessions || []).map((s) =>
-                        s.id === sessionId ? { ...s, title } : s
-                      ),
-                    }
-                  : panel
-              ),
-            })),
-            shared_panels: (p.shared_panels || []).map((panel) =>
+            panels: (p.panels || []).map((panel) =>
               panel.id === panelId
-                ? {
-                    ...panel,
-                    sessions: (panel.sessions || []).map((s) =>
-                      s.id === sessionId ? { ...s, title } : s
-                    ),
-                  }
+                ? { ...panel, sessions: panel.sessions.map((s) => s.id === sessionId ? { ...s, title } : s) }
                 : panel
             ),
           };
@@ -790,49 +493,38 @@ export function WorkspaceView() {
     [activeProject, saveWorkspace]
   );
 
-  // Convert workspace panels to PanelGrid format for ALL features (to keep PTY alive)
-  // Use refs to cache session objects and prevent unnecessary remounts
+  // Convert project panels to PanelGrid format
   const sessionCacheRef = useRef(new Map<string, { id: string; ptyId: string; title: string; command?: string }>());
 
-  const allFeaturePanels = useMemo(() => {
-    const map = new Map<string, PanelState[]>();
+  const projectPanels = useMemo(() => {
     const cache = sessionCacheRef.current;
     const usedSessionIds = new Set<string>();
-
-    activeProject?.features.forEach((feature) => {
-      map.set(
-        feature.id,
-        feature.panels.map((p) => ({
-          id: p.id,
-          sessions: (p.sessions || []).map((s) => {
-            usedSessionIds.add(s.id);
-            // Reuse cached session object if only ptyId matches (prevents remount)
-            const cached = cache.get(s.id);
-            if (cached && cached.ptyId === s.pty_id) {
-              // Update mutable fields without creating new object
-              cached.title = s.title;
-              cached.command = s.command;
-              return cached;
-            }
-            // Create and cache new session object
-            const session = { id: s.id, ptyId: s.pty_id, title: s.title, command: s.command };
-            cache.set(s.id, session);
-            return session;
-          }),
-          activeSessionId: p.active_session_id,
-          isShared: p.is_shared,
-          cwd: activeProject?.path || "",
-        }))
-      );
-    });
+    const panels = (activeProject?.panels || []).map((p) => ({
+      id: p.id,
+      sessions: p.sessions.map((s) => {
+        usedSessionIds.add(s.id);
+        const cached = cache.get(s.id);
+        if (cached && cached.ptyId === s.pty_id) {
+          cached.title = s.title;
+          cached.command = s.command;
+          return cached;
+        }
+        const session = { id: s.id, ptyId: s.pty_id, title: s.title, command: s.command };
+        cache.set(s.id, session);
+        return session;
+      }),
+      activeSessionId: p.active_session_id,
+      isShared: p.is_shared,
+      cwd: activeProject?.path || "",
+    }));
 
     // Clean up stale cache entries
     for (const id of cache.keys()) {
       if (!usedSessionIds.has(id)) cache.delete(id);
     }
 
-    return map;
-  }, [activeProject?.features, activeProject?.path]);
+    return panels;
+  }, [activeProject?.panels, activeProject?.path]);
 
   if (loading) {
     return (
@@ -847,56 +539,24 @@ export function WorkspaceView() {
       {activeProject ? (
         activeProject.view_mode === "dashboard" ? (
           <ProjectDashboard project={activeProject} />
-        ) : activeProject.view_mode === "home" ? (
-          <ProjectHomeView
-            projectPath={activeProject.path}
-            projectName={activeProject.name}
-          />
-        ) : activeFeature ? (
-          <div className="flex-1 min-h-0 relative">
-            {/* Render ALL features but hide inactive ones to keep PTY alive */}
-            {activeProject?.features.map((feature) => {
-              const isActive = feature.id === activeFeature.id;
-              const featurePanels = allFeaturePanels.get(feature.id) || [];
-              if (!isActive && featurePanels.length === 0) return null;
-              return (
-                <div
-                  key={feature.id}
-                  className={`absolute inset-0 ${
-                    isActive ? "" : "invisible pointer-events-none"
-                  }`}
-                >
-                  <PanelGrid
-                    panels={featurePanels}
-                    layout={feature.layout}
-                    activePanelId={activePanelId}
-                    onPanelFocus={setActivePanelId}
-                    onPanelClose={handlePanelClose}
-                    onPanelSplit={handlePanelSplit}
-                    onPanelToggleShared={handlePanelToggleShared}
-                    onPanelReload={handlePanelReload}
-                    onSessionAdd={handleSessionAdd}
-                    onSessionClose={handleSessionClose}
-                    onSessionSelect={handleSessionSelect}
-                    onSessionTitleChange={handleSessionTitleChange}
-                    onInitialPanelCreate={handleInitialPanelCreate}
-                    direction={feature.layout_direction || "horizontal"}
-                  />
-                </div>
-              );
-            })}
-          </div>
         ) : (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <p className="text-muted-foreground mb-4">No features yet</p>
-              <button
-                onClick={() => handleAddFeature(activeProject?.id)}
-                className="px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors"
-              >
-                Create First Feature
-              </button>
-            </div>
+          <div className="flex-1 min-h-0">
+            <PanelGrid
+              panels={projectPanels}
+              layout={activeProject.layout}
+              activePanelId={activePanelId}
+              onPanelFocus={setActivePanelId}
+              onPanelClose={handlePanelClose}
+              onPanelSplit={handlePanelSplit}
+              onPanelToggleShared={handlePanelToggleShared}
+              onPanelReload={handlePanelReload}
+              onSessionAdd={handleSessionAdd}
+              onSessionClose={handleSessionClose}
+              onSessionSelect={handleSessionSelect}
+              onSessionTitleChange={handleSessionTitleChange}
+              onInitialPanelCreate={handleInitialPanelCreate}
+              direction="horizontal"
+            />
           </div>
         )
       ) : (
