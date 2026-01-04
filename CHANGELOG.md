@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.5
+
+### Patch Changes
+
+- perf(terminal): 优化 xterm.js 集成，修复闪烁和宽度问题
+
 ## 0.23.4
 
 ### Patch Changes
