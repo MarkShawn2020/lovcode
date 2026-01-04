@@ -6,6 +6,8 @@ import {
   getOrCreateTerminal,
   attachTerminal,
   detachTerminal,
+  ensureWebGL,
+  releaseWebGL,
   ptyReadySessions,
   ptyInitLocks,
 } from "./terminalPool";
@@ -26,6 +28,8 @@ export interface TerminalPaneProps {
   cwd: string;
   /** Optional command to run instead of shell */
   command?: string;
+  /** Whether this terminal is visible (active tab) - controls WebGL loading */
+  visible?: boolean;
   /** Auto focus terminal when ready */
   autoFocus?: boolean;
   /** Callback when terminal is ready */
@@ -42,6 +46,7 @@ export function TerminalPane({
   ptyId,
   cwd,
   command,
+  visible = true,
   autoFocus = false,
   onReady,
   onExit,
@@ -62,6 +67,15 @@ export function TerminalPane({
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onExitRef.current = onExit; }, [onExit]);
   useEffect(() => { onTitleChangeRef.current = onTitleChange; }, [onTitleChange]);
+
+  // Load/unload WebGL based on visibility to prevent context exhaustion
+  useEffect(() => {
+    if (visible) {
+      ensureWebGL(ptyId);
+    } else {
+      releaseWebGL(ptyId);
+    }
+  }, [visible, ptyId]);
 
   // Initialize terminal and PTY
   useEffect(() => {

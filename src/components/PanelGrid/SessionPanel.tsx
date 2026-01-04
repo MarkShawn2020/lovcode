@@ -227,6 +227,7 @@ export const SessionPanel = memo(function SessionPanel({
                 ptyId={session.ptyId}
                 cwd={panel.cwd}
                 command={session.command}
+                visible={session.id === panel.activeSessionId}
                 autoFocus={session.id === panel.activeSessionId && isActive}
                 onTitleChange={handleTitleChange(session.id)}
                 onExit={() => onSessionClose(session.id)}

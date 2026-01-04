@@ -9,7 +9,12 @@ interface PooledTerminal {
   term: Terminal;
   fitAddon: FitAddon;
   container: HTMLDivElement;
+  webglAddon: WebglAddon | null;
+  lastAccessed: number;
 }
+
+// Maximum WebGL contexts to keep active (browser limit is ~16, keep margin)
+const MAX_WEBGL_CONTEXTS = 6;
 
 // Persist state across HMR by attaching to window
 declare global {
@@ -18,6 +23,7 @@ declare global {
     __ptyReadySessions?: Set<string>;
     __autoCopyDisposables?: Map<string, { dispose: () => void }>;
     __ptyInitLocks?: Map<string, Promise<void>>;
+    __webglSessionOrder?: string[];
   }
 }
 
@@ -46,6 +52,10 @@ let autoCopyEnabled = (() => {
 export const ptyInitLocks: Map<string, Promise<void>> =
   window.__ptyInitLocks ?? (window.__ptyInitLocks = new Map());
 
+/** Track WebGL session order for LRU eviction (survives HMR) */
+const webglSessionOrder: string[] =
+  window.__webglSessionOrder ?? (window.__webglSessionOrder = []);
+
 const TERMINAL_THEME = {
   background: "#1a1a1a",
   foreground: "#e0e0e0",
@@ -71,13 +81,99 @@ const TERMINAL_THEME = {
 };
 
 /**
+ * Clean up orphan session IDs from webglSessionOrder.
+ * These are sessions that no longer exist in terminalPool (e.g., after HMR).
+ */
+function cleanupOrphanSessions(): void {
+  for (let i = webglSessionOrder.length - 1; i >= 0; i--) {
+    const id = webglSessionOrder[i];
+    if (!terminalPool.has(id)) {
+      webglSessionOrder.splice(i, 1);
+    }
+  }
+}
+
+/**
+ * Evict oldest WebGL contexts when limit is reached.
+ * Uses LRU strategy based on lastAccessed timestamp.
+ */
+function evictOldestWebGL(): void {
+  // First clean up orphan sessions that may have accumulated
+  cleanupOrphanSessions();
+
+  // Find sessions with active WebGL (must use !! to handle undefined correctly)
+  // pooled?.webglAddon returns undefined if pooled doesn't exist
+  // undefined !== null is true, which is wrong - we need !!
+  const sessionsWithWebGL = webglSessionOrder.filter((id) => {
+    const pooled = terminalPool.get(id);
+    return !!pooled?.webglAddon;
+  });
+
+  // Evict oldest until we're under limit
+  while (sessionsWithWebGL.length >= MAX_WEBGL_CONTEXTS) {
+    const oldestId = sessionsWithWebGL.shift();
+    if (!oldestId) break;
+
+    const pooled = terminalPool.get(oldestId);
+    if (pooled?.webglAddon) {
+      pooled.webglAddon.dispose();
+      pooled.webglAddon = null;
+      // Remove from order tracking
+      const idx = webglSessionOrder.indexOf(oldestId);
+      if (idx !== -1) webglSessionOrder.splice(idx, 1);
+    }
+  }
+}
+
+/**
+ * Update WebGL session access order (move to end = most recently used).
+ */
+function touchWebGLSession(sessionId: string): void {
+  const idx = webglSessionOrder.indexOf(sessionId);
+  if (idx !== -1) {
+    webglSessionOrder.splice(idx, 1);
+  }
+  webglSessionOrder.push(sessionId);
+}
+
+/**
+ * Try to load WebGL addon, respecting global context limit.
+ * Returns the addon if loaded, null if limit reached or unavailable.
+ */
+function tryLoadWebGL(sessionId: string, term: Terminal): WebglAddon | null {
+  // Evict oldest if at limit
+  evictOldestWebGL();
+
+  try {
+    const webglAddon = new WebglAddon();
+    webglAddon.onContextLoss(() => {
+      // On context loss, clean up and remove from tracking
+      webglAddon.dispose();
+      const pooled = terminalPool.get(sessionId);
+      if (pooled) pooled.webglAddon = null;
+      const idx = webglSessionOrder.indexOf(sessionId);
+      if (idx !== -1) webglSessionOrder.splice(idx, 1);
+    });
+    term.loadAddon(webglAddon);
+    touchWebGLSession(sessionId);
+    return webglAddon;
+  } catch {
+    // WebGL not available, use default canvas renderer
+    return null;
+  }
+}
+
+/**
  * Get or create a terminal instance for the given session ID.
  * If instance exists, just returns it (preserving history).
  * If not, creates new instance.
+ * NOTE: WebGL is NOT loaded here - call ensureWebGL() separately for visible terminals.
  */
 export function getOrCreateTerminal(sessionId: string): PooledTerminal {
   const existing = terminalPool.get(sessionId);
   if (existing) {
+    // Update access time
+    existing.lastAccessed = Date.now();
     return existing;
   }
 
@@ -112,28 +208,41 @@ export function getOrCreateTerminal(sessionId: string): PooledTerminal {
   // Open terminal in the detached container
   term.open(container);
 
-  // WebGL addon for GPU-accelerated rendering (prevents flicker on high-throughput)
-  // Must be loaded AFTER term.open() - falls back to DOM renderer if WebGL unavailable
-  try {
-    const webglAddon = new WebglAddon();
-    webglAddon.onContextLoss(() => {
-      webglAddon.dispose();
-    });
-    term.loadAddon(webglAddon);
-  } catch {
-    // WebGL not available, use default DOM renderer
-  }
+  // Note: WebGL is loaded on-demand via ensureWebGL() when terminal becomes visible
+  // This prevents WebGL context exhaustion when many terminals are mounted
 
-  // Note: macOS keyboard shortcuts (Cmd+Arrow, Cmd+Backspace, Option+Arrow, Option+Backspace)
-  // are handled in TerminalPane.tsx using invoke("pty_write") for direct PTY communication
-
-  const pooled: PooledTerminal = { term, fitAddon, container };
+  const pooled: PooledTerminal = { term, fitAddon, container, webglAddon: null, lastAccessed: Date.now() };
   terminalPool.set(sessionId, pooled);
 
   // Setup auto-copy if enabled
   setupAutoCopy(sessionId, term);
 
   return pooled;
+}
+
+/**
+ * Load WebGL addon for a terminal if not already loaded.
+ * Call this when terminal becomes visible.
+ */
+export function ensureWebGL(sessionId: string): void {
+  const pooled = terminalPool.get(sessionId);
+  if (!pooled || pooled.webglAddon) return; // Already loaded or not found
+
+  pooled.webglAddon = tryLoadWebGL(sessionId, pooled.term);
+}
+
+/**
+ * Unload WebGL addon for a terminal to free context.
+ * Call this when terminal becomes invisible.
+ */
+export function releaseWebGL(sessionId: string): void {
+  const pooled = terminalPool.get(sessionId);
+  if (!pooled?.webglAddon) return;
+
+  pooled.webglAddon.dispose();
+  pooled.webglAddon = null;
+  const idx = webglSessionOrder.indexOf(sessionId);
+  if (idx !== -1) webglSessionOrder.splice(idx, 1);
 }
 
 /**
@@ -176,6 +285,15 @@ export function detachTerminal(sessionId: string): void {
 export function disposeTerminal(sessionId: string): void {
   const pooled = terminalPool.get(sessionId);
   if (!pooled) return;
+
+  // Clean up WebGL addon first (before term.dispose)
+  if (pooled.webglAddon) {
+    pooled.webglAddon.dispose();
+    pooled.webglAddon = null;
+  }
+  // Remove from WebGL tracking order
+  const webglIdx = webglSessionOrder.indexOf(sessionId);
+  if (webglIdx !== -1) webglSessionOrder.splice(webglIdx, 1);
 
   autoCopyDisposables.get(sessionId)?.dispose();
   autoCopyDisposables.delete(sessionId);
