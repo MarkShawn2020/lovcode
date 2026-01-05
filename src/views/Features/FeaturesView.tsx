@@ -8,7 +8,7 @@ interface FeaturesViewProps {
 }
 
 export function FeaturesView({ onFeatureClick, currentFeature }: FeaturesViewProps) {
-  const configFeatures = FEATURES.filter(f => f.group === "config" && f.type !== "settings");
+  const configFeatures = FEATURES.filter(f => f.group === "config");
 
   return (
     <FeaturesLayout currentFeature={currentFeature} onFeatureClick={onFeatureClick}>

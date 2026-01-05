@@ -280,11 +280,21 @@ function App() {
             onBack={() => navigate({ type: "chat-sessions", projectId: view.projectId, projectPath: view.projectPath })}
           />
         )}
-        {(view.type === "commands" || view.type === "command-detail" || view.type === "mcp" ||
+        {(view.type === "settings" || view.type === "commands" || view.type === "command-detail" || view.type === "mcp" ||
           view.type === "skills" || view.type === "skill-detail" || view.type === "hooks" ||
           view.type === "sub-agents" || view.type === "sub-agent-detail" || view.type === "output-styles" ||
           view.type === "statusline") && (
           <FeaturesLayout currentFeature={currentFeature} onFeatureClick={handleFeatureClick}>
+            {view.type === "settings" && (
+              <SettingsView
+                marketplaceItems={catalog?.settings || []}
+                onMarketplaceSelect={(item) => {
+                  const template = catalog?.settings.find(c => c.path === item.path);
+                  if (template) navigate({ type: "template-detail", template, category: "settings" });
+                }}
+                onBrowseMore={() => navigate({ type: "marketplace", category: "settings" })}
+              />
+            )}
             {view.type === "commands" && (
               <CommandsView
                 onSelect={(cmd, scrollToChangelog) => navigate({ type: "command-detail", command: cmd, scrollToChangelog })}
@@ -390,16 +400,6 @@ function App() {
               />
             )}
           </KnowledgeLayout>
-        )}
-        {view.type === "settings" && (
-          <SettingsView
-            marketplaceItems={catalog?.settings || []}
-            onMarketplaceSelect={(item) => {
-              const template = catalog?.settings.find(c => c.path === item.path);
-              if (template) navigate({ type: "template-detail", template, category: "settings" });
-            }}
-            onBrowseMore={() => navigate({ type: "marketplace", category: "settings" })}
-          />
         )}
         {(view.type === "marketplace" || view.type === "template-detail") && (
           <MarketplaceLayout

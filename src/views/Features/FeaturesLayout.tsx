@@ -37,7 +37,6 @@ interface FeaturesLayoutProps {
 export function FeaturesLayout({ children, currentFeature, onFeatureClick }: FeaturesLayoutProps) {
   const items = useMemo(() =>
     TEMPLATE_CATEGORIES
-      .filter(c => c.key !== "settings")
       .map(c => ({ key: c.key, label: c.label, icon: c.icon })),
     []
   );
