@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.7
+
+### Patch Changes
+
+- fix: disable autocorrect and context menu in production
+
 ## 0.23.6
 
 ### Patch Changes
