@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.23.8
+
+### Patch Changes
+
+- fix(ts): resolve IME key type comparison error
+
 ## 0.23.7
 
 ### Patch Changes
