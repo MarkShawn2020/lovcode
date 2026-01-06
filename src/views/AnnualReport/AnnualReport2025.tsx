@@ -292,11 +292,13 @@ function CommandsScreen({ report }: { report: AnnualReportData }) {
 
 function SummaryScreen({
   report,
-  onShare,
+  onShareZh,
+  onShareEn,
   sharing,
 }: {
   report: AnnualReportData;
-  onShare: () => void;
+  onShareZh: () => void;
+  onShareEn: () => void;
   sharing: boolean;
 }) {
   return (
@@ -332,14 +334,24 @@ function SummaryScreen({
           </p>
         )}
 
-        <button
-          onClick={onShare}
-          disabled={sharing}
-          className="inline-flex items-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          <DownloadIcon className="w-4 h-4" />
-          {sharing ? "Generating..." : "Save as Image"}
-        </button>
+        <div className="flex flex-col gap-3">
+          <button
+            onClick={onShareZh}
+            disabled={sharing}
+            className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            <DownloadIcon className="w-4 h-4" />
+            {sharing ? "Generating..." : "Save as Image (中文)"}
+          </button>
+          <button
+            onClick={onShareEn}
+            disabled={sharing}
+            className="inline-flex items-center justify-center gap-2 px-6 py-3 bg-card border border-border text-foreground rounded-xl font-medium hover:bg-card/80 transition-colors disabled:opacity-50"
+          >
+            <DownloadIcon className="w-4 h-4" />
+            {sharing ? "Generating..." : "Save as Image (English)"}
+          </button>
+        </div>
       </motion.div>
 
       <motion.p
@@ -396,10 +408,34 @@ function getUserName(path: string): string {
 // Shareable Card Component (hidden, used for screenshot)
 // Uses inline styles because Tailwind classes won't be captured by screenshot
 // Design inspired by NetEase Cloud Music annual report - premium festival style
-function ShareableCard({ report }: { report: AnnualReportData }) {
+function ShareableCard({ report, language = "zh" }: { report: AnnualReportData; language?: "zh" | "en" }) {
   const peakHourLabel = getHourLabel(report.peak_hour);
   const projectName = report.favorite_project ? getProjectName(report.favorite_project.path) : "";
   const userName = report.favorite_project ? getUserName(report.favorite_project.path) : "Coder";
+
+  // Translations
+  const t = {
+    title: language === "zh" ? "2025 Vibe Coding 年度报告" : "2025 Vibe Coding Annual Report",
+    statsPeriod: language === "zh" ? "统计周期" : "Period",
+    conversations: language === "zh" ? "对话" : "Conversations",
+    conversationsUnit: language === "zh" ? "次" : "",
+    messages: language === "zh" ? "消息" : "Messages",
+    messagesUnit: language === "zh" ? "条" : "",
+    commands: language === "zh" ? "命令" : "Commands",
+    commandsUnit: language === "zh" ? "个" : "",
+    activeDays: language === "zh" ? "活跃" : "Active Days",
+    activeDaysUnit: language === "zh" ? "天" : "",
+    projects: language === "zh" ? "项目" : "Projects",
+    projectsUnit: language === "zh" ? "个" : "",
+    streak: language === "zh" ? "连续" : "Streak",
+    streakUnit: language === "zh" ? "天" : " days",
+    favoriteProject: language === "zh" ? "年度最爱项目" : "Favorite Project",
+    peakTime: language === "zh" ? "活跃时段" : "Peak Hour",
+    peakDay: language === "zh" ? "活跃日" : "Active Day",
+    mostCoding: language === "zh" ? "最常编程" : "Most Coding",
+    topCommands: language === "zh" ? "🔥 年度常用命令" : "🔥 Top Commands",
+    tagline: language === "zh" ? "Your Vibe Coding Hub" : "Your Vibe Coding Hub",
+  };
 
   return (
     <div
@@ -453,7 +489,7 @@ function ShareableCard({ report }: { report: AnnualReportData }) {
               marginBottom: 6,
             }}
           >
-            2025 Vibe Coding 年度报告
+            {t.title}
           </div>
           <div
             style={{
@@ -504,7 +540,7 @@ function ShareableCard({ report }: { report: AnnualReportData }) {
                 fontWeight: 500,
               }}
             >
-              统计周期：{report.first_chat_date || "2025.01"} - {report.last_chat_date || "2025.12"}
+              {t.statsPeriod}{language === "zh" ? "：" : ": "}{report.first_chat_date || "2025.01"} - {report.last_chat_date || "2025.12"}
             </span>
           </div>
 
@@ -518,56 +554,56 @@ function ShareableCard({ report }: { report: AnnualReportData }) {
           >
             {/* Conversations */}
             <div style={{ textAlign: "center", padding: 10 }}>
-              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>对话</div>
+              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>{t.conversations}</div>
               <div style={{ fontSize: 28, fontWeight: 800, color: "#D85A2A", lineHeight: 1 }}>
                 {report.total_sessions.toLocaleString()}
               </div>
-              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>次</div>
+              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>{t.conversationsUnit}</div>
             </div>
 
             {/* Messages */}
             <div style={{ textAlign: "center", padding: 10 }}>
-              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>消息</div>
+              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>{t.messages}</div>
               <div style={{ fontSize: 28, fontWeight: 800, color: "#E8734A", lineHeight: 1 }}>
                 {report.total_messages.toLocaleString()}
               </div>
-              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>条</div>
+              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>{t.messagesUnit}</div>
             </div>
 
             {/* Commands */}
             <div style={{ textAlign: "center", padding: 10 }}>
-              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>命令</div>
+              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>{t.commands}</div>
               <div style={{ fontSize: 28, fontWeight: 800, color: "#D85A2A", lineHeight: 1 }}>
                 {report.total_commands.toLocaleString()}
               </div>
-              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>个</div>
+              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>{t.commandsUnit}</div>
             </div>
 
             {/* Active Days */}
             <div style={{ textAlign: "center", padding: 10 }}>
-              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>活跃</div>
+              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>{t.activeDays}</div>
               <div style={{ fontSize: 28, fontWeight: 800, color: "#E8734A", lineHeight: 1 }}>
                 {report.active_days}
               </div>
-              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>天</div>
+              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>{t.activeDaysUnit}</div>
             </div>
 
             {/* Projects */}
             <div style={{ textAlign: "center", padding: 10 }}>
-              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>项目</div>
+              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>{t.projects}</div>
               <div style={{ fontSize: 28, fontWeight: 800, color: "#D85A2A", lineHeight: 1 }}>
                 {report.total_projects}
               </div>
-              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>个</div>
+              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>{t.projectsUnit}</div>
             </div>
 
             {/* Longest Streak */}
             <div style={{ textAlign: "center", padding: 10 }}>
-              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>连续</div>
+              <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 4, fontWeight: 600 }}>{t.streak}</div>
               <div style={{ fontSize: 28, fontWeight: 800, color: "#E8734A", lineHeight: 1 }}>
                 {report.longest_streak}
               </div>
-              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>天</div>
+              <div style={{ fontSize: 10, color: "#AA7A6A", marginTop: 2 }}>{t.streakUnit}</div>
             </div>
           </div>
 
@@ -599,7 +635,7 @@ function ShareableCard({ report }: { report: AnnualReportData }) {
                   🏆
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 2, fontWeight: 600 }}>年度最爱项目</div>
+                  <div style={{ fontSize: 10, color: "#996B5B", marginBottom: 2, fontWeight: 600 }}>{t.favoriteProject}</div>
                   <div style={{ fontSize: 16, fontWeight: 700, color: "#4A3530" }}>
                     {projectName}
                   </div>
@@ -630,14 +666,14 @@ function ShareableCard({ report }: { report: AnnualReportData }) {
             }}
           >
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 2 }}>活跃时段</div>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 2 }}>{t.peakTime}</div>
               <div style={{ fontSize: 24, fontWeight: 800, color: "#FFFFFF", lineHeight: 1 }}>{report.peak_hour}:00</div>
               <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)" }}>{peakHourLabel}</div>
             </div>
             <div style={{ textAlign: "center" }}>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 2 }}>活跃日</div>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 2 }}>{t.peakDay}</div>
               <div style={{ fontSize: 24, fontWeight: 800, color: "#FFFFFF", lineHeight: 1 }}>{WEEKDAY_NAMES[report.peak_weekday]}</div>
-              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)" }}>最常编程</div>
+              <div style={{ fontSize: 10, color: "rgba(255,255,255,0.5)" }}>{t.mostCoding}</div>
             </div>
           </div>
 
@@ -645,7 +681,7 @@ function ShareableCard({ report }: { report: AnnualReportData }) {
           {report.top_commands.length > 0 && (
             <div>
               <div style={{ fontSize: 10, color: "rgba(255,255,255,0.6)", marginBottom: 8, fontWeight: 500 }}>
-                🔥 年度常用命令
+                {t.topCommands}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
                 {report.top_commands.slice(0, 4).map((cmd, i) => (
@@ -706,7 +742,8 @@ function ShareableCard({ report }: { report: AnnualReportData }) {
 export function AnnualReport2025({ onClose }: AnnualReport2025Props) {
   const [currentScreen, setCurrentScreen] = useState(0);
   const [sharing, setSharing] = useState(false);
-  const shareCardRef = useRef<HTMLDivElement>(null);
+  const shareCardZhRef = useRef<HTMLDivElement>(null);
+  const shareCardEnRef = useRef<HTMLDivElement>(null);
 
   const { data: report, isLoading } = useInvokeQuery<AnnualReportData>(
     ["annualReport2025"],
@@ -766,8 +803,8 @@ export function AnnualReport2025({ onClose }: AnnualReport2025Props) {
 
   // Share functionality - uses domToCanvas with Portal (no UI flicker)
   // Uses Tauri save dialog for proper file saving without Finder popup
-  const handleShare = useCallback(async () => {
-    const captureEl = shareCardRef.current;
+  const handleShareImage = useCallback(async (language: "zh" | "en") => {
+    const captureEl = language === "zh" ? shareCardZhRef.current : shareCardEnRef.current;
     if (!captureEl || !report) return;
     setSharing(true);
 
@@ -799,9 +836,9 @@ export function AnnualReport2025({ onClose }: AnnualReport2025Props) {
         throw new Error("Failed to create blob");
       }
 
-      // Use Tauri save dialog
+      // Use Tauri save dialog with language-specific filename
       const path = await save({
-        defaultPath: "lovcode-2025-report.png",
+        defaultPath: `lovcode-2025-report-${language}.png`,
         filters: [{ name: "PNG Image", extensions: ["png"] }],
       });
 
@@ -822,6 +859,9 @@ export function AnnualReport2025({ onClose }: AnnualReport2025Props) {
       setSharing(false);
     }
   }, [report]);
+
+  const handleShareZh = useCallback(() => handleShareImage("zh"), [handleShareImage]);
+  const handleShareEn = useCallback(() => handleShareImage("en"), [handleShareImage]);
 
   if (isLoading) {
     return (
@@ -880,7 +920,7 @@ export function AnnualReport2025({ onClose }: AnnualReport2025Props) {
           {currentScreen === 3 && <ProjectsScreen report={report} />}
           {currentScreen === 4 && <CommandsScreen report={report} />}
           {currentScreen === 5 && (
-            <SummaryScreen report={report} onShare={handleShare} sharing={sharing} />
+            <SummaryScreen report={report} onShareZh={handleShareZh} onShareEn={handleShareEn} sharing={sharing} />
           )}
         </motion.div>
       </AnimatePresence>
@@ -902,22 +942,38 @@ export function AnnualReport2025({ onClose }: AnnualReport2025Props) {
 
       </div>
 
-      {/* Portal: ShareableCard rendered to body, hidden with transform */}
+      {/* Portal: ShareableCards rendered to body, hidden with transform */}
       {createPortal(
-        <div
-          ref={shareCardRef}
-          style={{
-            position: "fixed",
-            left: 0,
-            top: 0,
-            transform: "scale(0)",
-            transformOrigin: "top left",
-            pointerEvents: "none",
-            zIndex: -1,
-          }}
-        >
-          <ShareableCard report={report} />
-        </div>,
+        <>
+          <div
+            ref={shareCardZhRef}
+            style={{
+              position: "fixed",
+              left: 0,
+              top: 0,
+              transform: "scale(0)",
+              transformOrigin: "top left",
+              pointerEvents: "none",
+              zIndex: -1,
+            }}
+          >
+            <ShareableCard report={report} language="zh" />
+          </div>
+          <div
+            ref={shareCardEnRef}
+            style={{
+              position: "fixed",
+              left: 0,
+              top: 0,
+              transform: "scale(0)",
+              transformOrigin: "top left",
+              pointerEvents: "none",
+              zIndex: -1,
+            }}
+          >
+            <ShareableCard report={report} language="en" />
+          </div>
+        </>,
         document.body
       )}
     </>
