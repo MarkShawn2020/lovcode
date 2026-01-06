@@ -8,6 +8,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ProjectDashboard } from "./ProjectDashboard";
 import { PanelGrid } from "../../components/PanelGrid";
 import { disposeTerminal } from "../../components/Terminal";
+import type { ProjectOption } from "@/components/ui/new-terminal-button";
 import type { WorkspaceData, WorkspaceProject, PanelState as StoredPanelState, SessionState as StoredSessionState, LayoutNode } from "./types";
 
 export function WorkspaceView() {
@@ -264,18 +265,18 @@ export function WorkspaceView() {
   );
 
   // Create initial panel (when project has no panels)
-  const handleInitialPanelCreate = useCallback((command?: string) => {
+  const handleInitialPanelCreate = useCallback((command?: string, initialInput?: string) => {
     if (!activeProject) return;
 
     const panelId = crypto.randomUUID();
     const sessionId = crypto.randomUUID();
     const ptyId = crypto.randomUUID();
     const projectId = activeProject.id;
-    const title = command === "claude" ? "Claude Code" : command === "codex" ? "Codex" : "Terminal";
+    const title = command?.startsWith("claude") ? "Claude Code" : command?.startsWith("codex") ? "Codex" : "Terminal";
 
     const newPanel: StoredPanelState = {
       id: panelId,
-      sessions: [{ id: sessionId, pty_id: ptyId, title, command }],
+      sessions: [{ id: sessionId, pty_id: ptyId, title, command, initial_input: initialInput }],
       active_session_id: sessionId,
       is_shared: false,
       cwd: activeProject.path,
@@ -292,6 +293,41 @@ export function WorkspaceView() {
 
     setActivePanelId(panelId);
   }, [activeProject, saveWorkspace, setActivePanelId]);
+
+  // Create panel in a specific project (for project selection in empty state)
+  const handleSelectProject = useCallback((project: ProjectOption, command?: string, initialInput?: string) => {
+    const panelId = crypto.randomUUID();
+    const sessionId = crypto.randomUUID();
+    const ptyId = crypto.randomUUID();
+    const title = command?.startsWith("claude") ? "Claude Code" : command?.startsWith("codex") ? "Codex" : "Terminal";
+
+    const newPanel: StoredPanelState = {
+      id: panelId,
+      sessions: [{ id: sessionId, pty_id: ptyId, title, command, initial_input: initialInput }],
+      active_session_id: sessionId,
+      is_shared: false,
+      cwd: project.path,
+    };
+
+    saveWorkspace((current) => {
+      const newProjects = current.projects.map((p) =>
+        p.id === project.id
+          ? { ...p, panels: [newPanel], layout: { type: "panel" as const, panelId } }
+          : p
+      );
+      return { ...current, projects: newProjects, active_project_id: project.id };
+    });
+
+    setActivePanelId(panelId);
+  }, [saveWorkspace, setActivePanelId]);
+
+  // Prepare project options for selection (all workspace projects)
+  const projectOptions: ProjectOption[] = useMemo(() => {
+    if (!workspace) return [];
+    return workspace.projects
+      .filter((p) => !p.archived)
+      .map((p) => ({ id: p.id, name: p.name, path: p.path }));
+  }, [workspace?.projects]);
 
   // Close panel handler
   const handlePanelClose = useCallback(
@@ -494,7 +530,7 @@ export function WorkspaceView() {
   );
 
   // Convert project panels to PanelGrid format
-  const sessionCacheRef = useRef(new Map<string, { id: string; ptyId: string; title: string; command?: string }>());
+  const sessionCacheRef = useRef(new Map<string, { id: string; ptyId: string; title: string; command?: string; initialInput?: string }>());
 
   const projectPanels = useMemo(() => {
     const cache = sessionCacheRef.current;
@@ -507,9 +543,10 @@ export function WorkspaceView() {
         if (cached && cached.ptyId === s.pty_id) {
           cached.title = s.title;
           cached.command = s.command;
+          cached.initialInput = s.initial_input;
           return cached;
         }
-        const session = { id: s.id, ptyId: s.pty_id, title: s.title, command: s.command };
+        const session = { id: s.id, ptyId: s.pty_id, title: s.title, command: s.command, initialInput: s.initial_input };
         cache.set(s.id, session);
         return session;
       }),
@@ -555,6 +592,10 @@ export function WorkspaceView() {
               onSessionSelect={handleSessionSelect}
               onSessionTitleChange={handleSessionTitleChange}
               onInitialPanelCreate={handleInitialPanelCreate}
+              projects={projectOptions}
+              activeProjectId={activeProject.id}
+              onSelectProject={handleSelectProject}
+              onAddFolder={handleAddProject}
               direction="horizontal"
             />
           </div>

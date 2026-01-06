@@ -28,6 +28,8 @@ export interface TerminalPaneProps {
   cwd: string;
   /** Optional command to run instead of shell */
   command?: string;
+  /** Text to send to terminal after it's ready (for interactive input) */
+  initialInput?: string;
   /** Whether this terminal is visible (active tab) - controls WebGL loading */
   visible?: boolean;
   /** Auto focus terminal when ready */
@@ -46,6 +48,7 @@ export function TerminalPane({
   ptyId,
   cwd,
   command,
+  initialInput,
   visible = true,
   autoFocus = false,
   onReady,
@@ -56,6 +59,7 @@ export function TerminalPane({
   const containerRef = useRef<HTMLDivElement>(null);
   const cwdRef = useRef(cwd);
   const commandRef = useRef(command);
+  const initialInputRef = useRef(initialInput);
   const autoFocusRef = useRef(autoFocus);
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
@@ -63,6 +67,7 @@ export function TerminalPane({
 
   useEffect(() => { cwdRef.current = cwd; }, [cwd]);
   useEffect(() => { commandRef.current = command; }, [command]);
+  useEffect(() => { initialInputRef.current = initialInput; }, [initialInput]);
   useEffect(() => { autoFocusRef.current = autoFocus; }, [autoFocus]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onExitRef.current = onExit; }, [onExit]);
@@ -152,7 +157,8 @@ export function TerminalPane({
 
         if (!mountState.isMounted) return;
 
-        if (!exists) {
+        const isNewPty = !exists;
+        if (isNewPty) {
           await invoke("pty_create", { id: sessionId, cwd: cwdRef.current, command: commandRef.current });
         }
 
@@ -190,12 +196,17 @@ export function TerminalPane({
           }).catch(() => {});
         }
 
-        // Focus if autoFocus is true when PTY becomes ready
+        // Focus terminal when ready
         if (autoFocusRef.current) {
-          // Don't steal focus from input/textarea
-          const active = document.activeElement;
-          if (active?.tagName !== 'INPUT' && active?.tagName !== 'TEXTAREA') {
+          // For new PTY, always focus (user explicitly created it)
+          // For restored PTY, don't steal focus from active input
+          if (isNewPty) {
             term.focus();
+          } else {
+            const active = document.activeElement;
+            if (active?.tagName !== 'INPUT' && active?.tagName !== 'TEXTAREA') {
+              term.focus();
+            }
           }
         }
         onReadyRef.current?.();
@@ -337,8 +348,23 @@ export function TerminalPane({
       }
     };
 
+    // Track if initial input has been sent (send on first pty-data = shell prompt ready)
+    let initialInputSent = false;
+
     const unlistenData = listen<PtyDataEvent>("pty-data", (event) => {
       if (event.payload.id === sessionId && mountState.isMounted) {
+        // Send initial input on first data received (shell prompt is ready)
+        if (!initialInputSent && initialInputRef.current) {
+          initialInputSent = true;
+          const input = initialInputRef.current;
+          initialInputRef.current = undefined;
+          const encoder = new TextEncoder();
+          const bytes = Array.from(encoder.encode(input));
+          invoke("pty_write", { id: sessionId, data: bytes }).catch(console.error);
+          // Focus terminal after sending initial input
+          term.focus();
+        }
+
         // Accumulate raw bytes (preserves UTF-8 boundary handling)
         pendingBytes.push(...event.payload.data);
         batchCount++;

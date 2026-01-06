@@ -7,6 +7,8 @@ export interface SessionState {
   pty_id: string;
   title: string;
   command?: string;
+  /** Text to send to terminal after it's ready (for interactive input) */
+  initial_input?: string;
 }
 
 /** Panel state (container for multiple session tabs) */

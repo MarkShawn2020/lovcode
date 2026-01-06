@@ -1,16 +1,25 @@
 import { useCallback, useEffect, useState } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
-import { ChevronLeftIcon, ChevronRightIcon, DrawingPinFilledIcon } from "@radix-ui/react-icons";
+import { ChevronLeftIcon, ChevronRightIcon, DrawingPinFilledIcon, ChevronDownIcon, FileIcon, DesktopIcon, RocketIcon, CodeIcon, GitHubLogoIcon } from "@radix-ui/react-icons";
 import { SessionPanel } from "./SessionPanel";
 import type { LayoutNode } from "../../views/Workspace/types";
-import { NewTerminalSplitButton } from "../ui/new-terminal-button";
+import { TERMINAL_OPTIONS, type ProjectOption } from "../ui/new-terminal-button";
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+} from "../ui/dropdown-menu";
 
 export interface SessionState {
   id: string;
   ptyId: string;
   title: string;
   command?: string;
+  /** Text to send to terminal after it's ready (for interactive input) */
+  initialInput?: string;
 }
 
 export interface PanelState {
@@ -37,8 +46,16 @@ export interface PanelGridProps {
   onSessionTitleChange: (panelId: string, sessionId: string, title: string) => void;
   /** @deprecated Use layout prop instead */
   direction?: "horizontal" | "vertical";
-  /** Called when no panels exist and one should be created */
-  onInitialPanelCreate?: (command?: string) => void;
+  /** Called when no panels exist and one should be created (uses current active project) */
+  onInitialPanelCreate?: (command?: string, initialInput?: string) => void;
+  /** Available projects for selection in empty state */
+  projects?: ProjectOption[];
+  /** Current active project id (for default selection) */
+  activeProjectId?: string;
+  /** Called when user selects a project to create terminal in */
+  onSelectProject?: (project: ProjectOption, command?: string, initialInput?: string) => void;
+  /** Called when user wants to add a new folder */
+  onAddFolder?: () => void;
 }
 
 /** Recursively render layout tree */
@@ -150,7 +167,24 @@ export function PanelGrid({
   onSessionTitleChange,
   direction = "horizontal",
   onInitialPanelCreate,
+  projects,
+  activeProjectId,
+  onSelectProject,
+  onAddFolder,
 }: PanelGridProps) {
+  // Selected project for empty state (default to active project)
+  const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(activeProjectId);
+  // Selected terminal type for empty state
+  const [selectedTerminalType, setSelectedTerminalType] = useState(TERMINAL_OPTIONS[0]);
+  // Input command for empty state
+  const [inputCommand, setInputCommand] = useState("");
+
+  // Sync with activeProjectId when it changes
+  useEffect(() => {
+    if (activeProjectId) {
+      setSelectedProjectId(activeProjectId);
+    }
+  }, [activeProjectId]);
   // Internal state for active panel (uncontrolled mode)
   const [internalActivePanelId, setInternalActivePanelId] = useState<string | undefined>(
     () => panels[0]?.id
@@ -174,13 +208,162 @@ export function PanelGrid({
   }, [panels, activePanelId]);
 
   if (panels.length === 0) {
+    const hasProjects = projects && projects.length > 0;
+    const selectedProject = projects?.find((p) => p.id === selectedProjectId) || projects?.[0];
+
+    const handleCreate = (userInput?: string) => {
+      // For claude/codex, append user input as argument to command
+      // For plain terminal, use initialInput to send after PTY is ready (interactive)
+      let command = selectedTerminalType.command;
+      let initialInput: string | undefined;
+
+      if (userInput) {
+        if (command) {
+          // Claude/Codex: pass user input as argument
+          command = `${command} "${userInput}"`;
+        } else {
+          // Plain terminal: send as interactive input after PTY ready
+          initialInput = userInput;
+        }
+      }
+
+      if (selectedProject && onSelectProject) {
+        onSelectProject(selectedProject, command, initialInput);
+      } else if (onInitialPanelCreate) {
+        onInitialPanelCreate(command, initialInput);
+      }
+    };
+
+    // Quick action cards data
+    const quickActions = [
+      { icon: RocketIcon, title: "Start dev server", code: "pnpm dev" },
+      { icon: GitHubLogoIcon, title: "Check git status", code: "git status" },
+      { icon: CodeIcon, title: "Run tests", code: "pnpm test" },
+    ];
+
+    // Common dropdown button style
+    const dropdownButtonClass = "inline-flex items-center justify-between gap-3 px-4 py-2.5 text-sm border border-border bg-card hover:bg-card-alt rounded-xl transition-colors";
+
     return (
-      <div className="h-full w-full flex items-center justify-center bg-canvas">
-        <div className="text-center">
-          <p className="text-muted-foreground mb-4">No terminals open</p>
-          {onInitialPanelCreate && (
-            <NewTerminalSplitButton onSelect={onInitialPanelCreate} />
-          )}
+      <div className="h-full w-full flex items-center justify-center bg-canvas bg-[radial-gradient(#e5e5e5_1px,transparent_1px)] dark:bg-[radial-gradient(#333_1px,transparent_1px)] [background-size:20px_20px]">
+        <div className="flex flex-col items-center gap-5 w-full max-w-xl px-6">
+          {/* App logo */}
+          <div className="mb-2">
+            <img src="/logo.svg" alt="Lovcode" className="w-12 h-12" />
+          </div>
+
+          {/* Two dropdowns side by side */}
+          <div className="flex items-center gap-3 w-full max-w-md">
+            {/* Project selector */}
+            {hasProjects && onSelectProject ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button className={`${dropdownButtonClass} flex-1 min-w-0`}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <FileIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                      <span className="truncate">{selectedProject?.name || "Select folder"}</span>
+                    </div>
+                    <ChevronDownIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="min-w-[200px]">
+                  {projects.map((project) => (
+                    <DropdownMenuItem
+                      key={project.id}
+                      onClick={() => setSelectedProjectId(project.id)}
+                    >
+                      <span className={`truncate ${project.id === selectedProjectId ? "font-medium" : ""}`}>
+                        {project.name}
+                      </span>
+                    </DropdownMenuItem>
+                  ))}
+                  {onAddFolder && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={onAddFolder}>
+                        <FileIcon className="w-4 h-4 mr-2" />
+                        Add folder...
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
+
+            {/* Terminal type selector */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className={`${dropdownButtonClass} flex-shrink-0`}>
+                  <div className="flex items-center gap-2 whitespace-nowrap">
+                    <DesktopIcon className="w-4 h-4 text-muted-foreground" />
+                    <span>{selectedTerminalType.label}</span>
+                  </div>
+                  <ChevronDownIcon className="w-4 h-4 text-muted-foreground" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="min-w-[140px]">
+                {TERMINAL_OPTIONS.map((opt) => (
+                  <DropdownMenuItem
+                    key={opt.type}
+                    onClick={() => setSelectedTerminalType(opt)}
+                  >
+                    <span className={opt.type === selectedTerminalType.type ? "font-medium" : ""}>
+                      {opt.label}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+
+          {/* Super prompt box */}
+          <div className="w-full max-w-md">
+            <div className="border border-border rounded-2xl bg-card overflow-hidden shadow-sm">
+              <textarea
+                value={inputCommand}
+                onChange={(e) => setInputCommand(e.target.value)}
+                placeholder="Enter a command or describe what you want to do..."
+                className="w-full p-4 bg-transparent resize-none outline-none text-sm min-h-[80px] placeholder:text-muted-foreground/60"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleCreate(inputCommand || undefined);
+                  }
+                }}
+              />
+              <div className="flex items-center justify-end px-3 py-2.5 border-t border-border bg-muted/30">
+                <button
+                  onClick={() => handleCreate(inputCommand || undefined)}
+                  className="px-4 py-1.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
+                >
+                  Start
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Quick action cards */}
+          <div className="flex gap-2.5 w-full max-w-md">
+            {quickActions.map((action, i) => (
+              <button
+                key={i}
+                onClick={() => {
+                  if (selectedTerminalType.type === 'terminal') {
+                    handleCreate(action.code);
+                  } else {
+                    handleCreate(action.title);
+                  }
+                }}
+                className="flex-1 p-3 border border-border rounded-xl bg-card hover:bg-card-alt hover:border-primary/30 transition-all text-left group"
+              >
+                <action.icon className="w-4 h-4 text-muted-foreground mb-2 group-hover:text-primary transition-colors" />
+                <p className="text-xs text-foreground font-medium mb-1">{action.title}</p>
+                <code className="text-[10px] px-1.5 py-0.5 bg-muted rounded text-muted-foreground font-mono">
+                  {action.code}
+                </code>
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     );
