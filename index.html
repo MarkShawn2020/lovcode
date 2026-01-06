@@ -10,5 +10,29 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      // Disable autocorrect/spellcheck globally for all inputs
+      document.addEventListener('DOMContentLoaded', () => {
+        const disableAutoCorrect = (el) => {
+          el.setAttribute('autocorrect', 'off');
+          el.setAttribute('autocomplete', 'off');
+          el.setAttribute('autocapitalize', 'off');
+          el.setAttribute('spellcheck', 'false');
+        };
+        // Apply to existing elements
+        document.querySelectorAll('input, textarea, [contenteditable="true"]').forEach(disableAutoCorrect);
+        // Watch for dynamically added elements
+        new MutationObserver((mutations) => {
+          mutations.forEach((m) => {
+            m.addedNodes.forEach((node) => {
+              if (node.nodeType === 1) {
+                if (node.matches?.('input, textarea, [contenteditable="true"]')) disableAutoCorrect(node);
+                node.querySelectorAll?.('input, textarea, [contenteditable="true"]').forEach(disableAutoCorrect);
+              }
+            });
+          });
+        }).observe(document.body, { childList: true, subtree: true });
+      });
+    </script>
   </body>
 </html>

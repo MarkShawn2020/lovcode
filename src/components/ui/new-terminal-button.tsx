@@ -20,6 +20,12 @@ export const TERMINAL_OPTIONS: TerminalOption[] = [
   { type: "codex", label: "Codex", command: "codex" },
 ];
 
+export interface ProjectOption {
+  id: string;
+  name: string;
+  path: string;
+}
+
 interface NewTerminalSplitButtonProps {
   onSelect: (command?: string) => void;
   variant?: "primary" | "icon";

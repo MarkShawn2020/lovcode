@@ -7,6 +7,11 @@ import "./index.css";
 // Configure Monaco Editor to use local bundled version (avoid CDN issues)
 loader.config({ paths: { vs: "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs" } });
 
+// Disable browser context menu in production (no reload/inspect-element)
+if (import.meta.env.PROD) {
+  document.addEventListener("contextmenu", (e) => e.preventDefault());
+}
+
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
