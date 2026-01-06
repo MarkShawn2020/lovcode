@@ -233,6 +233,16 @@ export function ClaudeCodeVersionSection() {
           Tip: Disable auto-updater to lock a specific version for stability.
         </p>
       )}
+
+      {/* NPM link */}
+      <a
+        href="https://www.npmjs.com/package/@anthropic-ai/claude-code?activeTab=versions"
+        target="_blank"
+        rel="noopener noreferrer"
+        className="text-[10px] text-primary hover:underline inline-flex items-center gap-1"
+      >
+        View all versions on npm →
+      </a>
     </CollapsibleCard>
   );
 }
