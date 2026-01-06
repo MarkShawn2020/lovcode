@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Allotment } from "allotment";
 import "allotment/dist/style.css";
 import { ChevronLeftIcon, ChevronRightIcon, DrawingPinFilledIcon, ChevronDownIcon, FileIcon, DesktopIcon, RocketIcon, CodeIcon, GitHubLogoIcon } from "@radix-ui/react-icons";
@@ -178,6 +178,8 @@ export function PanelGrid({
   const [selectedTerminalType, setSelectedTerminalType] = useState(TERMINAL_OPTIONS[0]);
   // Input command for empty state
   const [inputCommand, setInputCommand] = useState("");
+  // Track IME composing state
+  const composingRef = useRef(false);
 
   // Sync with activeProjectId when it changes
   useEffect(() => {
@@ -324,8 +326,14 @@ export function PanelGrid({
                 onChange={(e) => setInputCommand(e.target.value)}
                 placeholder="Enter a command or describe what you want to do..."
                 className="w-full p-4 bg-transparent resize-none outline-none text-sm min-h-[80px] placeholder:text-muted-foreground/60"
+                onCompositionStart={() => { composingRef.current = true; }}
+                onCompositionEnd={() => {
+                  // Delay to next frame - some browsers fire compositionend BEFORE keydown
+                  requestAnimationFrame(() => { composingRef.current = false; });
+                }}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
+                  // Also check e.key !== 'Process' for additional IME detection
+                  if (e.key === 'Enter' && !e.shiftKey && !composingRef.current && e.key !== 'Process') {
                     e.preventDefault();
                     handleCreate(inputCommand || undefined);
                   }
