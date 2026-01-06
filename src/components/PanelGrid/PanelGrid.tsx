@@ -332,8 +332,9 @@ export function PanelGrid({
                   requestAnimationFrame(() => { composingRef.current = false; });
                 }}
                 onKeyDown={(e) => {
-                  // Also check e.key !== 'Process' for additional IME detection
-                  if (e.key === 'Enter' && !e.shiftKey && !composingRef.current && e.key !== 'Process') {
+                  // 'Process' key indicates IME is handling the input
+                  if (e.key === 'Process' || composingRef.current) return;
+                  if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     handleCreate(inputCommand || undefined);
                   }
