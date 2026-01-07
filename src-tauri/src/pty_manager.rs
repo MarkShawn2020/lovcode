@@ -142,25 +142,69 @@ pub fn create_session(
         })
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    // Determine shell (use user's default, fallback to zsh which is macOS default since Catalina)
-    let shell_cmd = shell.unwrap_or_else(|| {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
-    });
+    // Determine shell and build command based on platform
+    #[cfg(windows)]
+    let mut cmd = {
+        // On Windows, use PowerShell as default (better than cmd.exe for modern terminals)
+        let shell_cmd = shell.unwrap_or_else(|| {
+            std::env::var("SHELL")
+                .or_else(|_| std::env::var("COMSPEC"))
+                .unwrap_or_else(|_| "powershell.exe".to_string())
+        });
 
-    // Build command: either run custom command via login shell, or just start shell
-    // Use -ilc (interactive + login) to load user's shell config (~/.zshrc, ~/.bashrc)
-    // This ensures PATH includes nvm, homebrew, npm global, etc.
-    let mut cmd = if let Some(ref command_str) = command {
-        let mut c = CommandBuilder::new(&shell_cmd);
-        c.arg("-ilc");
-        c.arg(command_str);
-        c
-    } else {
-        // Interactive shell: use -il for login mode (loads profile/rc files)
-        let mut c = CommandBuilder::new(&shell_cmd);
-        c.arg("-il");
-        c
+        let is_powershell = shell_cmd.to_lowercase().contains("powershell");
+        let is_cmd = shell_cmd.to_lowercase().contains("cmd");
+
+        if let Some(ref command_str) = command {
+            let mut c = CommandBuilder::new(&shell_cmd);
+            if is_powershell {
+                c.arg("-NoExit");
+                c.arg("-Command");
+                c.arg(command_str);
+            } else if is_cmd {
+                c.arg("/K");
+                c.arg(command_str);
+            } else {
+                // Generic: try Unix-style args
+                c.arg("-c");
+                c.arg(command_str);
+            }
+            c
+        } else {
+            // Interactive shell
+            let mut c = CommandBuilder::new(&shell_cmd);
+            if is_powershell {
+                c.arg("-NoExit");
+            } else if is_cmd {
+                c.arg("/K");
+            }
+            c
+        }
     };
+
+    #[cfg(not(windows))]
+    let mut cmd = {
+        // On Unix, use user's default shell, fallback to zsh (macOS default since Catalina)
+        let shell_cmd = shell.unwrap_or_else(|| {
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
+        });
+
+        // Build command: either run custom command via login shell, or just start shell
+        // Use -ilc (interactive + login) to load user's shell config (~/.zshrc, ~/.bashrc)
+        // This ensures PATH includes nvm, homebrew, npm global, etc.
+        if let Some(ref command_str) = command {
+            let mut c = CommandBuilder::new(&shell_cmd);
+            c.arg("-ilc");
+            c.arg(command_str);
+            c
+        } else {
+            // Interactive shell: use -il for login mode (loads profile/rc files)
+            let mut c = CommandBuilder::new(&shell_cmd);
+            c.arg("-il");
+            c
+        }
+    };
+
     cmd.cwd(&cwd);
 
     // Set proper TERM for xterm.js

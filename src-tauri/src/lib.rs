@@ -5564,11 +5564,22 @@ struct ClaudeCodeVersionInfo {
 
 /// Run a command in user's interactive login shell (to get proper PATH with nvm, etc.)
 fn run_shell_command(cmd: &str) -> std::io::Result<std::process::Output> {
-    // Use user's default shell from $SHELL, fallback to /bin/zsh (macOS default)
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-    std::process::Command::new(&shell)
-        .args(["-ilc", cmd]) // -i for interactive (loads .zshrc), -l for login, -c for command
-        .output()
+    #[cfg(windows)]
+    {
+        // On Windows, use PowerShell to run commands (better PATH handling than cmd.exe)
+        std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", cmd])
+            .output()
+    }
+
+    #[cfg(not(windows))]
+    {
+        // Use user's default shell from $SHELL, fallback to /bin/zsh (macOS default)
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        std::process::Command::new(&shell)
+            .args(["-ilc", cmd]) // -i for interactive (loads .zshrc), -l for login, -c for command
+            .output()
+    }
 }
 
 /// Detect Claude Code installation type
@@ -5760,9 +5771,25 @@ async fn install_claude_code_version(
             )
         };
 
-        // Use bash directly without -il to avoid slow shell startup
+        // Use appropriate shell based on platform
         println!("[DEBUG] cmd={}", cmd);
 
+        #[cfg(windows)]
+        let mut child = {
+            // On Windows, use PowerShell for npm commands
+            // Native install is not supported on Windows (uses Unix-specific tools)
+            if install_type_str != "npm" {
+                return Err("Native install is only supported on macOS/Linux. Please use npm install on Windows.".to_string());
+            }
+            Command::new("powershell")
+                .args(["-NoProfile", "-Command", &cmd])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .map_err(|e| format!("Failed to spawn: {}", e))?
+        };
+
+        #[cfg(not(windows))]
         let mut child = Command::new("/bin/bash")
             .args(["-c", &cmd])
             .stdout(Stdio::piped())
@@ -6358,14 +6385,26 @@ fn read_file_base64(path: String) -> Result<String, String> {
 async fn exec_shell_command(command: String, cwd: String) -> Result<String, String> {
     use tokio::process::Command;
 
-    // Use user's default shell with login mode to get proper environment (API keys, etc.)
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+    #[cfg(windows)]
+    let output = {
+        // On Windows, use PowerShell with -WorkingDirectory
+        Command::new("powershell")
+            .args(["-NoProfile", "-Command", &format!("Set-Location '{}'; {}", cwd, command)])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run command: {}", e))?
+    };
 
-    let output = Command::new(&shell)
-        .args(["-ilc", &format!("cd '{}' && {}", cwd, command)])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run command: {}", e))?;
+    #[cfg(not(windows))]
+    let output = {
+        // Use user's default shell with login mode to get proper environment (API keys, etc.)
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
+        Command::new(&shell)
+            .args(["-ilc", &format!("cd '{}' && {}", cwd, command)])
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run command: {}", e))?
+    };
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).to_string())
