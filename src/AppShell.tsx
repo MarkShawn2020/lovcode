@@ -37,6 +37,7 @@ import {
   CommandsView,
   MarketplaceView,
   MarketplaceLayout,
+  TemplateDetailView,
   DistillView,
   ReferenceView,
   KnowledgeLayout,
@@ -50,6 +51,8 @@ import {
   MessageView,
   AnnualReport2025,
 } from "./views";
+import type { TemplatesCatalog } from "./types";
+import { useInvokeQuery } from "./hooks";
 
 // ============================================================================
 // Route to Feature mapping
@@ -329,19 +332,29 @@ export function AppShell() {
 
     // Marketplace
     if (first === "marketplace") {
-      const category = second as TemplateCategory | undefined;
+      const category = (second as TemplateCategory) ?? marketplaceCategory;
+      const templateName = third ? decodeURIComponent(third) : undefined;
+
       return (
         <MarketplaceLayout
-          currentCategory={category ?? marketplaceCategory}
+          currentCategory={category}
           onCategoryClick={(cat) => navigate(`/marketplace/${cat}`)}
         >
-          <MarketplaceView
-            initialCategory={category ?? marketplaceCategory}
-            onSelectTemplate={(template, cat) => {
-              setMarketplaceCategory(cat);
-              navigate(`/marketplace/${cat}/${encodeURIComponent(template.name)}`);
-            }}
-          />
+          {templateName ? (
+            <MarketplaceTemplateDetail
+              category={category}
+              templateName={templateName}
+              onBack={() => navigate(`/marketplace/${category}`)}
+            />
+          ) : (
+            <MarketplaceView
+              initialCategory={category}
+              onSelectTemplate={(template, cat) => {
+                setMarketplaceCategory(cat);
+                navigate(`/marketplace/${cat}/${encodeURIComponent(template.name)}`);
+              }}
+            />
+          )}
         </MarketplaceLayout>
       );
     }
@@ -498,5 +511,50 @@ function ProfileDialog({ open, onClose, profile, onSave }: { open: boolean; onCl
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ============================================================================
+// Marketplace Template Detail (fetches template from catalog)
+// ============================================================================
+
+function MarketplaceTemplateDetail({
+  category,
+  templateName,
+  onBack,
+}: {
+  category: TemplateCategory;
+  templateName: string;
+  onBack: () => void;
+}) {
+  const { data: catalog, isLoading } = useInvokeQuery<TemplatesCatalog>(
+    ["templatesCatalog"],
+    "get_templates_catalog"
+  );
+
+  if (isLoading) {
+    return <div className="p-8 text-center text-muted-foreground">Loading...</div>;
+  }
+
+  const templates = catalog?.[category] ?? [];
+  const template = templates.find((t) => t.name === templateName);
+
+  if (!template) {
+    return (
+      <div className="p-8 text-center">
+        <p className="text-muted-foreground mb-4">Template "{templateName}" not found</p>
+        <button onClick={onBack} className="text-primary hover:underline">
+          ← Back to list
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <TemplateDetailView
+      template={template}
+      category={category}
+      onBack={onBack}
+    />
   );
 }
