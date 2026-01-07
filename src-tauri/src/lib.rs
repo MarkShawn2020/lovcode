@@ -5572,53 +5572,46 @@ fn run_shell_command(cmd: &str) -> std::io::Result<std::process::Output> {
 }
 
 /// Detect Claude Code installation type
+/// Prioritizes native install (~/.local/bin/claude) over npm when both exist
 fn detect_claude_code_install_type() -> (ClaudeCodeInstallType, Option<String>) {
-    // Try running `claude --version` first (works for both Native and NPM)
-    if let Ok(output) = run_shell_command("claude --version 2>/dev/null") {
-        if output.status.success() {
-            let version_str = String::from_utf8_lossy(&output.stdout);
-            // Parse version from output like "2.0.76 (Claude Code)" - take first token
-            let version = version_str
-                .trim()
-                .split_whitespace()
-                .next()
-                .map(|s| s.to_string());
+    // Helper to get version from a specific claude binary path
+    let get_version = |path: &str| -> Option<String> {
+        if let Ok(output) = std::process::Command::new(path).arg("--version").output() {
+            if output.status.success() {
+                let version_str = String::from_utf8_lossy(&output.stdout);
+                return version_str
+                    .trim()
+                    .split_whitespace()
+                    .next()
+                    .map(|s| s.to_string());
+            }
+        }
+        None
+    };
 
-            // Determine install type by checking the actual path of claude binary
-            if let Ok(which_output) = run_shell_command("which claude 2>/dev/null") {
-                if which_output.status.success() {
-                    let claude_path = String::from_utf8_lossy(&which_output.stdout);
-                    let claude_path = claude_path.trim();
+    // Check native install first (preferred) - ~/.local/bin/claude
+    let native_path = dirs::home_dir()
+        .map(|h| h.join(".local/bin/claude"))
+        .filter(|p| p.exists());
 
-                    // NPM install: path contains node_modules, .nvm, or npm
-                    if claude_path.contains("node_modules")
-                        || claude_path.contains(".nvm")
-                        || claude_path.contains("/npm/")
-                    {
-                        return (ClaudeCodeInstallType::Npm, version);
-                    }
+    if let Some(ref path) = native_path {
+        if let Some(version) = get_version(path.to_str().unwrap_or("")) {
+            return (ClaudeCodeInstallType::Native, Some(version));
+        }
+    }
 
-                    // Native install: path is ~/.local/bin/claude or contains .claude-code
-                    if claude_path.contains(".local/bin/claude")
-                        || claude_path.contains(".claude-code")
-                    {
-                        return (ClaudeCodeInstallType::Native, version);
-                    }
+    // Check npm install via `which claude` in user's shell
+    if let Ok(which_output) = run_shell_command("which claude 2>/dev/null") {
+        if which_output.status.success() {
+            let claude_path = String::from_utf8_lossy(&which_output.stdout);
+            let claude_path = claude_path.trim();
+
+            // Skip if it's the native path we already checked
+            if !claude_path.contains(".local/bin/claude") && !claude_path.is_empty() {
+                if let Some(version) = get_version(claude_path) {
+                    return (ClaudeCodeInstallType::Npm, Some(version));
                 }
             }
-
-            // Fallback: check npm list
-            if let Ok(npm_output) = run_shell_command("npm list -g @anthropic-ai/claude-code --depth=0 2>/dev/null") {
-                if npm_output.status.success() {
-                    let stdout = String::from_utf8_lossy(&npm_output.stdout);
-                    if stdout.contains("@anthropic-ai/claude-code") {
-                        return (ClaudeCodeInstallType::Npm, version);
-                    }
-                }
-            }
-
-            // Claude exists but can't determine type, assume Native (newer default)
-            return (ClaudeCodeInstallType::Native, version);
         }
     }
 
@@ -5730,6 +5723,15 @@ async fn install_claude_code_version(
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         let cmd = if install_type_str == "npm" {
+            // Remove native binary if exists (so detection shows npm after install)
+            if let Some(home) = dirs::home_dir() {
+                let native_bin = home.join(".local/bin/claude");
+                if native_bin.exists() {
+                    let _ = app.emit("cc-install-progress", "Removing native install...");
+                    let _ = std::fs::remove_file(&native_bin);
+                }
+            }
+
             let package = if version == "latest" {
                 "@anthropic-ai/claude-code@latest".to_string()
             } else {
