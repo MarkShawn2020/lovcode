@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import Markdown from "react-markdown";
-import { StarFilledIcon, HeartFilledIcon, GlobeIcon, Pencil1Icon, TrashIcon, ExternalLinkIcon, DotsHorizontalIcon, FileIcon, CopyIcon } from "@radix-ui/react-icons";
+import { Pencil1Icon, TrashIcon, ExternalLinkIcon, DotsHorizontalIcon, FileIcon, CopyIcon } from "@radix-ui/react-icons";
 import type { TemplateComponent, TemplateCategory } from "../../types";
 import { TEMPLATE_CATEGORIES } from "../../constants";
 import { DetailCard, ConfigPage } from "../../components/config";
@@ -27,14 +27,29 @@ function getLanguageForCategory(category: TemplateCategory): string {
   }
 }
 
+/** Parse YAML frontmatter from markdown content */
+function parseFrontmatter(content: string): { meta: Record<string, string>; body: string } {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\s*([\s\S]*)$/);
+  if (!match) return { meta: {}, body: content };
+
+  const meta: Record<string, string> = {};
+  match[1].split(/\r?\n/).forEach(line => {
+    const idx = line.indexOf(':');
+    if (idx > 0) {
+      const key = line.slice(0, idx).trim();
+      const val = line.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
+      if (key && val) meta[key] = val;
+    }
+  });
+  return { meta, body: match[2] };
+}
+
 interface TemplateDetailViewProps {
   template: TemplateComponent;
   category: TemplateCategory;
   onBack: () => void;
   onNavigateToInstalled?: () => void;
-  /** Local file path for installed items (enables "Open in Editor") */
   localPath?: string;
-  /** Skip install check if we know it's already installed */
   isInstalled?: boolean;
 }
 
@@ -46,6 +61,7 @@ export function TemplateDetailView({
   localPath,
   isInstalled: initiallyInstalled,
 }: TemplateDetailViewProps) {
+
   const [installing, setInstalling] = useState(false);
   const [uninstalling, setUninstalling] = useState(false);
   const [installed, setInstalled] = useState(initiallyInstalled ?? false);
@@ -153,18 +169,6 @@ export function TemplateDetailView({
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="font-serif text-2xl font-semibold text-ink">{template.name}</h1>
-              {template.source_id && template.source_name && (
-                <span className="text-xs px-2 py-0.5 rounded-full flex items-center gap-1 border border-border text-muted-foreground">
-                  {template.source_id === "anthropic" ? (
-                    <StarFilledIcon className="w-3 h-3 text-primary" />
-                  ) : template.source_id === "lovstudio" ? (
-                    <HeartFilledIcon className="w-3 h-3 text-primary" />
-                  ) : (
-                    <GlobeIcon className="w-3 h-3" />
-                  )}
-                  {template.source_name}
-                </span>
-              )}
               {installed && (
                 <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 text-primary">
                   Installed
@@ -258,11 +262,29 @@ export function TemplateDetailView({
         <DetailCard label="Content Preview">
           {category === "mcps" || category === "hooks" || category === "settings" || category === "statuslines" ? (
             <CodePreview value={template.content} language={getLanguageForCategory(category)} height={400} />
-          ) : (
-            <div className="prose prose-sm max-w-none prose-neutral prose-pre:bg-card-alt prose-pre:text-ink prose-code:text-ink">
-              <Markdown>{template.content}</Markdown>
-            </div>
-          )}
+          ) : (() => {
+              const { meta, body } = parseFrontmatter(template.content);
+              const metaKeys = Object.keys(meta);
+              return (
+                <>
+                  {metaKeys.length > 0 && (
+                    <div className="mb-4 p-3 bg-card-alt rounded-lg border border-border">
+                      <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                        {metaKeys.map(key => (
+                          <div key={key} className="contents">
+                            <span className="text-muted-foreground">{key}</span>
+                            <span className="text-ink">{meta[key]}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div className="prose prose-sm max-w-none prose-neutral prose-pre:bg-card-alt prose-pre:text-ink prose-code:text-ink">
+                    <Markdown>{body}</Markdown>
+                  </div>
+                </>
+              );
+            })()}
         </DetailCard>
       )}
     </ConfigPage>
