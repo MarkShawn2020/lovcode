@@ -50,9 +50,12 @@ export function CommandItemCard({
   };
 
   return (
-    <button
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
-      className={`w-full flex items-center gap-2 py-1.5 px-2 text-left rounded-md transition-colors ${
+      onKeyDown={(e) => e.key === "Enter" && onClick()}
+      className={`w-full flex items-center gap-2 py-1.5 px-2 text-left rounded-md transition-colors cursor-pointer ${
         isInactive ? "opacity-60 hover:opacity-100" : ""
       } hover:bg-muted/50`}
     >
@@ -146,6 +149,6 @@ export function CommandItemCard({
           )}
         </DropdownMenuContent>
       </DropdownMenu>
-    </button>
+    </div>
   );
 }
