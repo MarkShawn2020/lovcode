@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.24.1
+
+### Patch Changes
+
+- 修复 Claude Code 终端无法启动及退出后无法输入的问题
+
+  - PTY 使用 -ilc 参数启动 login shell，确保加载用户环境变量
+  - 命令退出后自动回退到默认 shell
+  - 默认 shell 从 bash 改为 zsh（macOS 默认）
+
 ## 0.24.0
 
 ### Minor Changes
