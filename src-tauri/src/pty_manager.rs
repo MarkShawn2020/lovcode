@@ -142,19 +142,24 @@ pub fn create_session(
         })
         .map_err(|e| format!("Failed to open PTY: {}", e))?;
 
-    // Determine shell
+    // Determine shell (use user's default, fallback to zsh which is macOS default since Catalina)
     let shell_cmd = shell.unwrap_or_else(|| {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+        std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
     });
 
-    // Build command: either run custom command via shell -c, or just start shell
+    // Build command: either run custom command via login shell, or just start shell
+    // Use -ilc (interactive + login) to load user's shell config (~/.zshrc, ~/.bashrc)
+    // This ensures PATH includes nvm, homebrew, npm global, etc.
     let mut cmd = if let Some(ref command_str) = command {
         let mut c = CommandBuilder::new(&shell_cmd);
-        c.arg("-c");
+        c.arg("-ilc");
         c.arg(command_str);
         c
     } else {
-        CommandBuilder::new(&shell_cmd)
+        // Interactive shell: use -il for login mode (loads profile/rc files)
+        let mut c = CommandBuilder::new(&shell_cmd);
+        c.arg("-il");
+        c
     };
     cmd.cwd(&cwd);
 

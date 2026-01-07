@@ -134,8 +134,9 @@ export function TerminalPane({
       }, { capture: true });
     }
 
-    // Track mount state
+    // Track mount state and session state
     const mountState = { isMounted: true };
+    const sessionState = { exited: false, restarting: false };
 
     // Initialize PTY session
     const initPty = async () => {
@@ -277,6 +278,31 @@ export function TerminalPane({
       return true;
     });
 
+    // Fall back to default shell after command exits (like normal terminal behavior)
+    const fallbackToShell = async () => {
+      if (sessionState.restarting) return;
+      sessionState.restarting = true;
+
+      try {
+        // Create new PTY session with default shell (no command = interactive shell)
+        await invoke("pty_create", { id: sessionId, cwd: cwdRef.current });
+        ptyReadySessions.add(sessionId);
+        sessionState.exited = false;
+
+        // Send resize
+        const cols = term.cols;
+        const rows = term.rows;
+        if (cols >= 10 && rows >= 2) {
+          await invoke("pty_resize", { id: sessionId, cols, rows }).catch(() => {});
+        }
+      } catch (err) {
+        console.error("Failed to start shell:", err);
+        term.writeln(`\r\n\x1b[31mFailed to start shell: ${err}\x1b[0m`);
+      } finally {
+        sessionState.restarting = false;
+      }
+    };
+
     // Handle user input
     const onDataDisposable = term.onData((data) => {
       if (!ptyReadySessions.has(sessionId)) return;
@@ -380,9 +406,15 @@ export function TerminalPane({
     // Listen for PTY exit events
     const unlistenExit = listen<PtyExitEvent>("pty-exit", (event) => {
       if (event.payload.id === sessionId && mountState.isMounted) {
-        // Don't auto-close sessions that ran a command - keep scrollback visible
-        // User can manually close or reload. Only auto-close shell sessions.
-        if (!commandRef.current) {
+        // Mark session as not ready to prevent further write attempts
+        ptyReadySessions.delete(sessionId);
+        sessionState.exited = true;
+
+        // For command sessions (claude/codex), fall back to shell automatically
+        if (commandRef.current) {
+          fallbackToShell();
+        } else {
+          // Plain shell session ended - close the tab
           onExitRef.current?.();
         }
       }
