@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.24.5
+
+### Patch Changes
+
+- fix(windows): 修复 Windows 平台路径和 shell 兼容性问题
+
+  - 使用 PowerShell 替代 /bin/zsh 进行 shell spawning
+  - 使用 taskkill 替代 libc::kill 实现跨平台进程终止
+
+  Fixes #16
+
 ## 0.24.4
 
 ### Patch Changes
