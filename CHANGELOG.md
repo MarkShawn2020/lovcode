@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.3
+
+### Patch Changes
+
+- fix(settings): 简化 npm 安装逻辑并恢复 loadVersionInfo 行为
+
 ## 0.24.2
 
 ### Patch Changes
