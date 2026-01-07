@@ -126,14 +126,22 @@ export function ClaudeCodeVersionSection() {
         }
       });
 
+      console.log("[DEBUG] Starting install...");
       await invoke<string>("install_claude_code_version", {
         version: selectedVersion,
         installType: selectedInstallType,
       });
+      console.log("[DEBUG] Install completed, loading version info...");
 
       const typeLabel = INSTALL_TYPES.find((t) => t.value === selectedInstallType)?.label;
       setSuccess(`Successfully installed Claude Code ${selectedVersion} (${typeLabel})`);
-      await loadVersionInfo();
+
+      try {
+        await loadVersionInfo();
+        console.log("[DEBUG] Version info loaded successfully");
+      } catch (loadError) {
+        console.error("[DEBUG] Failed to load version info:", loadError);
+      }
     } catch (e) {
       setError(String(e));
     } finally {
