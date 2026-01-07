@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.4
+
+### Patch Changes
+
+- fix: Windows 平台兼容性 - 使用 cfg 条件编译处理进程取消
+
 ## 0.24.3
 
 ### Patch Changes
