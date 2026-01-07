@@ -1,19 +1,16 @@
 /**
- * Skill Detail Page - Route-based component
- *
- * Fetches skill data based on URL param and renders detail view.
- * Supports both installed skills and marketplace templates.
+ * Skill Detail Page
  * - /skills/foo → installed skill
  * - /skills/foo?source=marketplace → marketplace template
  */
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useQuery } from "@tanstack/react-query";
-import type { LocalSkill, TemplateComponent, TemplatesCatalog } from "../types";
-import { TemplateDetailView } from "../views/Marketplace/TemplateDetailView";
-import { LoadingState } from "../components/config";
+import type { LocalSkill, TemplateComponent, TemplatesCatalog } from "../../types";
+import { TemplateDetailView } from "../../views/Marketplace";
+import { FeaturesLayout } from "../../views/Features";
+import { LoadingState } from "../../components/config";
 
-/** Convert LocalSkill to TemplateComponent */
 function skillToTemplate(skill: LocalSkill): TemplateComponent {
   return {
     name: skill.name,
@@ -29,13 +26,12 @@ function skillToTemplate(skill: LocalSkill): TemplateComponent {
   };
 }
 
-export function SkillDetailPage() {
+export default function SkillDetailPage() {
   const { name } = useParams<{ name: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const isMarketplace = searchParams.get("source") === "marketplace";
 
-  // Fetch from local skills
   const { data: localSkill, isLoading: localLoading } = useQuery({
     queryKey: ["skill", name],
     queryFn: async () => {
@@ -45,7 +41,6 @@ export function SkillDetailPage() {
     enabled: !!name && !isMarketplace,
   });
 
-  // Fetch from marketplace catalog
   const { data: marketplaceTemplate, isLoading: marketplaceLoading } = useQuery({
     queryKey: ["marketplaceSkill", name],
     queryFn: async () => {
@@ -58,49 +53,59 @@ export function SkillDetailPage() {
   const isLoading = isMarketplace ? marketplaceLoading : localLoading;
 
   if (isLoading) {
-    return <LoadingState message={`Loading ${name}...`} />;
+    return (
+      <FeaturesLayout feature="skills">
+        <LoadingState message={`Loading ${name}...`} />
+      </FeaturesLayout>
+    );
   }
 
-  // For marketplace, show template detail
   if (isMarketplace) {
     if (!marketplaceTemplate) {
       return (
+        <FeaturesLayout feature="skills">
+          <div className="p-6">
+            <p className="text-destructive">Template "{name}" not found in marketplace</p>
+            <button onClick={() => navigate("/skills")} className="mt-2 text-primary hover:underline">
+              ← Back to Skills
+            </button>
+          </div>
+        </FeaturesLayout>
+      );
+    }
+    return (
+      <FeaturesLayout feature="skills">
+        <TemplateDetailView
+          template={marketplaceTemplate}
+          category="skills"
+          onBack={() => navigate("/skills")}
+        />
+      </FeaturesLayout>
+    );
+  }
+
+  if (!localSkill) {
+    return (
+      <FeaturesLayout feature="skills">
         <div className="p-6">
-          <p className="text-destructive">Template "{name}" not found in marketplace</p>
+          <p className="text-destructive">Skill "{name}" not found</p>
           <button onClick={() => navigate("/skills")} className="mt-2 text-primary hover:underline">
             ← Back to Skills
           </button>
         </div>
-      );
-    }
-    return (
-      <TemplateDetailView
-        template={marketplaceTemplate}
-        category="skills"
-        onBack={() => navigate("/skills")}
-      />
-    );
-  }
-
-  // For local, show installed skill detail
-  if (!localSkill) {
-    return (
-      <div className="p-6">
-        <p className="text-destructive">Skill "{name}" not found</p>
-        <button onClick={() => navigate("/skills")} className="mt-2 text-primary hover:underline">
-          ← Back to Skills
-        </button>
-      </div>
+      </FeaturesLayout>
     );
   }
 
   return (
-    <TemplateDetailView
-      template={skillToTemplate(localSkill)}
-      category="skills"
-      onBack={() => navigate("/skills")}
-      localPath={localSkill.path}
-      isInstalled={true}
-    />
+    <FeaturesLayout feature="skills">
+      <TemplateDetailView
+        template={skillToTemplate(localSkill)}
+        category="skills"
+        onBack={() => navigate("/skills")}
+        localPath={localSkill.path}
+        isInstalled={true}
+      />
+    </FeaturesLayout>
   );
 }

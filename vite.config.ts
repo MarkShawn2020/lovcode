@@ -2,6 +2,7 @@ import path from "path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import Pages from "vite-plugin-pages";
 import { LovinspPlugin } from 'lovinsp';
 import pkg from './package.json';
 
@@ -20,7 +21,14 @@ export default defineConfig(async () => ({
         path.resolve(__dirname, "src/main.tsx"),
       ],
     }),
-    react(), tailwindcss()],
+    Pages({
+      dirs: "src/pages",
+      extensions: ["tsx"],
+      routeStyle: "next",
+    }),
+    react(),
+    tailwindcss(),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
