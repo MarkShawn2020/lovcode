@@ -2,12 +2,14 @@
  * Skill Detail Page - Route-based component
  *
  * Fetches skill data based on URL param and renders detail view.
- * This is a proper route component - URL is the source of truth.
+ * Supports both installed skills and marketplace templates.
+ * - /skills/foo → installed skill
+ * - /skills/foo?source=marketplace → marketplace template
  */
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { useQuery } from "@tanstack/react-query";
-import type { LocalSkill, TemplateComponent } from "../types";
+import type { LocalSkill, TemplateComponent, TemplatesCatalog } from "../types";
 import { TemplateDetailView } from "../views/Marketplace/TemplateDetailView";
 import { LoadingState } from "../components/config";
 
@@ -29,24 +31,59 @@ function skillToTemplate(skill: LocalSkill): TemplateComponent {
 
 export function SkillDetailPage() {
   const { name } = useParams<{ name: string }>();
+  const [searchParams] = useSearchParams();
   const navigate = useNavigate();
+  const isMarketplace = searchParams.get("source") === "marketplace";
 
-  const { data: skill, isLoading, error } = useQuery({
+  // Fetch from local skills
+  const { data: localSkill, isLoading: localLoading } = useQuery({
     queryKey: ["skill", name],
     queryFn: async () => {
       const skills = await invoke<LocalSkill[]>("list_local_skills");
-      const found = skills.find(s => s.name === name);
-      if (!found) throw new Error(`Skill "${name}" not found`);
-      return found;
+      return skills.find(s => s.name === name) ?? null;
     },
-    enabled: !!name,
+    enabled: !!name && !isMarketplace,
   });
+
+  // Fetch from marketplace catalog
+  const { data: marketplaceTemplate, isLoading: marketplaceLoading } = useQuery({
+    queryKey: ["marketplaceSkill", name],
+    queryFn: async () => {
+      const catalog = await invoke<TemplatesCatalog>("get_templates_catalog");
+      return catalog.skills?.find(t => t.name === name) ?? null;
+    },
+    enabled: !!name && isMarketplace,
+  });
+
+  const isLoading = isMarketplace ? marketplaceLoading : localLoading;
 
   if (isLoading) {
     return <LoadingState message={`Loading ${name}...`} />;
   }
 
-  if (error || !skill) {
+  // For marketplace, show template detail
+  if (isMarketplace) {
+    if (!marketplaceTemplate) {
+      return (
+        <div className="p-6">
+          <p className="text-destructive">Template "{name}" not found in marketplace</p>
+          <button onClick={() => navigate("/skills")} className="mt-2 text-primary hover:underline">
+            ← Back to Skills
+          </button>
+        </div>
+      );
+    }
+    return (
+      <TemplateDetailView
+        template={marketplaceTemplate}
+        category="skills"
+        onBack={() => navigate("/skills")}
+      />
+    );
+  }
+
+  // For local, show installed skill detail
+  if (!localSkill) {
     return (
       <div className="p-6">
         <p className="text-destructive">Skill "{name}" not found</p>
@@ -59,10 +96,10 @@ export function SkillDetailPage() {
 
   return (
     <TemplateDetailView
-      template={skillToTemplate(skill)}
+      template={skillToTemplate(localSkill)}
       category="skills"
       onBack={() => navigate("/skills")}
-      localPath={skill.path}
+      localPath={localSkill.path}
       isInstalled={true}
     />
   );

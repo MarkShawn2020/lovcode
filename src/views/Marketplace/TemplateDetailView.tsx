@@ -164,54 +164,36 @@ export function TemplateDetailView({
         >
           <span>←</span> {categoryInfo?.label}
         </button>
-        {/* Title row with dropdown menu */}
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="font-serif text-2xl font-semibold text-ink">{template.name}</h1>
-              {installed && (
-                <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 text-primary">
-                  Installed
-                </span>
-              )}
-            </div>
-            {/* Description */}
-            {template.description && (
-              <p className="text-muted-foreground mt-2">{template.description}</p>
-            )}
-            {/* Metadata row */}
-            <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground flex-wrap">
-              <span className="flex items-center gap-1.5">
-                {categoryInfo?.icon && <categoryInfo.icon className="w-4 h-4" />}{" "}
-                {categoryInfo?.label}
+        {/* Title row: title + badges + actions */}
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2 flex-wrap min-w-0">
+            <h1 className="font-serif text-2xl font-semibold text-ink truncate">{template.name}</h1>
+            {installed && (
+              <span className="text-xs px-2 py-0.5 rounded-full border border-primary/30 text-primary shrink-0">
+                Installed
               </span>
-              {template.author && (
-                <>
-                  <span>•</span>
-                  <span>by {template.author}</span>
-                </>
-              )}
-              {template.downloads != null && (
-                <>
-                  <span>•</span>
-                  <span>↓ {template.downloads}</span>
-                </>
-              )}
-            </div>
+            )}
           </div>
-          {/* Three-dot menu */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button className="p-2 rounded-xl hover:bg-card-alt text-muted-foreground hover:text-ink">
-                <DotsHorizontalIcon className="w-5 h-5" />
+          {/* Action buttons */}
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Primary Install button when not installed */}
+            {!installed && (
+              <button
+                onClick={handleInstall}
+                disabled={installing}
+                className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-50"
+              >
+                {installing ? "Installing..." : "Install"}
               </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              {!installed && (
-                <DropdownMenuItem onClick={handleInstall} disabled={installing}>
-                  {installing ? "Installing..." : "Install"}
-                </DropdownMenuItem>
-              )}
+            )}
+            {/* Three-dot menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button className="p-2 rounded-xl hover:bg-card-alt text-muted-foreground hover:text-ink">
+                  <DotsHorizontalIcon className="w-5 h-5" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
               {localPath && (
                 <DropdownMenuItem onClick={() => invoke("open_in_editor", { path: localPath })}>
                   <Pencil1Icon className="w-4 h-4 mr-2" />
@@ -252,6 +234,30 @@ export function TemplateDetailView({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          </div>
+        </div>
+        {/* Description */}
+        {template.description && (
+          <p className="text-muted-foreground mt-3">{template.description}</p>
+        )}
+        {/* Metadata row */}
+        <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground flex-wrap">
+          <span className="flex items-center gap-1.5">
+            {categoryInfo?.icon && <categoryInfo.icon className="w-4 h-4" />}{" "}
+            {categoryInfo?.label}
+          </span>
+          {template.author && (
+            <>
+              <span>•</span>
+              <span>by {template.author}</span>
+            </>
+          )}
+          {template.downloads != null && (
+            <>
+              <span>•</span>
+              <span>↓ {template.downloads}</span>
+            </>
+          )}
         </div>
         {error && (
           <div className="mt-4 p-3 bg-primary/10 text-primary rounded-xl text-sm">{error}</div>

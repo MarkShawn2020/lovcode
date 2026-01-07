@@ -275,7 +275,7 @@ export function AppShell() {
           {first === "skills" && !second && (
             <SkillsView
               onSelectTemplate={(template) => navigate(`/skills/${encodeURIComponent(template.name)}`)}
-              onMarketplaceSelect={() => navigate(`/marketplace/skills`)}
+              onMarketplaceSelect={(template) => navigate(`/skills/${encodeURIComponent(template.name)}?source=marketplace`)}
             />
           )}
           {/* Skill detail is handled by SkillDetailPage route */}
