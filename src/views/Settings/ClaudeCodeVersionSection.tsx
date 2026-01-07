@@ -38,8 +38,8 @@ export function ClaudeCodeVersionSection() {
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const installGenRef = useRef(0); // Track install generation to filter stale events
 
-  const loadVersionInfo = async () => {
-    setLoading(true);
+  const loadVersionInfo = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     setError(null);
     try {
       const info = await invoke<ClaudeCodeVersionInfo>("get_claude_code_version_info");
@@ -54,7 +54,7 @@ export function ClaudeCodeVersionSection() {
     } catch (e) {
       setError(String(e));
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 
@@ -126,22 +126,14 @@ export function ClaudeCodeVersionSection() {
         }
       });
 
-      console.log("[DEBUG] Starting install...");
       await invoke<string>("install_claude_code_version", {
         version: selectedVersion,
         installType: selectedInstallType,
       });
-      console.log("[DEBUG] Install completed, loading version info...");
 
       const typeLabel = INSTALL_TYPES.find((t) => t.value === selectedInstallType)?.label;
       setSuccess(`Successfully installed Claude Code ${selectedVersion} (${typeLabel})`);
-
-      try {
-        await loadVersionInfo();
-        console.log("[DEBUG] Version info loaded successfully");
-      } catch (loadError) {
-        console.error("[DEBUG] Failed to load version info:", loadError);
-      }
+      await loadVersionInfo(false); // Don't show loading state to avoid UI flicker
     } catch (e) {
       setError(String(e));
     } finally {
