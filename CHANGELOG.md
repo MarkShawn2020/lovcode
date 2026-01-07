@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.24.0
+
+### Minor Changes
+
+- feat: 文件系统路由架构重构
+
+  - 迁移到 vite-plugin-pages 实现文件系统路由
+  - Settings 拆分为独立子页面（LLM、环境变量、上下文文件、版本）
+  - 统一各 View 组件结构
+  - 优化导航侧边栏
+
 ## 0.23.8
 
 ### Patch Changes
