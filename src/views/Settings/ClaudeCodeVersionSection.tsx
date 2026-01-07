@@ -20,7 +20,7 @@ function formatDownloads(n: number): string {
 }
 
 const INSTALL_TYPES: { value: ClaudeCodeInstallType; label: string; desc: string }[] = [
-  { value: "native", label: "Native", desc: "Recommended, no dependencies" },
+  { value: "native", label: "Native", desc: "No dependencies, installation may be slow (~2min)" },
   { value: "npm", label: "NPM", desc: "Requires Node.js" },
 ];
 

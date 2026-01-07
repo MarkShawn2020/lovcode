@@ -14,7 +14,7 @@ export function MarketplaceLayout({ children, currentCategory, onCategoryClick }
   const items = useMemo(() =>
     TEMPLATE_CATEGORIES
       .filter(c => c.key !== "settings")
-      .map(c => ({ key: c.key, label: c.label, icon: c.icon })),
+      .map(c => ({ key: c.key, label: c.label })),
     []
   );
 

@@ -243,7 +243,6 @@ export function TemplateDetailView({
         {/* Metadata row */}
         <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground flex-wrap">
           <span className="flex items-center gap-1.5">
-            {categoryInfo?.icon && <categoryInfo.icon className="w-4 h-4" />}{" "}
             {categoryInfo?.label}
           </span>
           {template.author && (
