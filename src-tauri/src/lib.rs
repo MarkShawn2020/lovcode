@@ -4864,6 +4864,278 @@ fn update_disabled_settings_env(env_key: String, env_value: String) -> Result<()
     Ok(())
 }
 
+// ============================================================================
+// Settings Field Update Commands
+// ============================================================================
+
+#[tauri::command]
+fn update_settings_field(field: String, value: Value) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.insert(field, value);
+        obj.remove("_lovcode_disabled_env");
+    }
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn update_settings_permission_field(field: String, value: Value) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+
+    if !settings.get("permissions").and_then(|v| v.as_object()).is_some() {
+        settings["permissions"] = serde_json::json!({});
+    }
+    settings["permissions"][&field] = value;
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn add_permission_directory(path: String) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+
+    if !settings.get("permissions").and_then(|v| v.as_object()).is_some() {
+        settings["permissions"] = serde_json::json!({});
+    }
+
+    let dirs = settings["permissions"]
+        .get("additionalDirectories")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+
+    let path_val = Value::String(path.clone());
+    if !dirs.contains(&path_val) {
+        let mut new_dirs = dirs;
+        new_dirs.push(path_val);
+        settings["permissions"]["additionalDirectories"] = Value::Array(new_dirs);
+    }
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn remove_permission_directory(path: String) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        return Ok(());
+    };
+
+    if let Some(dirs) = settings["permissions"]
+        .get_mut("additionalDirectories")
+        .and_then(|v| v.as_array_mut())
+    {
+        dirs.retain(|v| v.as_str() != Some(&path));
+    }
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_plugin(plugin_id: String, enabled: bool) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        serde_json::json!({})
+    };
+
+    if !settings.get("enabledPlugins").and_then(|v| v.as_object()).is_some() {
+        settings["enabledPlugins"] = serde_json::json!({});
+    }
+    settings["enabledPlugins"][&plugin_id] = Value::Bool(enabled);
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// Disabled hooks storage path
+fn get_disabled_hooks_path() -> std::path::PathBuf {
+    get_lovstudio_dir().join("disabled_hooks.json")
+}
+
+fn load_disabled_hooks() -> Result<Value, String> {
+    let path = get_disabled_hooks_path();
+    if path.exists() {
+        let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())
+    } else {
+        Ok(serde_json::json!({}))
+    }
+}
+
+fn save_disabled_hooks(disabled_hooks: &Value) -> Result<(), String> {
+    let path = get_disabled_hooks_path();
+    let output = serde_json::to_string_pretty(disabled_hooks).map_err(|e| e.to_string())?;
+    fs::write(&path, output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// Generate a unique key for a hook based on its content
+fn get_hook_content_key(hook: &Value) -> String {
+    // Use command or prompt as the key, with type prefix for uniqueness
+    let hook_type = hook.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
+    let content = hook
+        .get("command")
+        .or_else(|| hook.get("prompt"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("");
+    format!("{}:{}", hook_type, content)
+}
+
+#[tauri::command]
+fn toggle_hook_item(
+    event_type: String,
+    matcher_index: usize,
+    hook_index: usize,
+    disabled: bool,
+) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        return Err("No settings.json found".to_string());
+    };
+
+    let mut disabled_hooks = load_disabled_hooks()?;
+
+    if disabled {
+        // Disable: Remove from settings.json and backup to disabled_hooks.json
+        // First get matcher info (immutable borrow)
+        let matcher = settings
+            .get("hooks")
+            .and_then(|h| h.get(&event_type))
+            .and_then(|arr| arr.get(matcher_index))
+            .and_then(|m| m.get("matcher"))
+            .cloned()
+            .unwrap_or(Value::String("".to_string()));
+
+        // Then get mutable borrow
+        let hooks_arr = settings
+            .get_mut("hooks")
+            .and_then(|h| h.get_mut(&event_type))
+            .and_then(|arr| arr.get_mut(matcher_index))
+            .and_then(|m| m.get_mut("hooks"))
+            .and_then(|hooks| hooks.as_array_mut())
+            .ok_or("Hook not found")?;
+
+        if hook_index >= hooks_arr.len() {
+            return Err("Hook index out of bounds".to_string());
+        }
+
+        // Backup the hook before removing
+        let removed_hook = hooks_arr.remove(hook_index);
+        let hook_key = get_hook_content_key(&removed_hook);
+
+        // Store in disabled_hooks with context for restoration
+        if !disabled_hooks.get(&event_type).is_some() {
+            disabled_hooks[&event_type] = serde_json::json!([]);
+        }
+
+        // Store as array to preserve order and allow multiple disabled hooks
+        if let Some(arr) = disabled_hooks[&event_type].as_array_mut() {
+            arr.push(serde_json::json!({
+                "matcher": matcher,
+                "hook": removed_hook,
+                "key": hook_key
+            }));
+        }
+
+        save_disabled_hooks(&disabled_hooks)?;
+    } else {
+        // Enable: Restore from disabled_hooks.json to settings.json
+        // First, get the hook to restore based on index in disabled list
+        let hooks_arr = settings
+            .get_mut("hooks")
+            .and_then(|h| h.get_mut(&event_type))
+            .and_then(|arr| arr.get_mut(matcher_index))
+            .and_then(|m| m.get_mut("hooks"))
+            .and_then(|hooks| hooks.as_array_mut())
+            .ok_or("Hook location not found")?;
+
+        // Get the hook_index-th item from disabled hooks for this event type
+        let disabled_arr = disabled_hooks
+            .get_mut(&event_type)
+            .and_then(|v| v.as_array_mut())
+            .ok_or("No disabled hooks for this event type")?;
+
+        if hook_index >= disabled_arr.len() {
+            return Err("Disabled hook index out of bounds".to_string());
+        }
+
+        let backup = disabled_arr.remove(hook_index);
+        let hook_data = backup.get("hook").ok_or("Invalid backup data")?.clone();
+
+        // Insert at the end of the active hooks
+        hooks_arr.push(hook_data);
+
+        save_disabled_hooks(&disabled_hooks)?;
+    }
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn get_disabled_hooks() -> Result<Value, String> {
+    load_disabled_hooks()
+}
+
 #[derive(Serialize)]
 struct ConnectionTestResult {
     ok: bool,
@@ -6369,6 +6641,13 @@ pub fn run() {
             disable_settings_env,
             enable_settings_env,
             update_disabled_settings_env,
+            update_settings_field,
+            update_settings_permission_field,
+            add_permission_directory,
+            remove_permission_directory,
+            toggle_plugin,
+            toggle_hook_item,
+            get_disabled_hooks,
             test_anthropic_connection,
             test_openai_connection,
             test_claude_cli,
