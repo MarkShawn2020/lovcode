@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Button } from "../../components/ui/button";
+import { Progress } from "../../components/ui/progress";
 import {
   Select,
   SelectContent,
@@ -30,6 +32,11 @@ export function ClaudeCodeVersionSection() {
   const [selectedInstallType, setSelectedInstallType] = useState<ClaudeCodeInstallType>("native");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [installLogs, setInstallLogs] = useState<string[]>([]);
+  const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
+  const logsEndRef = useRef<HTMLDivElement>(null);
+  const unlistenRef = useRef<UnlistenFn | null>(null);
+  const installGenRef = useRef(0); // Track install generation to filter stale events
 
   const loadVersionInfo = async () => {
     setLoading(true);
@@ -55,20 +62,101 @@ export function ClaudeCodeVersionSection() {
     loadVersionInfo();
   }, []);
 
+  // Auto-scroll to latest log
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [installLogs]);
+
+  // Cleanup listener on unmount
+  useEffect(() => {
+    return () => {
+      unlistenRef.current?.();
+    };
+  }, []);
+
   const handleInstall = async () => {
+    // Clean up any existing listener first
+    unlistenRef.current?.();
+    unlistenRef.current = null;
+
+    // Increment generation to invalidate any stale events
+    const currentGen = ++installGenRef.current;
+
     setInstalling(true);
     setError(null);
     setSuccess(null);
+    setInstallLogs([]);
+    setDownloadProgress(null);
+
     try {
+      // Listen for progress events, filtering by generation
+      unlistenRef.current = await listen<string>("cc-install-progress", (event) => {
+        // Only process events for the current install generation
+        if (installGenRef.current === currentGen) {
+          const payload = event.payload;
+
+          // Check if this is a progress update (contains percentage)
+          const progressMatch = payload.match(/(\d+(?:\.\d+)?)\s*%/);
+          if (progressMatch) {
+            const percent = parseFloat(progressMatch[1]);
+            setDownloadProgress(percent);
+            return; // Don't add to logs
+          }
+
+          // Reset progress when download completes
+          if (payload.includes("Setting up") || payload.includes("Done")) {
+            setDownloadProgress(null);
+          }
+
+          if (payload.startsWith("\r")) {
+            // Carriage return - replace last line (progress update)
+            setInstallLogs((prev) => {
+              const newLogs = [...prev];
+              if (newLogs.length > 0) {
+                newLogs[newLogs.length - 1] = payload.slice(1);
+              } else {
+                newLogs.push(payload.slice(1));
+              }
+              return newLogs;
+            });
+          } else {
+            // Normal line - append
+            setInstallLogs((prev) => [...prev, payload]);
+          }
+        }
+      });
+
       await invoke<string>("install_claude_code_version", {
         version: selectedVersion,
         installType: selectedInstallType,
       });
+
       const typeLabel = INSTALL_TYPES.find((t) => t.value === selectedInstallType)?.label;
       setSuccess(`Successfully installed Claude Code ${selectedVersion} (${typeLabel})`);
       await loadVersionInfo();
     } catch (e) {
       setError(String(e));
+    } finally {
+      unlistenRef.current?.();
+      unlistenRef.current = null;
+      setInstalling(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    // Increment generation to invalidate any pending events
+    installGenRef.current++;
+
+    // Clean up listener immediately
+    unlistenRef.current?.();
+    unlistenRef.current = null;
+
+    try {
+      await invoke("cancel_claude_code_install");
+      setInstallLogs((prev) => [...prev, "[Cancelled by user]"]);
+      setError("Installation cancelled");
+    } catch (e) {
+      console.error("Failed to cancel:", e);
     } finally {
       setInstalling(false);
     }
@@ -188,10 +276,20 @@ export function ClaudeCodeVersionSection() {
             </SelectContent>
           </Select>
 
-          {/* Install button */}
-          <Button onClick={handleInstall} disabled={!canInstall} className="shrink-0">
-            {getButtonLabel()}
-          </Button>
+          {/* Install/Cancel button */}
+          {installing ? (
+            <Button
+              onClick={handleCancel}
+              variant="ghost"
+              className="shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted"
+            >
+              Cancel
+            </Button>
+          ) : (
+            <Button onClick={handleInstall} disabled={!canInstall} className="shrink-0">
+              {getButtonLabel()}
+            </Button>
+          )}
         </div>
 
         {/* Install type hint */}
@@ -202,6 +300,32 @@ export function ClaudeCodeVersionSection() {
           )}
         </p>
       </div>
+
+      {/* Download progress bar */}
+      {downloadProgress !== null && (
+        <div className="space-y-1">
+          <div className="flex justify-between text-[10px] text-muted-foreground">
+            <span>Downloading...</span>
+            <span>{downloadProgress.toFixed(1)}%</span>
+          </div>
+          <Progress value={downloadProgress} className="h-2" />
+        </div>
+      )}
+
+      {/* Install progress logs */}
+      {installLogs.length > 0 && (
+        <div className="bg-muted/50 rounded-lg p-2 max-h-32 overflow-y-auto font-mono text-[10px] text-muted-foreground">
+          {installLogs.map((log, i) => (
+            <div
+              key={i}
+              className={log.startsWith("[error]") || log.startsWith("[Cancelled") ? "text-amber-600" : ""}
+            >
+              {log}
+            </div>
+          ))}
+          <div ref={logsEndRef} />
+        </div>
+      )}
 
       {/* Auto-updater toggle */}
       {!isNotInstalled && (

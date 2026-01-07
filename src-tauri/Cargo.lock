@@ -2424,9 +2424,9 @@ dependencies = [
 
 [[package]]
 name = "libc"
-version = "0.2.178"
+version = "0.2.179"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37c93d8daa9d8a012fd8ab92f088405fb202ea0b6ab73ee2482ae66af4f42091"
+checksum = "c5a2d376baa530d1238d133232d15e239abad80d05838b4b59354e5268af431f"
 
 [[package]]
 name = "libflate"
@@ -2523,6 +2523,7 @@ dependencies = [
  "dirs",
  "jieba-rs",
  "lazy_static",
+ "libc",
  "notify",
  "objc",
  "portable-pty",
@@ -2530,6 +2531,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "shell-escape",
  "tantivy",
  "tauri",
  "tauri-build",
@@ -4495,6 +4497,12 @@ dependencies = [
  "lazy_static",
  "libc",
 ]
+
+[[package]]
+name = "shell-escape"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45bb67a18fa91266cc7807181f62f9178a6873bfad7dc788c42e6430db40184f"
 
 [[package]]
 name = "shell-words"

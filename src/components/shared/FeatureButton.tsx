@@ -1,5 +1,4 @@
 import type { FeatureConfig } from "../../types";
-import { FEATURE_ICONS } from "../../constants";
 
 interface FeatureButtonProps {
   feature: FeatureConfig;
@@ -16,7 +15,6 @@ export function FeatureButton({
   statusIndicator,
   compact,
 }: FeatureButtonProps) {
-  const Icon = FEATURE_ICONS[feature.type];
   return (
     <button
       onClick={onClick}
@@ -28,7 +26,6 @@ export function FeatureButton({
             : "text-muted-foreground/60 hover:bg-card-alt"
       }`}
     >
-      {Icon && <Icon className="w-5 h-5" />}
       <span className="text-sm flex-1">
         {feature.label}
         {!feature.available && <span className="ml-1.5 text-xs opacity-60">(TODO)</span>}

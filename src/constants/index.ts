@@ -1,57 +1,4 @@
-import {
-  HomeIcon,
-  ReaderIcon,
-  BookmarkIcon,
-  LightningBoltIcon,
-  GearIcon,
-  CodeIcon,
-  Component1Icon,
-  Link2Icon,
-  MixerHorizontalIcon,
-  CubeIcon,
-  ChatBubbleIcon,
-  TargetIcon,
-  LayersIcon,
-  PersonIcon,
-  DesktopIcon,
-  RowsIcon,
-  EnvelopeClosedIcon,
-  RocketIcon,
-  UpdateIcon,
-  FileTextIcon,
-} from "@radix-ui/react-icons";
-import type { FeatureType, FeatureConfig, TemplateCategory } from "../types";
-
-// ============================================================================
-// Feature Icons
-// ============================================================================
-
-export const FEATURE_ICONS: Record<
-  FeatureType | "home" | "knowledge" | "features" | "marketplace-menu" | "chat",
-  React.ComponentType<{ className?: string }>
-> = {
-  home: HomeIcon,
-  workspace: DesktopIcon,
-  knowledge: ReaderIcon,
-  "kb-reference": BookmarkIcon,
-  "kb-distill": LightningBoltIcon,
-  "basic-env": EnvelopeClosedIcon,
-  "basic-llm": RocketIcon,
-  "basic-version": UpdateIcon,
-  "basic-context": FileTextIcon,
-  settings: GearIcon,
-  statusline: RowsIcon,
-  commands: CodeIcon,
-  mcp: Component1Icon,
-  skills: TargetIcon,
-  hooks: Link2Icon,
-  "sub-agents": PersonIcon,
-  "output-styles": MixerHorizontalIcon,
-  marketplace: CubeIcon,
-  "marketplace-menu": CubeIcon,
-  features: LayersIcon,
-  chat: ChatBubbleIcon,
-};
+import type { FeatureConfig, TemplateCategory } from "../types";
 
 // ============================================================================
 // Features Configuration
@@ -167,6 +114,13 @@ export const FEATURES: FeatureConfig[] = [
     available: true,
     group: "config",
   },
+  {
+    type: "extensions",
+    label: "Extensions",
+    description: "Claude Code plugins",
+    available: true,
+    group: "config",
+  },
 ];
 
 // ============================================================================
@@ -189,14 +143,13 @@ export type SourceFilterId = (typeof SOURCE_FILTERS)[number]["id"];
 export const TEMPLATE_CATEGORIES: {
   key: TemplateCategory;
   label: string;
-  icon: React.ComponentType<{ className?: string }>;
 }[] = [
-  { key: "settings", label: "Settings", icon: GearIcon },
-  { key: "commands", label: "Commands", icon: LightningBoltIcon },
-  { key: "mcps", label: "MCPs", icon: Component1Icon },
-  { key: "skills", label: "Skills", icon: TargetIcon },
-  { key: "hooks", label: "Hooks", icon: Link2Icon },
-  { key: "agents", label: "Sub Agents", icon: PersonIcon },
-  { key: "output-styles", label: "Output Styles", icon: MixerHorizontalIcon },
-  { key: "statuslines", label: "Status Line", icon: RowsIcon },
+  { key: "settings", label: "Settings" },
+  { key: "commands", label: "Commands" },
+  { key: "mcps", label: "MCPs" },
+  { key: "skills", label: "Skills" },
+  { key: "hooks", label: "Hooks" },
+  { key: "agents", label: "Sub Agents" },
+  { key: "output-styles", label: "Output Styles" },
+  { key: "statuslines", label: "Status Line" },
 ];

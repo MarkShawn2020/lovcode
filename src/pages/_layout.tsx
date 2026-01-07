@@ -138,6 +138,7 @@ export default function RootLayout() {
       "workspace": "/workspace",
       "features": "/features",
       "marketplace": "/marketplace",
+      "extensions": "/extensions",
     };
     const path = routes[feature];
     if (path) {

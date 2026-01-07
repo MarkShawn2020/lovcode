@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { FeatureType, Project, Session, LocalCommand } from "../../types";
-import { FEATURES, FEATURE_ICONS } from "../../constants";
+import { FEATURES } from "../../constants";
 import { ActivityHeatmap, RecentActivity, QuickActions, FeaturedCarousel } from "../../components/home";
 import { useInvokeQuery } from "../../hooks";
 
@@ -123,41 +123,31 @@ export function Home({ onFeatureClick, onProjectClick, onSessionClick, onSearch,
               Features
             </h2>
             <div className="grid grid-cols-2 gap-2">
-              {FEATURES.map((feature) => {
-                const Icon = FEATURE_ICONS[feature.type];
-                return (
-                  <button
-                    key={feature.type}
-                    onClick={() => onFeatureClick(feature.type)}
-                    className={`flex items-center gap-2 p-3 rounded-xl border transition-all duration-200 ${
-                      feature.available
-                        ? "bg-background border-border/60 hover:border-primary hover:shadow-sm cursor-pointer"
-                        : "bg-muted/30 border-transparent cursor-default"
+              {FEATURES.map((feature) => (
+                <button
+                  key={feature.type}
+                  onClick={() => onFeatureClick(feature.type)}
+                  className={`p-3 rounded-xl border transition-all duration-200 text-left ${
+                    feature.available
+                      ? "bg-background border-border/60 hover:border-primary hover:shadow-sm cursor-pointer"
+                      : "bg-muted/30 border-transparent cursor-default"
+                  }`}
+                  disabled={!feature.available}
+                >
+                  <span
+                    className={`text-sm ${
+                      feature.available ? "text-foreground" : "text-muted-foreground/60"
                     }`}
-                    disabled={!feature.available}
                   >
-                    {Icon && (
-                      <Icon
-                        className={`w-5 h-5 ${
-                          feature.available ? "text-primary/80" : "text-muted-foreground/50"
-                        }`}
-                      />
-                    )}
-                    <span
-                      className={`text-sm ${
-                        feature.available ? "text-foreground" : "text-muted-foreground/60"
-                      }`}
-                    >
-                      {feature.label}
+                    {feature.label}
+                  </span>
+                  {!feature.available && (
+                    <span className="text-[10px] text-muted-foreground/50 italic ml-2">
+                      Soon
                     </span>
-                    {!feature.available && (
-                      <span className="text-[10px] text-muted-foreground/50 italic ml-auto">
-                        Soon
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+                  )}
+                </button>
+              ))}
             </div>
           </div>
         </div>

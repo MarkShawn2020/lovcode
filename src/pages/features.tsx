@@ -25,6 +25,7 @@ export default function FeaturesPage() {
       "workspace": "/workspace",
       "features": "/features",
       "marketplace": "/marketplace",
+      "extensions": "/extensions",
     };
     const path = routes[feature];
     if (path) navigate(path);

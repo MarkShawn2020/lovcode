@@ -106,6 +106,9 @@ static SEARCH_INDEX: Mutex<Option<SearchIndex>> = Mutex::new(None);
 static DISTILL_WATCH_ENABLED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(true);
 
+// Claude Code install process PID (for cancellation)
+static CC_INSTALL_PID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 struct SearchIndex {
     index: Index,
     schema: Schema,
@@ -4998,6 +5001,217 @@ fn toggle_plugin(plugin_id: String, enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
+// ============================================================================
+// Extensions Management
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct InstalledPlugin {
+    pub id: String,
+    pub name: String,
+    pub marketplace: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ExtensionMarketplace {
+    pub id: String,
+    pub name: String,
+    pub repo: Option<String>,
+    pub path: Option<String>,
+    pub is_official: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct MarketplacePlugin {
+    pub name: String,
+    pub description: Option<String>,
+    pub path: String,
+}
+
+#[tauri::command]
+fn list_installed_plugins() -> Result<Vec<InstalledPlugin>, String> {
+    let settings_path = get_claude_dir().join("settings.json");
+
+    if !settings_path.exists() {
+        return Ok(vec![]);
+    }
+
+    let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+    let settings: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    let mut plugins = vec![];
+
+    if let Some(enabled_plugins) = settings.get("enabledPlugins").and_then(|v| v.as_object()) {
+        for (id, enabled) in enabled_plugins {
+            let parts: Vec<&str> = id.split('@').collect();
+            let (name, marketplace) = if parts.len() >= 2 {
+                (parts[0].to_string(), parts[1..].join("@"))
+            } else {
+                (id.clone(), "unknown".to_string())
+            };
+
+            plugins.push(InstalledPlugin {
+                id: id.clone(),
+                name,
+                marketplace,
+                enabled: enabled.as_bool().unwrap_or(false),
+            });
+        }
+    }
+
+    Ok(plugins)
+}
+
+#[tauri::command]
+fn list_extension_marketplaces() -> Result<Vec<ExtensionMarketplace>, String> {
+    let settings_path = get_claude_dir().join("settings.json");
+
+    let mut marketplaces = vec![
+        ExtensionMarketplace {
+            id: "claude-plugins-official".to_string(),
+            name: "Claude Plugins Official".to_string(),
+            repo: Some("anthropics/claude-code".to_string()),
+            path: None,
+            is_official: true,
+        },
+    ];
+
+    if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        let settings: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+        if let Some(extra) = settings.get("extraKnownMarketplaces").and_then(|v| v.as_object()) {
+            for (id, config) in extra {
+                let repo = config
+                    .get("source")
+                    .and_then(|s| s.get("repo"))
+                    .and_then(|r| r.as_str())
+                    .map(|s| s.to_string());
+                let path = config
+                    .get("source")
+                    .and_then(|s| s.get("path"))
+                    .and_then(|p| p.as_str())
+                    .map(|s| s.to_string());
+
+                marketplaces.push(ExtensionMarketplace {
+                    id: id.clone(),
+                    name: id.clone(),
+                    repo,
+                    path,
+                    is_official: false,
+                });
+            }
+        }
+    }
+
+    Ok(marketplaces)
+}
+
+#[tauri::command]
+async fn fetch_marketplace_plugins(owner: String, repo: String, plugins_path: Option<String>) -> Result<Vec<MarketplacePlugin>, String> {
+    let path = plugins_path.unwrap_or_else(|| "plugins".to_string());
+    let url = format!(
+        "https://api.github.com/repos/{}/{}/contents/{}",
+        owner, repo, path
+    );
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(&url)
+        .header("User-Agent", "lovcode")
+        .header("Accept", "application/vnd.github.v3+json")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch: {}", e))?;
+
+    if !response.status().is_success() {
+        return Err(format!("GitHub API error: {}", response.status()));
+    }
+
+    let items: Vec<Value> = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let mut plugins = vec![];
+
+    for item in items {
+        if item.get("type").and_then(|t| t.as_str()) == Some("dir") {
+            let name = item
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            let path = item
+                .get("path")
+                .and_then(|p| p.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            if !name.is_empty() && !name.starts_with('.') {
+                plugins.push(MarketplacePlugin {
+                    name: name.clone(),
+                    description: None,
+                    path,
+                });
+            }
+        }
+    }
+
+    Ok(plugins)
+}
+
+#[tauri::command]
+async fn install_extension(plugin_id: String, marketplace: Option<String>) -> Result<String, String> {
+    let full_id = if let Some(mkt) = marketplace {
+        format!("{}@{}", plugin_id, mkt)
+    } else {
+        plugin_id
+    };
+
+    let command = format!("claude plugin install {}", shell_escape::escape(full_id.into()));
+    let home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .to_string();
+
+    exec_shell_command(command, home).await
+}
+
+#[tauri::command]
+async fn uninstall_extension(plugin_id: String) -> Result<String, String> {
+    let command = format!("claude plugin uninstall {}", shell_escape::escape(plugin_id.into()));
+    let home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .to_string();
+
+    exec_shell_command(command, home).await
+}
+
+#[tauri::command]
+async fn add_extension_marketplace(source: String) -> Result<String, String> {
+    let command = format!("claude plugin marketplace add {}", shell_escape::escape(source.into()));
+    let home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .to_string();
+
+    exec_shell_command(command, home).await
+}
+
+#[tauri::command]
+async fn remove_extension_marketplace(name: String) -> Result<String, String> {
+    let command = format!("claude plugin marketplace remove {}", shell_escape::escape(name.into()));
+    let home = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .to_string_lossy()
+        .to_string();
+
+    exec_shell_command(command, home).await
+}
+
 // Disabled hooks storage path
 fn get_disabled_hooks_path() -> std::path::PathBuf {
     get_lovstudio_dir().join("disabled_hooks.json")
@@ -5503,13 +5717,19 @@ async fn get_claude_code_version_info() -> Result<ClaudeCodeVersionInfo, String>
 }
 
 #[tauri::command]
-async fn install_claude_code_version(version: String, install_type: Option<String>) -> Result<String, String> {
+async fn install_claude_code_version(
+    app: tauri::AppHandle,
+    version: String,
+    install_type: Option<String>,
+) -> Result<String, String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
     let is_specific_version = version != "latest";
     let install_type_str = install_type.unwrap_or_else(|| "native".to_string());
 
     let result = tauri::async_runtime::spawn_blocking(move || {
         let cmd = if install_type_str == "npm" {
-            // NPM installation (--force to overwrite existing native install)
             let package = if version == "latest" {
                 "@anthropic-ai/claude-code@latest".to_string()
             } else {
@@ -5517,33 +5737,173 @@ async fn install_claude_code_version(version: String, install_type: Option<Strin
             };
             format!("npm install -g --force {}", package)
         } else {
-            // Native installation (default)
+            // Clean up stale downloads that may cause "another process installing" error
+            if let Some(home) = dirs::home_dir() {
+                let downloads_dir = home.join(".claude/downloads");
+                if downloads_dir.exists() {
+                    let _ = app.emit("cc-install-progress", "Cleaning up stale downloads...");
+                    let _ = std::fs::remove_dir_all(&downloads_dir);
+                }
+            }
+
             let version_arg = if version == "latest" { "".to_string() } else { version };
-            format!("curl -fsSL https://claude.ai/install.sh | bash -s {}", version_arg)
+            let display_version = if version_arg.is_empty() { "latest" } else { &version_arg };
+            let _ = app.emit("cc-install-progress", format!("Installing Claude Code {}...", display_version));
+
+            // Download script, patch to show progress bar for binary download, then run
+            // Change 'curl -fsSL -o' to 'curl -fL --progress-bar -o' for visible download progress
+            format!(
+                r#"echo "Downloading install script..." && curl -fsSL https://claude.ai/install.sh | sed 's/"$binary_path" install/"$binary_path" install --force/' | sed 's/curl -fsSL -o/curl -fL --progress-bar -o/g' > /tmp/cc-install.sh && echo "Downloading Claude Code (~170MB)..." && CI=1 bash /tmp/cc-install.sh {} </dev/null && echo "Done!" || echo "Installation failed"; rm -f /tmp/cc-install.sh"#,
+                version_arg
+            )
         };
 
-        // Use user's interactive login shell to get proper PATH (nvm, etc.)
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string());
-        let output = std::process::Command::new(&shell)
-            .args(["-ilc", &cmd])
-            .output()
-            .map_err(|e| format!("Failed to run install command: {}", e))?;
+        // Use bash directly without -il to avoid slow shell startup
+        println!("[DEBUG] cmd={}", cmd);
 
-        if output.status.success() {
-            Ok(String::from_utf8_lossy(&output.stdout).to_string())
+        let mut child = Command::new("/bin/bash")
+            .args(["-c", &cmd])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn: {}", e))?;
+
+        // Store PID for cancellation support
+        CC_INSTALL_PID.store(child.id(), std::sync::atomic::Ordering::SeqCst);
+        println!("[DEBUG] Child spawned, pid={}", child.id());
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+
+        // Read stdout in a thread - use byte reading to capture progress bar updates
+        let app_clone = app.clone();
+        let stdout_handle = std::thread::spawn(move || {
+            use std::io::Read;
+            let mut output = String::new();
+            if let Some(mut out) = stdout {
+                let mut buf = [0u8; 1024];
+                let mut current_line = String::new();
+
+                while let Ok(n) = out.read(&mut buf) {
+                    if n == 0 { break; }
+
+                    let chunk = String::from_utf8_lossy(&buf[..n]);
+                    for ch in chunk.chars() {
+                        if ch == '\n' {
+                            // Complete line - emit if not debug
+                            if !current_line.starts_with("[DEBUG]") && !current_line.is_empty() {
+                                let _ = app_clone.emit("cc-install-progress", &current_line);
+                            }
+                            output.push_str(&current_line);
+                            output.push('\n');
+                            current_line.clear();
+                        } else if ch == '\r' {
+                            // Carriage return - emit current content as progress update
+                            if !current_line.is_empty() {
+                                let _ = app_clone.emit("cc-install-progress", format!("\r{}", &current_line));
+                            }
+                            current_line.clear();
+                        } else {
+                            current_line.push(ch);
+                        }
+                    }
+                }
+                // Emit any remaining content
+                if !current_line.is_empty() && !current_line.starts_with("[DEBUG]") {
+                    let _ = app_clone.emit("cc-install-progress", &current_line);
+                    output.push_str(&current_line);
+                }
+            }
+            output
+        });
+
+        // Read stderr in a thread - curl progress bar goes to stderr
+        let app_clone2 = app.clone();
+        let stderr_handle = std::thread::spawn(move || {
+            use std::io::Read;
+            let mut output = String::new();
+            if let Some(mut err) = stderr {
+                let mut buf = [0u8; 1024];
+                let mut current_line = String::new();
+
+                while let Ok(n) = err.read(&mut buf) {
+                    if n == 0 { break; }
+
+                    let chunk = String::from_utf8_lossy(&buf[..n]);
+                    output.push_str(&chunk);
+
+                    for ch in chunk.chars() {
+                        if ch == '\n' || ch == '\r' {
+                            if !current_line.is_empty() {
+                                // Check if this looks like progress (contains % or is mostly # symbols)
+                                let is_progress = current_line.contains('%') ||
+                                    current_line.chars().filter(|c| *c == '#').count() > 2;
+
+                                if is_progress {
+                                    // Progress update - use \r prefix to replace last line
+                                    let _ = app_clone2.emit("cc-install-progress", format!("\r{}", &current_line));
+                                } else {
+                                    // Real error - prefix with [error]
+                                    let _ = app_clone2.emit("cc-install-progress", format!("[error] {}", &current_line));
+                                }
+                            }
+                            current_line.clear();
+                        } else {
+                            current_line.push(ch);
+                        }
+                    }
+                }
+                // Emit any remaining content
+                if !current_line.is_empty() {
+                    let _ = app_clone2.emit("cc-install-progress", format!("[error] {}", &current_line));
+                }
+            }
+            output
+        });
+
+        let stdout_output = stdout_handle.join().unwrap_or_default();
+        let stderr_output = stderr_handle.join().unwrap_or_default();
+
+        let status = child.wait().map_err(|e| format!("Failed to wait: {}", e))?;
+
+        // Clear PID after process ends
+        CC_INSTALL_PID.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        if status.success() {
+            Ok(stdout_output)
         } else {
-            Err(String::from_utf8_lossy(&output.stderr).to_string())
+            Err(stderr_output)
         }
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    // Auto-disable autoupdater when installing a specific version
     if is_specific_version {
-        let _ = set_claude_code_autoupdater(true); // true = disabled
+        let _ = set_claude_code_autoupdater(true);
     }
 
     Ok(result)
+}
+
+#[tauri::command]
+fn cancel_claude_code_install() -> Result<(), String> {
+    let pid = CC_INSTALL_PID.load(std::sync::atomic::Ordering::SeqCst);
+    if pid == 0 {
+        return Err("No install process running".to_string());
+    }
+
+    // Use pkill to kill child processes first (curl, bash, etc.)
+    let _ = std::process::Command::new("pkill")
+        .args(["-9", "-P", &pid.to_string()])
+        .output();
+
+    // Kill the main process with SIGKILL
+    unsafe {
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+
+    CC_INSTALL_PID.store(0, std::sync::atomic::Ordering::SeqCst);
+    Ok(())
 }
 
 #[tauri::command]
@@ -6703,6 +7063,14 @@ pub fn run() {
             add_permission_directory,
             remove_permission_directory,
             toggle_plugin,
+            // Extensions management
+            list_installed_plugins,
+            list_extension_marketplaces,
+            fetch_marketplace_plugins,
+            install_extension,
+            uninstall_extension,
+            add_extension_marketplace,
+            remove_extension_marketplace,
             toggle_hook_item,
             get_disabled_hooks,
             delete_hook_item,
@@ -6718,6 +7086,7 @@ pub fn run() {
             list_reference_docs,
             get_claude_code_version_info,
             install_claude_code_version,
+            cancel_claude_code_install,
             set_claude_code_autoupdater,
             // PTY commands
             pty_create,

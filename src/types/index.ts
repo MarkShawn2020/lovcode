@@ -19,6 +19,7 @@ export type FeatureType =
   | "sub-agents"
   | "output-styles"
   | "marketplace"
+  | "extensions"
   | "kb-distill"
   | "kb-reference";
 
@@ -328,4 +329,29 @@ export interface ClaudeCodeVersionInfo {
   current_version: string | null;
   available_versions: VersionWithDownloads[];
   autoupdater_disabled: boolean;
+}
+
+// ============================================================================
+// Extensions Types
+// ============================================================================
+
+export interface InstalledPlugin {
+  id: string;
+  name: string;
+  marketplace: string;
+  enabled: boolean;
+}
+
+export interface ExtensionMarketplace {
+  id: string;
+  name: string;
+  repo: string | null;
+  path: string | null;
+  is_official: boolean;
+}
+
+export interface MarketplacePlugin {
+  name: string;
+  description: string | null;
+  path: string;
 }
