@@ -5737,8 +5737,7 @@ async fn install_claude_code_version(
             } else {
                 format!("@anthropic-ai/claude-code@{}", version)
             };
-            let _ = app.emit("cc-install-progress", format!("Installing {} via npm...", package));
-            format!("npm install -g --force {} && echo 'Done!'", package)
+            format!("npm install -g --force {}", package)
         } else {
             // Clean up stale downloads that may cause "another process installing" error
             if let Some(home) = dirs::home_dir() {

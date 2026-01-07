@@ -20,7 +20,7 @@ function formatDownloads(n: number): string {
 }
 
 const INSTALL_TYPES: { value: ClaudeCodeInstallType; label: string; desc: string }[] = [
-  { value: "native", label: "Native", desc: "No dependencies, installation may be slow (~2min)" },
+  { value: "native", label: "Native", desc: "Recommended, no dependencies" },
   { value: "npm", label: "NPM", desc: "Requires Node.js" },
 ];
 
@@ -38,8 +38,8 @@ export function ClaudeCodeVersionSection() {
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const installGenRef = useRef(0); // Track install generation to filter stale events
 
-  const loadVersionInfo = async (showLoading = true) => {
-    if (showLoading) setLoading(true);
+  const loadVersionInfo = async () => {
+    setLoading(true);
     setError(null);
     try {
       const info = await invoke<ClaudeCodeVersionInfo>("get_claude_code_version_info");
@@ -54,7 +54,7 @@ export function ClaudeCodeVersionSection() {
     } catch (e) {
       setError(String(e));
     } finally {
-      if (showLoading) setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -133,7 +133,7 @@ export function ClaudeCodeVersionSection() {
 
       const typeLabel = INSTALL_TYPES.find((t) => t.value === selectedInstallType)?.label;
       setSuccess(`Successfully installed Claude Code ${selectedVersion} (${typeLabel})`);
-      await loadVersionInfo(false); // Don't show loading state to avoid UI flicker
+      await loadVersionInfo();
     } catch (e) {
       setError(String(e));
     } finally {
