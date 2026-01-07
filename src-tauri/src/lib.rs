@@ -5136,6 +5136,63 @@ fn get_disabled_hooks() -> Result<Value, String> {
     load_disabled_hooks()
 }
 
+#[tauri::command]
+fn delete_hook_item(
+    event_type: String,
+    matcher_index: usize,
+    hook_index: usize,
+) -> Result<(), String> {
+    let settings_path = get_claude_dir().join("settings.json");
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).map_err(|e| e.to_string())?
+    } else {
+        return Err("No settings.json found".to_string());
+    };
+
+    let hooks_arr = settings
+        .get_mut("hooks")
+        .and_then(|h| h.get_mut(&event_type))
+        .and_then(|arr| arr.get_mut(matcher_index))
+        .and_then(|m| m.get_mut("hooks"))
+        .and_then(|hooks| hooks.as_array_mut())
+        .ok_or("Hook not found")?;
+
+    if hook_index >= hooks_arr.len() {
+        return Err("Hook index out of bounds".to_string());
+    }
+
+    // Permanently remove without backup
+    hooks_arr.remove(hook_index);
+
+    if let Some(obj) = settings.as_object_mut() {
+        obj.remove("_lovcode_disabled_env");
+    }
+
+    let output = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, output).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_disabled_hook(event_type: String, index: usize) -> Result<(), String> {
+    let mut disabled_hooks = load_disabled_hooks()?;
+
+    let disabled_arr = disabled_hooks
+        .get_mut(&event_type)
+        .and_then(|v| v.as_array_mut())
+        .ok_or("No disabled hooks for this event type")?;
+
+    if index >= disabled_arr.len() {
+        return Err("Index out of bounds".to_string());
+    }
+
+    // Permanently remove from disabled list
+    disabled_arr.remove(index);
+    save_disabled_hooks(&disabled_hooks)?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct ConnectionTestResult {
     ok: bool,
@@ -6648,6 +6705,8 @@ pub fn run() {
             toggle_plugin,
             toggle_hook_item,
             get_disabled_hooks,
+            delete_hook_item,
+            delete_disabled_hook,
             test_anthropic_connection,
             test_openai_connection,
             test_claude_cli,

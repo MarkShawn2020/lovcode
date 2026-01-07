@@ -9,6 +9,7 @@ import {
   CodeIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  TrashIcon,
 } from "@radix-ui/react-icons";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { Button } from "../../components/ui/button";
@@ -148,6 +149,18 @@ export function SettingsView({ onMarketplaceSelect }: SettingsViewProps) {
 
   const toggleHookItem = async (eventType: string, matcherIndex: number, hookIndex: number, disabled: boolean) => {
     await invoke("toggle_hook_item", { eventType, matcherIndex, hookIndex, disabled });
+    refreshSettings();
+  };
+
+  const deleteHookItem = async (eventType: string, matcherIndex: number, hookIndex: number) => {
+    if (!confirm("Permanently delete this hook?")) return;
+    await invoke("delete_hook_item", { eventType, matcherIndex, hookIndex });
+    refreshSettings();
+  };
+
+  const deleteDisabledHook = async (eventType: string, index: number) => {
+    if (!confirm("Permanently delete this disabled hook?")) return;
+    await invoke("delete_disabled_hook", { eventType, index });
     refreshSettings();
   };
 
@@ -436,7 +449,7 @@ export function SettingsView({ onMarketplaceSelect }: SettingsViewProps) {
                                   {matcher.hooks.map((hook, hookIndex) => (
                                     <div
                                       key={hookIndex}
-                                      className="flex items-center justify-between pl-6 pr-2 py-1.5 bg-card rounded"
+                                      className="flex items-center justify-between pl-6 pr-2 py-1.5 bg-card rounded group"
                                     >
                                       <div className="min-w-0 flex-1">
                                         <p className="text-xs font-mono text-ink truncate">
@@ -448,12 +461,20 @@ export function SettingsView({ onMarketplaceSelect }: SettingsViewProps) {
                                           </p>
                                         )}
                                       </div>
-                                      <Switch
-                                        checked={true}
-                                        onCheckedChange={() =>
-                                          toggleHookItem(eventType, matcherIndex, hookIndex, true)
-                                        }
-                                      />
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          onClick={() => deleteHookItem(eventType, matcherIndex, hookIndex)}
+                                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
+                                        >
+                                          <TrashIcon className="w-3.5 h-3.5" />
+                                        </button>
+                                        <Switch
+                                          checked={true}
+                                          onCheckedChange={() =>
+                                            toggleHookItem(eventType, matcherIndex, hookIndex, true)
+                                          }
+                                        />
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
@@ -466,7 +487,7 @@ export function SettingsView({ onMarketplaceSelect }: SettingsViewProps) {
                                   {disabledForEvent.map((item, disabledIndex) => (
                                     <div
                                       key={`disabled-${disabledIndex}`}
-                                      className="flex items-center justify-between pl-6 pr-2 py-1.5 bg-card rounded opacity-50"
+                                      className="flex items-center justify-between pl-6 pr-2 py-1.5 bg-card rounded opacity-50 group"
                                     >
                                       <div className="min-w-0 flex-1">
                                         <p className="text-xs font-mono text-ink truncate">
@@ -478,12 +499,20 @@ export function SettingsView({ onMarketplaceSelect }: SettingsViewProps) {
                                           </p>
                                         )}
                                       </div>
-                                      <Switch
-                                        checked={false}
-                                        onCheckedChange={() =>
-                                          toggleHookItem(eventType, 0, disabledIndex, false)
-                                        }
-                                      />
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          onClick={() => deleteDisabledHook(eventType, disabledIndex)}
+                                          className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-red-500 transition-opacity"
+                                        >
+                                          <TrashIcon className="w-3.5 h-3.5" />
+                                        </button>
+                                        <Switch
+                                          checked={false}
+                                          onCheckedChange={() =>
+                                            toggleHookItem(eventType, 0, disabledIndex, false)
+                                          }
+                                        />
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
