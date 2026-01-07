@@ -5894,14 +5894,25 @@ fn cancel_claude_code_install() -> Result<(), String> {
         return Err("No install process running".to_string());
     }
 
-    // Use pkill to kill child processes first (curl, bash, etc.)
-    let _ = std::process::Command::new("pkill")
-        .args(["-9", "-P", &pid.to_string()])
-        .output();
+    #[cfg(unix)]
+    {
+        // Use pkill to kill child processes first (curl, bash, etc.)
+        let _ = std::process::Command::new("pkill")
+            .args(["-9", "-P", &pid.to_string()])
+            .output();
 
-    // Kill the main process with SIGKILL
-    unsafe {
-        libc::kill(pid as i32, libc::SIGKILL);
+        // Kill the main process with SIGKILL
+        unsafe {
+            libc::kill(pid as i32, libc::SIGKILL);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        // On Windows, use taskkill to terminate the process tree
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid.to_string()])
+            .output();
     }
 
     CC_INSTALL_PID.store(0, std::sync::atomic::Ordering::SeqCst);
