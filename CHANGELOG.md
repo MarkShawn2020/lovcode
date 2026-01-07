@@ -4,10 +4,10 @@
 
 ### Patch Changes
 
-- fix(settings): 修复 native 安装后版本检测优先级问题
+- fix(settings): 修复安装后版本检测问题
 
-  - 优先检查 ~/.local/bin/claude (native install) 而非依赖 which claude 的 PATH 顺序
-  - 解决 npm 版本在 PATH 中优先导致 UI 显示错误版本的问题
+  - 优先检查 ~/.local/bin/claude (native) 而非依赖 which claude 的 PATH 顺序
+  - npm 安装时自动移除 native 二进制，确保检测正确显示 npm 版本
 
 ## 0.24.1
 
