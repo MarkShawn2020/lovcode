@@ -43,14 +43,13 @@ import {
   SearchInput,
   PageHeader,
   ConfigPage,
-  MarketplaceSection,
   useSearch,
-  type MarketplaceItem,
 } from "../../components/config";
-import { BrowseMarketplaceButton } from "../../components/shared";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
+import { MarketplaceContent } from "../Marketplace";
 import { useAtom } from "jotai";
 import { commandsSortKeyAtom, commandsSortDirAtom, commandsShowDeprecatedAtom, commandsViewModeAtom, commandsExpandedFoldersAtom } from "../../store";
-import type { LocalCommand } from "../../types";
+import type { LocalCommand, TemplateComponent } from "../../types";
 import type { CommandSortKey, TreeNode, FolderNode } from "./types";
 import { DraggableCommandItem } from "./DraggableCommandItem";
 import { DroppableFolder } from "./DroppableFolder";
@@ -59,16 +58,12 @@ import { CommandItemCard } from "./CommandItemCard";
 
 interface CommandsViewProps {
   onSelect: (cmd: LocalCommand, scrollToChangelog?: boolean) => void;
-  marketplaceItems: MarketplaceItem[];
-  onMarketplaceSelect: (item: MarketplaceItem) => void;
-  onBrowseMore?: () => void;
+  onMarketplaceSelect: (template: TemplateComponent) => void;
 }
 
 export function CommandsView({
   onSelect,
-  marketplaceItems,
   onMarketplaceSelect,
-  onBrowseMore,
 }: CommandsViewProps) {
   const queryClient = useQueryClient();
   const { data: commands = [], isLoading } = useInvokeQuery<LocalCommand[]>(["commands"], "list_local_commands");
@@ -384,119 +379,128 @@ export function CommandsView({
     );
   };
 
-  if (isLoading) return <LoadingState message="Loading commands..." />;
-
   return (
     <ConfigPage>
       <PageHeader
         title="Commands"
         subtitle={`${activeCount} active, ${deprecatedCount} deprecated`}
-        action={<BrowseMarketplaceButton onClick={onBrowseMore} />}
       />
 
-      {/* Command Trend Chart */}
-      {commandWeeklyStats && Object.keys(commandWeeklyStats).length > 0 && (
-        <div className="mb-6 p-4 bg-card/50 rounded-xl border border-border/40">
-          <CommandTrendChart data={commandWeeklyStats} />
-        </div>
-      )}
+      <Tabs defaultValue="installed" className="flex-1 flex flex-col">
+        <TabsList className="bg-card-alt border border-border">
+          <TabsTrigger value="installed">已安装</TabsTrigger>
+          <TabsTrigger value="marketplace">市场</TabsTrigger>
+        </TabsList>
 
-      <div className="flex items-center gap-3 mb-6">
-        <SearchInput
-          placeholder="Search local & marketplace..."
-          value={search}
-          onChange={setSearch}
-          className="flex-1 px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted-foreground focus:outline-none focus:border-primary"
-        />
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="sm" className="shrink-0">
-              <DotsHorizontalIcon className="w-4 h-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuLabel className="text-xs">View</DropdownMenuLabel>
-            <DropdownMenuRadioGroup
-              value={viewMode}
-              onValueChange={(v) => setViewMode(v as "flat" | "tree")}
-            >
-              <DropdownMenuRadioItem value="tree">
-                <FolderTree className="w-4 h-4 mr-2" /> Tree
-              </DropdownMenuRadioItem>
-              <DropdownMenuRadioItem value="flat">
-                <List className="w-4 h-4 mr-2" /> Flat
-              </DropdownMenuRadioItem>
-            </DropdownMenuRadioGroup>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="text-xs">Sort</DropdownMenuLabel>
-            <DropdownMenuItem onClick={() => toggleSort("usage")}>
-              {sortKey === "usage" && <CheckIcon className="w-4 h-4 mr-2" />}
-              {sortKey !== "usage" && <span className="w-4 mr-2" />}
-              Usage {sortKey === "usage" && (sortDir === "desc" ? "↓" : "↑")}
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => toggleSort("name")}>
-              {sortKey === "name" && <CheckIcon className="w-4 h-4 mr-2" />}
-              {sortKey !== "name" && <span className="w-4 mr-2" />}
-              Name {sortKey === "name" && (sortDir === "desc" ? "↓" : "↑")}
-            </DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuCheckboxItem checked={showDeprecated} onCheckedChange={setShowDeprecated}>
-              Show deprecated
-            </DropdownMenuCheckboxItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </div>
+        <TabsContent value="installed" className="mt-4 space-y-4">
+          {isLoading ? (
+            <LoadingState message="Loading commands..." />
+          ) : (
+            <>
+              {/* Command Trend Chart */}
+              {commandWeeklyStats && Object.keys(commandWeeklyStats).length > 0 && (
+                <div className="p-4 bg-card/50 rounded-xl border border-border/40">
+                  <CommandTrendChart data={commandWeeklyStats} />
+                </div>
+              )}
 
-      {viewMode === "flat" && sorted.length > 0 && (
-        <div className="space-y-2">
-          {sorted.map((cmd) => (
-            <CommandItemCard
-              key={cmd.path}
-              command={cmd}
-              usageCount={getUsageCount(cmd)}
-              onClick={() => onSelect(cmd)}
-              onOpenInEditor={() => invoke("open_in_editor", { path: cmd.path })}
-              onDeprecate={() => openDeprecateDialog(cmd)}
-              onRestore={() => handleRestore(cmd)}
-            />
-          ))}
-        </div>
-      )}
-      {viewMode === "tree" && tree.length > 0 && (
-        <DndContext sensors={sensors} onDragStart={handleDragStartDnd} onDragEnd={handleDragEndDnd}>
-          <div className="space-y-1">
-            {activeDragId && <RootDropZone isOver={false} />}
-            {tree.map((node) => renderTreeNode(node))}
-          </div>
-          <DragOverlay>
-            {activeDragCmd && (
-              <div className="flex items-center gap-2 py-1.5 px-2 bg-card border border-primary rounded-md shadow-lg">
-                <Terminal className="w-4 h-4 text-primary" />
-                <span className="font-mono font-medium text-primary">{activeDragCmd.name}</span>
+              <div className="flex items-center gap-3">
+                <SearchInput
+                  placeholder="Search installed commands..."
+                  value={search}
+                  onChange={setSearch}
+                  className="flex-1 px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted-foreground focus:outline-none focus:border-primary"
+                />
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="sm" className="shrink-0">
+                      <DotsHorizontalIcon className="w-4 h-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="w-44">
+                    <DropdownMenuLabel className="text-xs">View</DropdownMenuLabel>
+                    <DropdownMenuRadioGroup
+                      value={viewMode}
+                      onValueChange={(v) => setViewMode(v as "flat" | "tree")}
+                    >
+                      <DropdownMenuRadioItem value="tree">
+                        <FolderTree className="w-4 h-4 mr-2" /> Tree
+                      </DropdownMenuRadioItem>
+                      <DropdownMenuRadioItem value="flat">
+                        <List className="w-4 h-4 mr-2" /> Flat
+                      </DropdownMenuRadioItem>
+                    </DropdownMenuRadioGroup>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-xs">Sort</DropdownMenuLabel>
+                    <DropdownMenuItem onClick={() => toggleSort("usage")}>
+                      {sortKey === "usage" && <CheckIcon className="w-4 h-4 mr-2" />}
+                      {sortKey !== "usage" && <span className="w-4 mr-2" />}
+                      Usage {sortKey === "usage" && (sortDir === "desc" ? "↓" : "↑")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => toggleSort("name")}>
+                      {sortKey === "name" && <CheckIcon className="w-4 h-4 mr-2" />}
+                      {sortKey !== "name" && <span className="w-4 mr-2" />}
+                      Name {sortKey === "name" && (sortDir === "desc" ? "↓" : "↑")}
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuCheckboxItem checked={showDeprecated} onCheckedChange={setShowDeprecated}>
+                      Show deprecated
+                    </DropdownMenuCheckboxItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
               </div>
-            )}
-          </DragOverlay>
-        </DndContext>
-      )}
 
-      {statusFiltered.length === 0 && !search && (
-        <EmptyState
-          icon={LightningBoltIcon}
-          message="No commands found"
-          hint="Create commands in ~/.claude/commands/"
-        />
-      )}
+              {viewMode === "flat" && sorted.length > 0 && (
+                <div className="space-y-2">
+                  {sorted.map((cmd) => (
+                    <CommandItemCard
+                      key={cmd.path}
+                      command={cmd}
+                      usageCount={getUsageCount(cmd)}
+                      onClick={() => onSelect(cmd)}
+                      onOpenInEditor={() => invoke("open_in_editor", { path: cmd.path })}
+                      onDeprecate={() => openDeprecateDialog(cmd)}
+                      onRestore={() => handleRestore(cmd)}
+                    />
+                  ))}
+                </div>
+              )}
+              {viewMode === "tree" && tree.length > 0 && (
+                <DndContext sensors={sensors} onDragStart={handleDragStartDnd} onDragEnd={handleDragEndDnd}>
+                  <div className="space-y-1">
+                    {activeDragId && <RootDropZone isOver={false} />}
+                    {tree.map((node) => renderTreeNode(node))}
+                  </div>
+                  <DragOverlay>
+                    {activeDragCmd && (
+                      <div className="flex items-center gap-2 py-1.5 px-2 bg-card border border-primary rounded-md shadow-lg">
+                        <Terminal className="w-4 h-4 text-primary" />
+                        <span className="font-mono font-medium text-primary">{activeDragCmd.name}</span>
+                      </div>
+                    )}
+                  </DragOverlay>
+                </DndContext>
+              )}
 
-      {statusFiltered.length === 0 && search && (
-        <p className="text-muted-foreground text-sm">No local commands match "{search}"</p>
-      )}
+              {statusFiltered.length === 0 && !search && (
+                <EmptyState
+                  icon={LightningBoltIcon}
+                  message="No commands installed"
+                  hint="Browse marketplace to install commands"
+                />
+              )}
 
-      <MarketplaceSection
-        items={marketplaceItems}
-        search={search}
-        onSelect={onMarketplaceSelect}
-        onBrowseMore={onBrowseMore}
-      />
+              {statusFiltered.length === 0 && search && (
+                <p className="text-muted-foreground text-sm">No commands match "{search}"</p>
+              )}
+            </>
+          )}
+        </TabsContent>
+
+        <TabsContent value="marketplace" className="mt-4">
+          <MarketplaceContent category="commands" onSelectTemplate={onMarketplaceSelect} />
+        </TabsContent>
+      </Tabs>
 
       <Dialog open={deprecateDialogOpen} onOpenChange={setDeprecateDialogOpen}>
         <DialogContent>

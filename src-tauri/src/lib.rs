@@ -2085,12 +2085,30 @@ fn collect_agents(
 // Skills Feature
 // ============================================================================
 
+/// Marketplace metadata stored alongside installed components
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct MarketplaceMeta {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub downloads: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub template_path: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LocalSkill {
     pub name: String,
     pub path: String,
     pub description: Option<String>,
     pub content: String,
+    // Marketplace metadata (if installed from marketplace)
+    #[serde(flatten)]
+    pub marketplace: Option<MarketplaceMeta>,
 }
 
 #[tauri::command]
@@ -2113,13 +2131,24 @@ fn list_local_skills() -> Result<Vec<LocalSkill>, String> {
 
             if skill_md.exists() {
                 let content = fs::read_to_string(&skill_md).unwrap_or_default();
-                let (frontmatter, _, body) = parse_frontmatter(&content);
+                let (frontmatter, _, _) = parse_frontmatter(&content);
+
+                // Load marketplace metadata if exists
+                let meta_path = path.join(".meta.json");
+                let marketplace = if meta_path.exists() {
+                    fs::read_to_string(&meta_path)
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<MarketplaceMeta>(&s).ok())
+                } else {
+                    None
+                };
 
                 skills.push(LocalSkill {
                     name: skill_name,
                     path: skill_md.to_string_lossy().to_string(),
                     description: frontmatter.get("description").cloned(),
-                    content: body,
+                    content,  // Return raw content with frontmatter for frontend display
+                    marketplace,
                 });
             }
         }
@@ -3187,6 +3216,73 @@ fn install_command_template(name: String, content: String) -> Result<String, Str
     fs::write(&file_path, content).map_err(|e| e.to_string())?;
 
     Ok(file_path.to_string_lossy().to_string())
+}
+
+/// Install a skill template to ~/.claude/skills/{name}/SKILL.md
+#[tauri::command]
+fn install_skill_template(
+    name: String,
+    content: String,
+    source_id: Option<String>,
+    source_name: Option<String>,
+    author: Option<String>,
+    downloads: Option<i64>,
+    template_path: Option<String>,
+) -> Result<String, String> {
+    if name.is_empty() {
+        return Err("Skill name cannot be empty".to_string());
+    }
+    if name.contains('/') || name.contains('\\') || name.contains('\0') {
+        return Err("Skill name contains invalid characters".to_string());
+    }
+
+    // Create directory structure: ~/.claude/skills/{name}/
+    let skill_dir = get_claude_dir().join("skills").join(&name);
+    fs::create_dir_all(&skill_dir).map_err(|e| format!("Failed to create skill directory: {}", e))?;
+
+    // Write SKILL.md file
+    let skill_file = skill_dir.join("SKILL.md");
+    fs::write(&skill_file, &content).map_err(|e| format!("Failed to write SKILL.md: {}", e))?;
+
+    // Save marketplace metadata if provided
+    if source_id.is_some() || source_name.is_some() || author.is_some() {
+        let meta = MarketplaceMeta {
+            source_id,
+            source_name,
+            author,
+            downloads,
+            template_path,
+        };
+        let meta_path = skill_dir.join(".meta.json");
+        if let Ok(meta_json) = serde_json::to_string_pretty(&meta) {
+            let _ = fs::write(&meta_path, meta_json);
+        }
+    }
+
+    Ok(skill_file.to_string_lossy().to_string())
+}
+
+/// Uninstall a skill by removing its directory
+#[tauri::command]
+fn uninstall_skill(name: String) -> Result<String, String> {
+    if name.is_empty() {
+        return Err("Skill name cannot be empty".to_string());
+    }
+
+    let skill_dir = get_claude_dir().join("skills").join(&name);
+    if !skill_dir.exists() {
+        return Err(format!("Skill '{}' not found", name));
+    }
+
+    fs::remove_dir_all(&skill_dir).map_err(|e| format!("Failed to remove skill: {}", e))?;
+    Ok(format!("Uninstalled skill: {}", name))
+}
+
+/// Check if a skill is already installed
+#[tauri::command]
+fn check_skill_installed(name: String) -> bool {
+    let skill_file = get_claude_dir().join("skills").join(&name).join("SKILL.md");
+    skill_file.exists()
 }
 
 #[tauri::command]
@@ -6223,6 +6319,9 @@ pub fn run() {
             list_local_commands,
             list_local_agents,
             list_local_skills,
+            install_skill_template,
+            uninstall_skill,
+            check_skill_installed,
             get_context_files,
             get_project_context,
             get_settings,

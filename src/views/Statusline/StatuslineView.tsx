@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { RowsIcon, Pencil1Icon, CheckIcon, Cross1Icon, TrashIcon, RocketIcon, CodeIcon, ChevronDownIcon, ResetIcon } from "@radix-ui/react-icons";
+import { RowsIcon, Pencil1Icon, CheckIcon, Cross1Icon, TrashIcon, ChevronDownIcon, ResetIcon } from "@radix-ui/react-icons";
 import { ConfigPage, PageHeader, EmptyState, LoadingState } from "../../components/config";
-import { CollapsibleCard, BrowseMarketplaceButton, CodePreview, FilePath } from "../../components/shared";
+import { CollapsibleCard, CodePreview } from "../../components/shared";
 import { Button } from "../../components/ui/button";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../../components/ui/collapsible";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
+import { MarketplaceContent } from "../Marketplace";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
 import type { ClaudeSettings, TemplateComponent } from "../../types";
 
@@ -40,18 +42,16 @@ interface StatusLineConfig {
 }
 
 interface StatuslineViewProps {
-  installedTemplates?: TemplateComponent[];
-  onBrowseMore?: () => void;
+  onMarketplaceSelect: (template: TemplateComponent) => void;
 }
 
-export function StatuslineView({ installedTemplates = [], onBrowseMore }: StatuslineViewProps) {
+export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
   const [editing, setEditing] = useState(false);
   const [command, setCommand] = useState("");
   const [padding, setPadding] = useState<number | undefined>(undefined);
   const [saving, setSaving] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
 
   const statusLine = settings?.raw && typeof settings.raw === "object"
     ? (settings.raw as Record<string, unknown>).statusLine as StatusLineConfig | undefined
@@ -145,35 +145,6 @@ export function StatuslineView({ installedTemplates = [], onBrowseMore }: Status
     }
   };
 
-  const handleApplyTemplate = async (template: TemplateComponent) => {
-    if (!template.content) return;
-    setSelectedTemplate(template.name);
-    try {
-      // Apply: copy from ~/.lovstudio/lovcode/statusline/{name}.sh to ~/.claude/statusline.sh
-      const scriptPath = "~/.claude/statusline.sh";
-      await invoke("apply_statusline", { name: template.name });
-
-      // Update settings
-      const newStatusLine: StatusLineConfig = {
-        type: "command",
-        command: scriptPath,
-        padding: 0,
-      };
-      await invoke("update_settings_statusline", { statusline: newStatusLine });
-      refreshSettings();
-      setCommand(scriptPath);
-      setPadding(0);
-      setScriptContent(template.content);
-      // Check if backup was created
-      const hasBackup = await invoke<boolean>("has_previous_statusline");
-      setHasPrevious(hasBackup);
-    } catch (e) {
-      console.error("Failed to apply template:", e);
-    } finally {
-      setSelectedTemplate(null);
-    }
-  };
-
   if (isLoading) return <LoadingState message="Loading settings..." />;
 
   return (
@@ -181,202 +152,147 @@ export function StatuslineView({ installedTemplates = [], onBrowseMore }: Status
       <PageHeader
         title="Status Line"
         subtitle="Customize Claude Code's CLI status bar"
-        action={onBrowseMore && <BrowseMarketplaceButton onClick={onBrowseMore} />}
       />
 
-      <CollapsibleCard
-        storageKey="lovcode:statusline:configOpen"
-        title="Current Configuration"
-        subtitle={statusLine ? `Command: ${statusLine.command}` : "Not configured"}
-        bodyClassName="p-4 space-y-4"
-        defaultOpen
-      >
-        {statusLine && !editing ? (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-muted-foreground w-20">Command</span>
-              <code className="text-xs px-2 py-1 rounded bg-muted text-ink font-mono flex-1">
-                {statusLine.command}
-              </code>
-            </div>
-            {statusLine.padding !== undefined && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground w-20">Padding</span>
-                <span className="text-xs text-ink">{statusLine.padding}</span>
+      <Tabs defaultValue="installed" className="flex-1 flex flex-col">
+        <TabsList className="bg-card-alt border border-border">
+          <TabsTrigger value="installed">已安装</TabsTrigger>
+          <TabsTrigger value="marketplace">市场</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="installed" className="mt-4 space-y-4">
+          <CollapsibleCard
+            storageKey="lovcode:statusline:configOpen"
+            title="Current Configuration"
+            subtitle={statusLine ? `Command: ${statusLine.command}` : "Not configured"}
+            bodyClassName="p-4 space-y-4"
+            defaultOpen
+          >
+            {statusLine && !editing ? (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground w-20">Command</span>
+                  <code className="text-xs px-2 py-1 rounded bg-muted text-ink font-mono flex-1">
+                    {statusLine.command}
+                  </code>
+                </div>
+                {statusLine.padding !== undefined && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-20">Padding</span>
+                    <span className="text-xs text-ink">{statusLine.padding}</span>
+                  </div>
+                )}
+                {scriptContent !== null && (
+                  <Collapsible defaultOpen>
+                    <div className="rounded-lg border border-border overflow-hidden">
+                      <CollapsibleTrigger className="w-full flex items-center justify-between px-3 py-2 bg-muted/50 hover:bg-muted transition-colors">
+                        <span className="text-xs font-medium text-ink">Script Content</span>
+                        <ChevronDownIcon className="w-4 h-4 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" />
+                      </CollapsibleTrigger>
+                      <CollapsibleContent>
+                        <CodePreview value={scriptContent} language="shell" height={300} />
+                      </CollapsibleContent>
+                    </div>
+                  </Collapsible>
+                )}
+                {loadingScript && (
+                  <p className="text-xs text-muted-foreground">Loading script...</p>
+                )}
+                <div className="flex gap-2 pt-2">
+                  <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                    <Pencil1Icon className="w-4 h-4 mr-1" />
+                    Edit
+                  </Button>
+                  <Button size="sm" variant="outline" className="text-destructive" onClick={handleRemove} disabled={saving}>
+                    <TrashIcon className="w-4 h-4 mr-1" />
+                    Remove
+                  </Button>
+                  {hasPrevious && (
+                    <Button size="sm" variant="outline" onClick={handleRestore} disabled={saving}>
+                      <ResetIcon className="w-4 h-4 mr-1" />
+                      Restore Previous
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-ink">Command</label>
+                  <input
+                    className="w-full text-xs px-3 py-2 rounded-lg bg-canvas border border-border text-ink font-mono"
+                    placeholder="~/.claude/statusline.sh"
+                    value={command}
+                    onChange={(e) => setCommand(e.target.value)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Path to script that outputs status line text. Receives session JSON via stdin.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-ink">Padding</label>
+                  <input
+                    type="number"
+                    min={0}
+                    className="w-24 text-xs px-3 py-2 rounded-lg bg-canvas border border-border text-ink"
+                    placeholder="0"
+                    value={padding ?? ""}
+                    onChange={(e) => setPadding(e.target.value ? parseInt(e.target.value) : undefined)}
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Set to 0 to let status line extend to edge. Leave empty for default.
+                  </p>
+                </div>
+                <div className="flex gap-2 pt-2">
+                  <Button size="sm" onClick={handleSave} disabled={!command.trim() || saving}>
+                    <CheckIcon className="w-4 h-4 mr-1" />
+                    Save
+                  </Button>
+                  {statusLine && (
+                    <Button size="sm" variant="outline" onClick={() => {
+                      setEditing(false);
+                      setCommand(statusLine.command || "");
+                      setPadding(statusLine.padding);
+                    }}>
+                      <Cross1Icon className="w-4 h-4 mr-1" />
+                      Cancel
+                    </Button>
+                  )}
+                </div>
               </div>
             )}
-            {scriptContent !== null && (
-              <Collapsible defaultOpen>
-                <div className="rounded-lg border border-border overflow-hidden">
-                  <CollapsibleTrigger className="w-full flex items-center justify-between px-3 py-2 bg-muted/50 hover:bg-muted transition-colors">
-                    <span className="text-xs font-medium text-ink">Script Content</span>
-                    <ChevronDownIcon className="w-4 h-4 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" />
-                  </CollapsibleTrigger>
-                  <CollapsibleContent>
-                    <CodePreview value={scriptContent} language="shell" height={300} />
-                  </CollapsibleContent>
-                </div>
-              </Collapsible>
-            )}
-            {loadingScript && (
-              <p className="text-xs text-muted-foreground">Loading script...</p>
-            )}
-            <div className="flex gap-2 pt-2">
-              <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-                <Pencil1Icon className="w-4 h-4 mr-1" />
-                Edit
-              </Button>
-              <Button size="sm" variant="outline" className="text-destructive" onClick={handleRemove} disabled={saving}>
-                <TrashIcon className="w-4 h-4 mr-1" />
-                Remove
-              </Button>
-              {hasPrevious && (
-                <Button size="sm" variant="outline" onClick={handleRestore} disabled={saving}>
-                  <ResetIcon className="w-4 h-4 mr-1" />
-                  Restore Previous
-                </Button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-ink">Command</label>
-              <input
-                className="w-full text-xs px-3 py-2 rounded-lg bg-canvas border border-border text-ink font-mono"
-                placeholder="~/.claude/statusline.sh"
-                value={command}
-                onChange={(e) => setCommand(e.target.value)}
+          </CollapsibleCard>
+
+          <CollapsibleCard
+            storageKey="lovcode:statusline:helpOpen"
+            title="JSON Input Reference"
+            subtitle="Data available to your statusline script"
+            bodyClassName="p-4"
+          >
+            <CodePreview value={JSON_REFERENCE} language="json" height={280} />
+            <p className="text-[10px] text-muted-foreground mt-2">
+              Use <code className="bg-muted px-1 rounded">jq</code> to parse JSON in bash scripts.
+            </p>
+          </CollapsibleCard>
+
+          {!statusLine && !editing && (
+            <div className="text-center py-8">
+              <EmptyState
+                icon={RowsIcon}
+                message="No status line configured"
+                hint="Browse marketplace to install statusline templates"
               />
-              <p className="text-[10px] text-muted-foreground">
-                Path to script that outputs status line text. Receives session JSON via stdin.
-              </p>
-            </div>
-            <div className="space-y-2">
-              <label className="text-xs font-medium text-ink">Padding</label>
-              <input
-                type="number"
-                min={0}
-                className="w-24 text-xs px-3 py-2 rounded-lg bg-canvas border border-border text-ink"
-                placeholder="0"
-                value={padding ?? ""}
-                onChange={(e) => setPadding(e.target.value ? parseInt(e.target.value) : undefined)}
-              />
-              <p className="text-[10px] text-muted-foreground">
-                Set to 0 to let status line extend to edge. Leave empty for default.
-              </p>
-            </div>
-            <div className="flex gap-2 pt-2">
-              <Button size="sm" onClick={handleSave} disabled={!command.trim() || saving}>
-                <CheckIcon className="w-4 h-4 mr-1" />
-                Save
+              <Button className="mt-4" onClick={() => setEditing(true)}>
+                Configure Status Line
               </Button>
-              {statusLine && (
-                <Button size="sm" variant="outline" onClick={() => {
-                  setEditing(false);
-                  setCommand(statusLine.command || "");
-                  setPadding(statusLine.padding);
-                }}>
-                  <Cross1Icon className="w-4 h-4 mr-1" />
-                  Cancel
-                </Button>
-              )}
             </div>
-          </div>
-        )}
-      </CollapsibleCard>
+          )}
+        </TabsContent>
 
-      <CollapsibleCard
-        storageKey="lovcode:statusline:templatesOpen"
-        title="Installed Templates"
-        subtitle={installedTemplates.length > 0 ? `${installedTemplates.length} statusline templates` : "No templates installed"}
-        bodyClassName="p-4"
-        defaultOpen
-      >
-        {installedTemplates.length > 0 ? (
-          <div className="grid gap-3">
-            {installedTemplates.map((template) => (
-              <Collapsible key={template.path}>
-                <div className="rounded-lg border border-border bg-card-alt hover:border-primary/30 transition-colors overflow-hidden">
-                  <div className="flex items-start gap-3 p-3">
-                    <div className="p-2 rounded-lg bg-muted">
-                      <CodeIcon className="w-4 h-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-ink">{template.name}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {template.description || "No description"}
-                      </p>
-                      {template.author && (
-                        <p className="text-[10px] text-muted-foreground/70 mt-1">by {template.author}</p>
-                      )}
-                      <FilePath path={template.path} className="text-[10px] mt-1" />
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <CollapsibleTrigger className="h-8 w-8 p-0 flex items-center justify-center rounded-md hover:bg-muted">
-                        <ChevronDownIcon className="w-4 h-4 transition-transform duration-200 [[data-state=open]_&]:rotate-180" />
-                      </CollapsibleTrigger>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleApplyTemplate(template)}
-                        disabled={selectedTemplate === template.name || !template.content}
-                      >
-                        <RocketIcon className="w-4 h-4 mr-1" />
-                        {selectedTemplate === template.name ? "Applying..." : "Apply"}
-                      </Button>
-                    </div>
-                  </div>
-                  <CollapsibleContent>
-                    <div className="px-3 pb-3">
-                      <CodePreview value={template.content || "# No content available"} language="shell" height={200} />
-                    </div>
-                  </CollapsibleContent>
-                </div>
-              </Collapsible>
-            ))}
-          </div>
-        ) : (
-          <div className="text-center py-6">
-            <EmptyState
-              icon={CodeIcon}
-              message="No templates installed"
-              hint="Browse the marketplace to find and install statusline templates"
-            />
-            {onBrowseMore && (
-              <Button className="mt-4" variant="outline" onClick={onBrowseMore}>
-                <RocketIcon className="w-4 h-4 mr-1" />
-                Browse Marketplace
-              </Button>
-            )}
-          </div>
-        )}
-      </CollapsibleCard>
-
-      <CollapsibleCard
-        storageKey="lovcode:statusline:helpOpen"
-        title="JSON Input Reference"
-        subtitle="Data available to your statusline script"
-        bodyClassName="p-4"
-      >
-        <CodePreview value={JSON_REFERENCE} language="json" height={280} />
-        <p className="text-[10px] text-muted-foreground mt-2">
-          Use <code className="bg-muted px-1 rounded">jq</code> to parse JSON in bash scripts.
-        </p>
-      </CollapsibleCard>
-
-      {!statusLine && !editing && (
-        <div className="text-center py-8">
-          <EmptyState
-            icon={RowsIcon}
-            message="No status line configured"
-            hint="Add a custom status line to display contextual info in Claude Code"
-          />
-          <Button className="mt-4" onClick={() => setEditing(true)}>
-            Configure Status Line
-          </Button>
-        </div>
-      )}
+        <TabsContent value="marketplace" className="mt-4">
+          <MarketplaceContent category="statuslines" onSelectTemplate={onMarketplaceSelect} />
+        </TabsContent>
+      </Tabs>
     </ConfigPage>
   );
 }

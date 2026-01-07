@@ -1,6 +1,5 @@
 import { PersonIcon } from "@radix-ui/react-icons";
-import { Store } from "lucide-react";
-import type { LocalAgent } from "../../types";
+import type { LocalAgent, TemplateComponent } from "../../types";
 import {
   LoadingState,
   EmptyState,
@@ -8,39 +7,18 @@ import {
   PageHeader,
   ItemCard,
   ConfigPage,
-  MarketplaceSection,
   useSearch,
-  type MarketplaceItem,
 } from "../../components/config";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
+import { MarketplaceContent } from "../Marketplace";
 import { useInvokeQuery } from "../../hooks";
-
-function BrowseMarketplaceButton({ onClick }: { onClick?: () => void }) {
-  if (!onClick) return null;
-  return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-2 px-3 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-lg transition-colors"
-      title="Browse marketplace"
-    >
-      <Store className="w-4 h-4" />
-      <span>Marketplace</span>
-    </button>
-  );
-}
 
 interface SubAgentsViewProps {
   onSelect: (agent: LocalAgent) => void;
-  marketplaceItems: MarketplaceItem[];
-  onMarketplaceSelect: (item: MarketplaceItem) => void;
-  onBrowseMore?: () => void;
+  onMarketplaceSelect: (template: TemplateComponent) => void;
 }
 
-export function SubAgentsView({
-  onSelect,
-  marketplaceItems,
-  onMarketplaceSelect,
-  onBrowseMore,
-}: SubAgentsViewProps) {
+export function SubAgentsView({ onSelect, onMarketplaceSelect }: SubAgentsViewProps) {
   const { data: agents = [], isLoading } = useInvokeQuery<LocalAgent[]>(["agents"], "list_local_agents");
   const { search, setSearch, filtered } = useSearch(agents, ["name", "description", "model"]);
 
@@ -51,46 +29,52 @@ export function SubAgentsView({
       <PageHeader
         title="Sub Agents"
         subtitle={`${agents.length} sub-agents in ~/.claude/commands`}
-        action={<BrowseMarketplaceButton onClick={onBrowseMore} />}
-      />
-      <SearchInput
-        placeholder="Search local & marketplace..."
-        value={search}
-        onChange={setSearch}
       />
 
-      {filtered.length > 0 && (
-        <div className="space-y-2">
-          {filtered.map((agent) => (
-            <ItemCard
-              key={agent.name}
-              name={agent.name}
-              description={agent.description}
-              badge={agent.model}
-              onClick={() => onSelect(agent)}
+      <Tabs defaultValue="installed" className="flex-1 flex flex-col">
+        <TabsList className="bg-card-alt border border-border">
+          <TabsTrigger value="installed">已安装</TabsTrigger>
+          <TabsTrigger value="marketplace">市场</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="installed" className="mt-4 space-y-4">
+          <SearchInput
+            placeholder="Search installed sub-agents..."
+            value={search}
+            onChange={setSearch}
+          />
+
+          {filtered.length > 0 && (
+            <div className="space-y-2">
+              {filtered.map((agent) => (
+                <ItemCard
+                  key={agent.name}
+                  name={agent.name}
+                  description={agent.description}
+                  badge={agent.model}
+                  onClick={() => onSelect(agent)}
+                />
+              ))}
+            </div>
+          )}
+
+          {filtered.length === 0 && !search && (
+            <EmptyState
+              icon={PersonIcon}
+              message="No sub-agents found"
+              hint="Browse marketplace to install sub-agents"
             />
-          ))}
-        </div>
-      )}
+          )}
 
-      {filtered.length === 0 && !search && (
-        <EmptyState
-          icon={PersonIcon}
-          message="No sub-agents found"
-          hint="Sub-agents are commands with a model field in frontmatter"
-        />
-      )}
+          {filtered.length === 0 && search && (
+            <p className="text-muted-foreground text-sm">No sub-agents match "{search}"</p>
+          )}
+        </TabsContent>
 
-      {filtered.length === 0 && search && (
-        <p className="text-muted-foreground text-sm">No local sub-agents match "{search}"</p>
-      )}
-
-      <MarketplaceSection
-        items={marketplaceItems}
-        search={search}
-        onSelect={onMarketplaceSelect}
-        onBrowseMore={onBrowseMore}
-      />
+        <TabsContent value="marketplace" className="mt-4">
+          <MarketplaceContent category="agents" onSelectTemplate={onMarketplaceSelect} />
+        </TabsContent>
+      </Tabs>
     </ConfigPage>
   );
 }
