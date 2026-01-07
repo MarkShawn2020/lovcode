@@ -5909,7 +5909,7 @@ fn cancel_claude_code_install() -> Result<(), String> {
 
     #[cfg(windows)]
     {
-        // On Windows, use taskkill to terminate the process tree
+        // On Windows, use taskkill to kill the process tree
         let _ = std::process::Command::new("taskkill")
             .args(["/F", "/T", "/PID", &pid.to_string()])
             .output();
