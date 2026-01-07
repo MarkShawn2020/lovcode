@@ -51,7 +51,7 @@ export function FilePath({ path, basePath, className = "", showIcon = false, fil
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <span
-          className={`inline-flex items-center gap-1 font-mono text-muted-foreground/50 hover:text-muted-foreground cursor-context-menu truncate ${className}`}
+          className={`inline-flex items-center gap-1 font-mono text-muted-foreground/50 hover:text-muted-foreground truncate ${className}`}
           title={path}
         >
           {showIcon && <FileIcon className="w-3 h-3 flex-shrink-0" />}

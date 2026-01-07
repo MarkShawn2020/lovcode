@@ -6,6 +6,10 @@ export type FeatureType =
   | "chat"
   | "workspace"
   | "features"
+  | "basic-env"
+  | "basic-llm"
+  | "basic-version"
+  | "basic-context"
   | "settings"
   | "statusline"
   | "commands"
@@ -23,7 +27,7 @@ export interface FeatureConfig {
   label: string;
   description: string;
   available: boolean;
-  group: "history" | "config" | "marketplace" | "knowledge";
+  group: "history" | "basic" | "config" | "knowledge";
 }
 
 // ============================================================================
@@ -108,11 +112,21 @@ export interface LocalAgent {
   content: string;
 }
 
+export interface MarketplaceMeta {
+  source_id?: string | null;
+  source_name?: string | null;
+  author?: string | null;
+  downloads?: number | null;
+  template_path?: string | null;
+}
+
 export interface LocalSkill {
   name: string;
   path: string;
   description: string | null;
   content: string;
+  // Marketplace metadata (if installed from marketplace)
+  marketplace?: MarketplaceMeta | null;
 }
 
 export interface DistillDocument {
@@ -203,12 +217,15 @@ export type View =
   | { type: "chat-projects" }
   | { type: "chat-sessions"; projectId: string; projectPath: string }
   | { type: "chat-messages"; projectId: string; projectPath: string; sessionId: string; summary: string | null }
+  | { type: "basic-env" }
+  | { type: "basic-llm" }
+  | { type: "basic-version" }
+  | { type: "basic-context" }
   | { type: "settings" }
   | { type: "commands" }
   | { type: "command-detail"; command: LocalCommand; scrollToChangelog?: boolean }
   | { type: "mcp" }
   | { type: "skills" }
-  | { type: "skill-detail"; skill: LocalSkill }
   | { type: "hooks" }
   | { type: "sub-agents" }
   | { type: "sub-agent-detail"; agent: LocalAgent }
@@ -220,6 +237,7 @@ export type View =
   | { type: "kb-reference-doc"; source: string; docIndex: number }
   | { type: "marketplace"; category?: TemplateCategory }
   | { type: "template-detail"; template: TemplateComponent; category: TemplateCategory }
+  | { type: "feature-template-detail"; template: TemplateComponent; category: TemplateCategory; fromFeature: FeatureType; localPath?: string; isInstalled?: boolean }
   | { type: "feature-todo"; feature: FeatureType }
   | { type: "annual-report-2025" };
 

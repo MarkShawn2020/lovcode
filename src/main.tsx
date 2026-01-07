@@ -1,7 +1,7 @@
 import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { loader } from "@monaco-editor/react";
-import App from "./App";
+import { AppRouter } from "./router";
 import "./index.css";
 
 // Configure Monaco Editor to use local bundled version (avoid CDN issues)
@@ -25,6 +25,6 @@ const queryClient = new QueryClient({
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <QueryClientProvider client={queryClient}>
-    <App />
+    <AppRouter />
   </QueryClientProvider>,
 );

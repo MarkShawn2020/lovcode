@@ -15,6 +15,10 @@ import {
   PersonIcon,
   DesktopIcon,
   RowsIcon,
+  EnvelopeClosedIcon,
+  RocketIcon,
+  UpdateIcon,
+  FileTextIcon,
 } from "@radix-ui/react-icons";
 import type { FeatureType, FeatureConfig, TemplateCategory } from "../types";
 
@@ -31,6 +35,10 @@ export const FEATURE_ICONS: Record<
   knowledge: ReaderIcon,
   "kb-reference": BookmarkIcon,
   "kb-distill": LightningBoltIcon,
+  "basic-env": EnvelopeClosedIcon,
+  "basic-llm": RocketIcon,
+  "basic-version": UpdateIcon,
+  "basic-context": FileTextIcon,
   settings: GearIcon,
   statusline: RowsIcon,
   commands: CodeIcon,
@@ -73,11 +81,40 @@ export const FEATURES: FeatureConfig[] = [
     available: true,
     group: "knowledge",
   },
-  // Configuration
+  // Basic settings (no marketplace) - grouped under "Basic"
+  {
+    type: "basic-env",
+    label: "Environment",
+    description: "Environment variables",
+    available: true,
+    group: "basic",
+  },
+  {
+    type: "basic-llm",
+    label: "LLM Provider",
+    description: "LLM proxy configuration",
+    available: true,
+    group: "basic",
+  },
+  {
+    type: "basic-version",
+    label: "CC Version",
+    description: "Claude Code version management",
+    available: true,
+    group: "basic",
+  },
+  {
+    type: "basic-context",
+    label: "Context",
+    description: "CLAUDE.md context files",
+    available: true,
+    group: "basic",
+  },
+  // Features (with marketplace)
   {
     type: "settings",
-    label: "Configuration",
-    description: "Permissions, context & config",
+    label: "Settings",
+    description: "settings.json templates",
     available: true,
     group: "config",
   },
@@ -130,14 +167,6 @@ export const FEATURES: FeatureConfig[] = [
     available: true,
     group: "config",
   },
-  // Marketplace
-  {
-    type: "marketplace",
-    label: "Marketplace",
-    description: "Browse and install templates",
-    available: true,
-    group: "marketplace",
-  },
 ];
 
 // ============================================================================
@@ -162,7 +191,7 @@ export const TEMPLATE_CATEGORIES: {
   label: string;
   icon: React.ComponentType<{ className?: string }>;
 }[] = [
-  { key: "settings", label: "Configuration", icon: GearIcon },
+  { key: "settings", label: "Settings", icon: GearIcon },
   { key: "commands", label: "Commands", icon: LightningBoltIcon },
   { key: "mcps", label: "MCPs", icon: Component1Icon },
   { key: "skills", label: "Skills", icon: TargetIcon },

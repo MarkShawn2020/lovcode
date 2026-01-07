@@ -126,7 +126,7 @@ export function useNavigation(
             ? "commands"
             : view.type === "mcp"
               ? "mcp"
-              : view.type === "skills" || view.type === "skill-detail"
+              : view.type === "skills"
                 ? "skills"
                 : view.type === "hooks"
                   ? "hooks"

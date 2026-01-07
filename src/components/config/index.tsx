@@ -13,6 +13,23 @@ import {
 import { Button } from "../ui/button";
 import { differenceInMinutes, differenceInHours, differenceInDays, differenceInWeeks, differenceInMonths } from "date-fns";
 
+/** Parse YAML frontmatter from markdown content */
+function parseFrontmatter(content: string): { meta: Record<string, string>; body: string } {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\s*([\s\S]*)$/);
+  if (!match) return { meta: {}, body: content };
+
+  const meta: Record<string, string> = {};
+  match[1].split(/\r?\n/).forEach(line => {
+    const idx = line.indexOf(':');
+    if (idx > 0) {
+      const key = line.slice(0, idx).trim();
+      const val = line.slice(idx + 1).trim().replace(/^["']|["']$/g, '');
+      if (key && val) meta[key] = val;
+    }
+  });
+  return { meta, body: match[2] };
+}
+
 function formatRelativeTime(date: Date): string {
   const now = new Date();
   const mins = differenceInMinutes(now, date);
@@ -132,7 +149,7 @@ export function DetailHeader({
   path?: string;
   onOpenPath?: (path: string) => void;
   onNavigateSession?: () => void;
-  badge?: string | null;
+  badge?: React.ReactNode;
   statusBadge?: { label: string; variant: "success" | "warning" | "muted" } | null;
   menuItems?: DetailHeaderMenuItem[];
   hasChangelog?: boolean;
@@ -375,10 +392,25 @@ export function ContentCard({
   showGoToTop?: boolean;
   onGoToTop?: () => void;
 }) {
+  const { meta, body } = parseFrontmatter(content);
+  const metaKeys = Object.keys(meta);
+
   return (
     <DetailCard label={label}>
+      {metaKeys.length > 0 && (
+        <div className="mb-4 p-3 bg-card-alt rounded-lg border border-border">
+          <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+            {metaKeys.map(key => (
+              <div key={key} className="contents">
+                <span className="text-muted-foreground">{key}</span>
+                <span className="text-ink">{meta[key]}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="prose prose-sm max-w-none text-ink">
-        <Markdown>{content}</Markdown>
+        <Markdown>{body}</Markdown>
       </div>
       {showGoToTop && onGoToTop && (
         <div className="sticky bottom-4 flex justify-end pointer-events-none">

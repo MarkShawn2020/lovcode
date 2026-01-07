@@ -13,13 +13,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
 // Modular imports
-import type {
-  FeatureType, View, LocalCommand,
-  TemplatesCatalog, UserProfile,
-} from "./types";
+import type { FeatureType, View, LocalCommand, UserProfile } from "./types";
 import { useAtom } from "jotai";
 import { marketplaceCategoryAtom, shortenPathsAtom, profileAtom, navigationStateAtom, viewAtom, viewHistoryAtom, historyIndexAtom, featureTabsLayoutAtom, workspaceDataAtom } from "./store";
 import { AppConfigContext, useAppConfig, type AppConfig } from "./context";
+import { useUrlInit } from "./hooks";
 // Modular views
 import {
   Home,
@@ -31,7 +29,6 @@ import {
   SubAgentsView,
   SubAgentDetailView,
   SkillsView,
-  SkillDetailView,
   HooksView,
   McpView,
   FeatureTodo,
@@ -45,6 +42,10 @@ import {
   ReferenceView,
   KnowledgeLayout,
   SettingsView,
+  EnvSettingsView,
+  LlmProviderView,
+  ClaudeVersionView,
+  ContextFilesView,
   ProjectList,
   SessionList,
   MessageView,
@@ -56,6 +57,9 @@ import {
 // ============================================================================
 
 function App() {
+  // Initialize navigation state from URL on page load (no loading state)
+  useUrlInit();
+
   const [view] = useAtom(viewAtom);
   const [viewHistory] = useAtom(viewHistoryAtom);
   const [historyIndex] = useAtom(historyIndexAtom);
@@ -98,7 +102,6 @@ function App() {
   const [featureTabsLayout] = useAtom(featureTabsLayoutAtom);
   const [workspace] = useAtom(workspaceDataAtom);
   const [marketplaceCategory, setMarketplaceCategory] = useAtom(marketplaceCategoryAtom);
-  const [catalog, setCatalog] = useState<TemplatesCatalog | null>(null);
   const [homeDir, setHomeDir] = useState("");
   const [shortenPaths, setShortenPaths] = useAtom(shortenPathsAtom);
   const [showSettings, setShowSettings] = useState(false);
@@ -138,10 +141,6 @@ function App() {
 
   const appConfig: AppConfig = { homeDir, shortenPaths, setShortenPaths, formatPath };
 
-  useEffect(() => {
-    invoke<TemplatesCatalog>("get_templates_catalog").then(setCatalog).catch(() => {});
-  }, []);
-
   const currentFeature: FeatureType | null =
     view.type === "chat-projects" || view.type === "chat-sessions" || view.type === "chat-messages"
       ? "chat"
@@ -149,13 +148,21 @@ function App() {
         ? "workspace"
         : view.type === "features"
         ? "features"
+        : view.type === "basic-env"
+        ? "basic-env"
+        : view.type === "basic-llm"
+        ? "basic-llm"
+        : view.type === "basic-version"
+        ? "basic-version"
+        : view.type === "basic-context"
+        ? "basic-context"
         : view.type === "settings"
         ? "settings"
         : view.type === "commands" || view.type === "command-detail"
           ? "commands"
           : view.type === "mcp"
             ? "mcp"
-            : view.type === "skills" || view.type === "skill-detail"
+            : view.type === "skills"
               ? "skills"
               : view.type === "hooks"
                 ? "hooks"
@@ -169,6 +176,8 @@ function App() {
                       ? "kb-distill"
                       : view.type === "kb-reference" || view.type === "kb-reference-doc"
                         ? "kb-reference"
+                        : view.type === "feature-template-detail"
+                        ? view.fromFeature
                         : view.type === "marketplace" || view.type === "template-detail"
                         ? "marketplace"
                         : view.type === "feature-todo"
@@ -179,6 +188,18 @@ function App() {
     switch (feature) {
       case "chat":
         navigate({ type: "chat-projects" });
+        break;
+      case "basic-env":
+        navigate({ type: "basic-env" });
+        break;
+      case "basic-llm":
+        navigate({ type: "basic-llm" });
+        break;
+      case "basic-version":
+        navigate({ type: "basic-version" });
+        break;
+      case "basic-context":
+        navigate({ type: "basic-context" });
         break;
       case "settings":
         navigate({ type: "settings" });
@@ -209,9 +230,6 @@ function App() {
         break;
       case "kb-reference":
         navigate({ type: "kb-reference" });
-        break;
-      case "marketplace":
-        navigate({ type: "marketplace", category: marketplaceCategory });
         break;
       case "workspace":
         navigate({ type: "workspace" });
@@ -280,30 +298,25 @@ function App() {
             onBack={() => navigate({ type: "chat-sessions", projectId: view.projectId, projectPath: view.projectPath })}
           />
         )}
-        {(view.type === "settings" || view.type === "commands" || view.type === "command-detail" || view.type === "mcp" ||
-          view.type === "skills" || view.type === "skill-detail" || view.type === "hooks" ||
+        {(view.type === "basic-env" || view.type === "basic-llm" || view.type === "basic-version" || view.type === "basic-context" ||
+          view.type === "settings" || view.type === "commands" || view.type === "command-detail" || view.type === "mcp" ||
+          view.type === "skills" || view.type === "hooks" ||
           view.type === "sub-agents" || view.type === "sub-agent-detail" || view.type === "output-styles" ||
-          view.type === "statusline") && (
+          view.type === "statusline" || view.type === "feature-template-detail") && (
           <FeaturesLayout currentFeature={currentFeature} onFeatureClick={handleFeatureClick}>
+            {view.type === "basic-env" && <EnvSettingsView />}
+            {view.type === "basic-llm" && <LlmProviderView />}
+            {view.type === "basic-version" && <ClaudeVersionView />}
+            {view.type === "basic-context" && <ContextFilesView />}
             {view.type === "settings" && (
               <SettingsView
-                marketplaceItems={catalog?.settings || []}
-                onMarketplaceSelect={(item) => {
-                  const template = catalog?.settings.find(c => c.path === item.path);
-                  if (template) navigate({ type: "template-detail", template, category: "settings" });
-                }}
-                onBrowseMore={() => navigate({ type: "marketplace", category: "settings" })}
+                onMarketplaceSelect={(template) => navigate({ type: "feature-template-detail", template, category: "settings", fromFeature: "settings" })}
               />
             )}
             {view.type === "commands" && (
               <CommandsView
                 onSelect={(cmd, scrollToChangelog) => navigate({ type: "command-detail", command: cmd, scrollToChangelog })}
-                marketplaceItems={catalog?.commands || []}
-                onMarketplaceSelect={(item) => {
-                  const template = catalog?.commands.find(c => c.path === item.path);
-                  if (template) navigate({ type: "template-detail", template, category: "commands" });
-                }}
-                onBrowseMore={() => navigate({ type: "marketplace", category: "commands" })}
+                onMarketplaceSelect={(template) => navigate({ type: "feature-template-detail", template, category: "commands", fromFeature: "commands" })}
               />
             )}
             {view.type === "command-detail" && (
@@ -321,53 +334,44 @@ function App() {
             )}
             {view.type === "mcp" && (
               <McpView
-                marketplaceItems={catalog?.mcps || []}
-                onMarketplaceSelect={(item) => {
-                  const template = catalog?.mcps.find(c => c.path === item.path);
-                  if (template) navigate({ type: "template-detail", template, category: "mcps" });
-                }}
-                onBrowseMore={() => navigate({ type: "marketplace", category: "mcps" })}
+                onMarketplaceSelect={(template) => navigate({ type: "feature-template-detail", template, category: "mcps", fromFeature: "mcp" })}
               />
             )}
             {view.type === "skills" && (
               <SkillsView
-                onSelect={(skill) => navigate({ type: "skill-detail", skill })}
-                marketplaceItems={catalog?.skills || []}
-                onMarketplaceSelect={(item) => {
-                  const template = catalog?.skills.find(c => c.path === item.path);
-                  if (template) navigate({ type: "template-detail", template, category: "skills" });
-                }}
-                onBrowseMore={() => navigate({ type: "marketplace", category: "skills" })}
+                onSelectTemplate={(template, localPath) => navigate({ type: "feature-template-detail", template, category: "skills", fromFeature: "skills", localPath, isInstalled: true })}
+                onMarketplaceSelect={(template) => navigate({ type: "feature-template-detail", template, category: "skills", fromFeature: "skills" })}
               />
             )}
-            {view.type === "skill-detail" && <SkillDetailView skill={view.skill} onBack={() => navigate({ type: "skills" })} />}
             {view.type === "hooks" && (
               <HooksView
-                marketplaceItems={catalog?.hooks || []}
-                onMarketplaceSelect={(item) => {
-                  const template = catalog?.hooks.find(c => c.path === item.path);
-                  if (template) navigate({ type: "template-detail", template, category: "hooks" });
-                }}
-                onBrowseMore={() => navigate({ type: "marketplace", category: "hooks" })}
+                onMarketplaceSelect={(template) => navigate({ type: "feature-template-detail", template, category: "hooks", fromFeature: "hooks" })}
               />
             )}
             {view.type === "sub-agents" && (
               <SubAgentsView
                 onSelect={(agent) => navigate({ type: "sub-agent-detail", agent })}
-                marketplaceItems={catalog?.agents || []}
-                onMarketplaceSelect={(item) => {
-                  const template = catalog?.agents.find(c => c.path === item.path);
-                  if (template) navigate({ type: "template-detail", template, category: "agents" });
-                }}
-                onBrowseMore={() => navigate({ type: "marketplace", category: "agents" })}
+                onMarketplaceSelect={(template) => navigate({ type: "feature-template-detail", template, category: "agents", fromFeature: "sub-agents" })}
               />
             )}
             {view.type === "sub-agent-detail" && <SubAgentDetailView agent={view.agent} onBack={() => navigate({ type: "sub-agents" })} />}
-            {view.type === "output-styles" && <OutputStylesView />}
+            {view.type === "output-styles" && (
+              <OutputStylesView
+                onMarketplaceSelect={(template) => navigate({ type: "feature-template-detail", template, category: "output-styles", fromFeature: "output-styles" })}
+              />
+            )}
             {view.type === "statusline" && (
               <StatuslineView
-                installedTemplates={catalog?.statuslines.filter(s => s.source_id === "personal") || []}
-                onBrowseMore={() => navigate({ type: "marketplace", category: "statuslines" })}
+                onMarketplaceSelect={(template) => navigate({ type: "feature-template-detail", template, category: "statuslines", fromFeature: "statusline" })}
+              />
+            )}
+            {view.type === "feature-template-detail" && (
+              <TemplateDetailView
+                template={view.template}
+                category={view.category}
+                onBack={() => handleFeatureClick(view.fromFeature)}
+                localPath={view.localPath}
+                isInstalled={view.isInstalled}
               />
             )}
           </FeaturesLayout>
