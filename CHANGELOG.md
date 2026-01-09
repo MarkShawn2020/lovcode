@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.7
+
+### Patch Changes
+
+- Add session usage tracking with token counts and cost estimation
+
 ## 0.24.6
 
 ### Patch Changes
