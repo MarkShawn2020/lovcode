@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
-import { DistillView, KnowledgeLayout } from "../../views/Knowledge";
-import type { FeatureType } from "../../types";
+import { DistillView, KnowledgeLayout } from "../../../views/Knowledge";
+import type { FeatureType } from "../../../types";
 
 export default function KnowledgeDistillPage() {
   const navigate = useNavigate();

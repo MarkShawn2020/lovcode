@@ -26,7 +26,7 @@ export function DistillDetailView({
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const path = `${homeDir}/.claude/distill/${document.file}`;
+    const path = `${homeDir}/.lovstudio/docs/distill/${document.file}`;
     invoke<string>("read_file", { path })
       .then(setContent)
       .finally(() => setLoading(false));
