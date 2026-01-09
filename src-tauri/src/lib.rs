@@ -4661,6 +4661,101 @@ fn get_home_dir() -> String {
 }
 
 #[tauri::command]
+fn get_env_var(name: String) -> Option<String> {
+    std::env::var(&name).ok()
+}
+
+#[derive(Debug, Serialize)]
+pub struct TodayCodingStats {
+    pub lines_added: usize,
+    pub lines_deleted: usize,
+}
+
+#[tauri::command]
+fn get_today_coding_stats() -> Result<TodayCodingStats, String> {
+    use std::process::Command;
+
+    let workspace_path = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("lovcode")
+        .join("workspace.json");
+
+    if !workspace_path.exists() {
+        return Ok(TodayCodingStats {
+            lines_added: 0,
+            lines_deleted: 0,
+        });
+    }
+
+    let content = fs::read_to_string(&workspace_path).map_err(|e| e.to_string())?;
+    let workspace: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+
+    let mut total_added: usize = 0;
+    let mut total_deleted: usize = 0;
+
+    if let Some(projects) = workspace.get("projects").and_then(|p| p.as_array()) {
+        for project in projects {
+            if let Some(path) = project.get("path").and_then(|p| p.as_str()) {
+                // Run git diff --stat for today
+                let output = Command::new("git")
+                    .args([
+                        "-C",
+                        path,
+                        "diff",
+                        "--shortstat",
+                        "--since=midnight",
+                        "HEAD",
+                    ])
+                    .output();
+
+                if let Ok(output) = output {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    // Parse "X files changed, Y insertions(+), Z deletions(-)"
+                    for part in stdout.split(',') {
+                        let part = part.trim();
+                        if part.contains("insertion") {
+                            if let Some(num) = part.split_whitespace().next() {
+                                total_added += num.parse::<usize>().unwrap_or(0);
+                            }
+                        } else if part.contains("deletion") {
+                            if let Some(num) = part.split_whitespace().next() {
+                                total_deleted += num.parse::<usize>().unwrap_or(0);
+                            }
+                        }
+                    }
+                }
+
+                // Also check uncommitted changes
+                let output = Command::new("git")
+                    .args(["-C", path, "diff", "--shortstat"])
+                    .output();
+
+                if let Ok(output) = output {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    for part in stdout.split(',') {
+                        let part = part.trim();
+                        if part.contains("insertion") {
+                            if let Some(num) = part.split_whitespace().next() {
+                                total_added += num.parse::<usize>().unwrap_or(0);
+                            }
+                        } else if part.contains("deletion") {
+                            if let Some(num) = part.split_whitespace().next() {
+                                total_deleted += num.parse::<usize>().unwrap_or(0);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(TodayCodingStats {
+        lines_added: total_added,
+        lines_deleted: total_deleted,
+    })
+}
+
+#[tauri::command]
 fn write_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
 }
@@ -7102,6 +7197,8 @@ pub fn run() {
             get_settings_path,
             get_mcp_config_path,
             get_home_dir,
+            get_env_var,
+            get_today_coding_stats,
             write_file,
             write_binary_file,
             update_mcp_env,

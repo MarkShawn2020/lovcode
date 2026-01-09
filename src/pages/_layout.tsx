@@ -8,6 +8,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { PersonIcon } from "@radix-ui/react-icons";
 import { GlobalHeader, VerticalFeatureTabs } from "../components/GlobalHeader";
+import { StatusBar } from "../components/StatusBar";
 import { setAutoCopyOnSelect, getAutoCopyOnSelect } from "../components/Terminal";
 import { Switch } from "../components/ui/switch";
 import { Avatar, AvatarImage, AvatarFallback } from "../components/ui/avatar";
@@ -168,6 +169,7 @@ export default function RootLayout() {
             <Outlet />
           </main>
         </div>
+        <StatusBar />
       </div>
       <AppSettingsDialog open={showSettings} onClose={() => setShowSettings(false)} />
       <ProfileDialog open={showProfileDialog} onClose={() => setShowProfileDialog(false)} profile={profile} onSave={setProfile} />
