@@ -23,6 +23,7 @@
 
 <p align="center">
   <a href="#features">Features</a> •
+  <a href="#oh-my-lovcode">oh-my-lovcode</a> •
   <a href="#installation">Installation</a> •
   <a href="#usage">Usage</a> •
   <a href="#tech-stack">Tech Stack</a> •
@@ -43,6 +44,18 @@
 - **Sub-Agents** — Manage AI agents with custom models
 - **Output Styles** — Customize response formatting
 - **Marketplace** — Browse and install community templates
+- **Customizable Statusbar** — Personalize your statusbar display with scripts
+- **Session Prompt Preview** — Hover to preview prompts in session list
+
+## oh-my-lovcode
+
+Community configuration framework for Lovcode, inspired by oh-my-zsh.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/MarkShawn2020/oh-my-lovcode/main/install.sh | bash
+```
+
+Share and discover statusbar themes, keybindings, and more at [oh-my-lovcode](https://github.com/MarkShawn2020/oh-my-lovcode).
 
 ## Installation
 
