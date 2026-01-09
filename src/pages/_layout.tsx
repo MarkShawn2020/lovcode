@@ -195,14 +195,56 @@ export default function RootLayout() {
 // Dialogs
 // ============================================================================
 
+interface StatusBarSettings {
+  enabled: boolean;
+  scriptPath?: string;
+}
+
 function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { shortenPaths, setShortenPaths } = useAppConfig();
   const [autoCopy, setAutoCopy] = useState(getAutoCopyOnSelect);
   const [featureTabsLayout, setFeatureTabsLayout] = useAtom(featureTabsLayoutAtom);
+  const [statusBarEnabled, setStatusBarEnabled] = useState(false);
+  const [statusBarScript, setStatusBarScript] = useState("~/.lovstudio/lovcode/statusbar/default.sh");
+
+  // Load statusbar settings on open
+  useEffect(() => {
+    if (!open) return;
+    invoke<StatusBarSettings | null>("get_statusbar_settings").then((settings) => {
+      if (settings) {
+        setStatusBarEnabled(settings.enabled);
+        setStatusBarScript(settings.scriptPath || "~/.lovstudio/lovcode/statusbar/default.sh");
+      }
+    }).catch(() => {});
+  }, [open]);
 
   const handleAutoCopyChange = (checked: boolean) => {
     setAutoCopy(checked);
     setAutoCopyOnSelect(checked);
+  };
+
+  const handleStatusBarEnabledChange = async (checked: boolean) => {
+    setStatusBarEnabled(checked);
+    try {
+      await invoke("save_statusbar_settings", {
+        settings: { enabled: checked, scriptPath: statusBarScript },
+      });
+    } catch (e) {
+      console.error("Failed to save statusbar settings:", e);
+    }
+  };
+
+  const handleStatusBarScriptChange = async (path: string) => {
+    setStatusBarScript(path);
+    if (statusBarEnabled) {
+      try {
+        await invoke("save_statusbar_settings", {
+          settings: { enabled: true, scriptPath: path },
+        });
+      } catch (e) {
+        console.error("Failed to save statusbar settings:", e);
+      }
+    }
   };
 
   if (!open) return null;
@@ -210,8 +252,8 @@ function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => vo
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-card rounded-xl border border-border shadow-xl w-96 max-w-[90vw]">
-        <div className="px-5 py-4 border-b border-border flex items-center justify-between">
+      <div className="relative bg-card rounded-xl border border-border shadow-xl w-[28rem] max-w-[90vw] max-h-[80vh] overflow-y-auto">
+        <div className="px-5 py-4 border-b border-border flex items-center justify-between sticky top-0 bg-card z-10">
           <h2 className="text-lg font-semibold text-ink">Settings</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-ink text-xl leading-none">&times;</button>
         </div>
@@ -259,6 +301,32 @@ function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => vo
               </div>
               <Switch checked={autoCopy} onCheckedChange={handleAutoCopyChange} />
             </div>
+          </div>
+          <div className="space-y-3">
+            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">StatusBar</h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium text-ink">Custom script mode</p>
+                <p className="text-xs text-muted-foreground">Use a script to generate status bar content</p>
+              </div>
+              <Switch checked={statusBarEnabled} onCheckedChange={handleStatusBarEnabledChange} />
+            </div>
+            {statusBarEnabled && (
+              <div className="space-y-2 pl-0.5">
+                <label className="text-xs font-medium text-ink">Script path</label>
+                <Input
+                  className="text-xs font-mono"
+                  placeholder="~/.lovstudio/lovcode/statusbar/default.sh"
+                  value={statusBarScript}
+                  onChange={(e) => handleStatusBarScriptChange(e.target.value)}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Script receives JSON context via stdin. First line of stdout becomes the status bar.
+                  <br />
+                  <span className="text-muted-foreground/70">Supports ANSI color codes.</span>
+                </p>
+              </div>
+            )}
           </div>
         </div>
       </div>

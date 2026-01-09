@@ -3656,6 +3656,119 @@ fn has_previous_statusline() -> bool {
     get_lovstudio_dir().join("statusline").join("_previous.sh").exists()
 }
 
+/// Context passed to Lovcode statusbar script
+#[derive(Debug, Serialize, Deserialize)]
+pub struct StatusBarContext {
+    pub app_name: String,
+    pub version: String,
+    pub projects_count: usize,
+    pub features_count: usize,
+    pub today_lines_added: usize,
+    pub today_lines_deleted: usize,
+    pub timestamp: String,
+    pub home_dir: String,
+}
+
+/// Execute Lovcode's GUI statusbar script and return output
+#[tauri::command]
+fn execute_statusbar_script(script_path: String, context: StatusBarContext) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    // Expand ~ to home dir
+    let home = dirs::home_dir().unwrap_or_default();
+    let expanded_path = if script_path.starts_with("~") {
+        script_path.replacen("~", &home.to_string_lossy(), 1)
+    } else {
+        script_path
+    };
+
+    let path = std::path::Path::new(&expanded_path);
+    if !path.exists() {
+        return Err(format!("Script not found: {}", expanded_path));
+    }
+
+    // Serialize context to JSON
+    let context_json = serde_json::to_string(&context).map_err(|e| e.to_string())?;
+
+    // Determine how to execute the script
+    #[cfg(unix)]
+    let mut child = Command::new(&expanded_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn script: {}", e))?;
+
+    #[cfg(windows)]
+    let mut child = Command::new("powershell")
+        .args(["-ExecutionPolicy", "Bypass", "-File", &expanded_path])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn script: {}", e))?;
+
+    // Write context JSON to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(context_json.as_bytes()).ok();
+    }
+
+    // Wait for output with timeout
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Script execution failed: {}", e))?;
+
+    // Get first line of stdout
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let first_line = stdout.lines().next().unwrap_or("").to_string();
+
+    Ok(first_line)
+}
+
+/// Get Lovcode statusbar settings from workspace.json
+#[tauri::command]
+fn get_statusbar_settings() -> Result<Option<serde_json::Value>, String> {
+    let settings_path = get_lovstudio_dir().join("statusbar-settings.json");
+    if !settings_path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+    let settings: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    Ok(Some(settings))
+}
+
+/// Save Lovcode statusbar settings
+#[tauri::command]
+fn save_statusbar_settings(settings: serde_json::Value) -> Result<(), String> {
+    let settings_path = get_lovstudio_dir().join("statusbar-settings.json");
+    let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, content).map_err(|e| e.to_string())
+}
+
+/// Write Lovcode statusbar script to ~/.lovstudio/lovcode/statusbar/
+#[tauri::command]
+fn write_lovcode_statusbar_script(name: String, content: String) -> Result<String, String> {
+    let statusbar_dir = get_lovstudio_dir().join("statusbar");
+    fs::create_dir_all(&statusbar_dir).map_err(|e| e.to_string())?;
+
+    let script_path = statusbar_dir.join(format!("{}.sh", name));
+    fs::write(&script_path, &content).map_err(|e| e.to_string())?;
+
+    // Make executable on Unix
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&script_path)
+            .map_err(|e| e.to_string())?
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms).map_err(|e| e.to_string())?;
+    }
+
+    Ok(script_path.to_string_lossy().to_string())
+}
+
 /// Remove installed statusline template
 #[tauri::command]
 fn remove_statusline_template(name: String) -> Result<(), String> {
@@ -7184,6 +7297,10 @@ pub fn run() {
             apply_statusline,
             restore_previous_statusline,
             has_previous_statusline,
+            execute_statusbar_script,
+            get_statusbar_settings,
+            save_statusbar_settings,
+            write_lovcode_statusbar_script,
             remove_statusline_template,
             open_in_editor,
             open_file_at_line,
