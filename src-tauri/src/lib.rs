@@ -168,6 +168,15 @@ pub struct Project {
     pub last_active: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize, Default)]
+pub struct SessionUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub cache_creation_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cost_usd: f64, // estimated cost in USD
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -176,6 +185,7 @@ pub struct Session {
     pub summary: Option<String>,
     pub message_count: usize,
     pub last_modified: u64,
+    pub usage: Option<SessionUsage>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -219,10 +229,19 @@ struct RawLine {
     is_meta: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct RawUsage {
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    cache_creation_input_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+}
+
 #[derive(Debug, Deserialize)]
 struct RawMessage {
     role: Option<String>,
     content: Option<serde_json::Value>,
+    usage: Option<RawUsage>,
 }
 
 /// Entry from history.jsonl - used as fast session index
@@ -479,12 +498,99 @@ async fn list_sessions(project_id: String) -> Result<Vec<Session>, String> {
                     summary,
                     message_count,
                     last_modified,
+                    usage: None,
                 });
             }
         }
 
         sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
         Ok(sessions)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Pricing constants (USD per 1M tokens) - Claude Opus 4.5 pricing as baseline
+const PRICE_INPUT_PER_M: f64 = 15.0;
+const PRICE_OUTPUT_PER_M: f64 = 75.0;
+const PRICE_CACHE_WRITE_PER_M: f64 = 3.75; // cache creation
+const PRICE_CACHE_READ_PER_M: f64 = 0.30;  // cache read
+
+/// Calculate cost from token counts
+fn calculate_cost(usage: &SessionUsage) -> f64 {
+    let input_cost = (usage.input_tokens as f64 / 1_000_000.0) * PRICE_INPUT_PER_M;
+    let output_cost = (usage.output_tokens as f64 / 1_000_000.0) * PRICE_OUTPUT_PER_M;
+    let cache_write_cost = (usage.cache_creation_tokens as f64 / 1_000_000.0) * PRICE_CACHE_WRITE_PER_M;
+    let cache_read_cost = (usage.cache_read_tokens as f64 / 1_000_000.0) * PRICE_CACHE_READ_PER_M;
+    input_cost + output_cost + cache_write_cost + cache_read_cost
+}
+
+/// Read usage data from a session file
+fn read_session_usage(path: &Path) -> SessionUsage {
+    use std::io::{BufRead, BufReader};
+
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return SessionUsage::default(),
+    };
+
+    let reader = BufReader::new(file);
+    let mut usage = SessionUsage::default();
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        if let Ok(parsed) = serde_json::from_str::<RawLine>(&line) {
+            // Only assistant messages have usage data
+            if parsed.line_type.as_deref() == Some("assistant") {
+                if let Some(msg) = &parsed.message {
+                    if let Some(u) = &msg.usage {
+                        usage.input_tokens += u.input_tokens.unwrap_or(0);
+                        usage.output_tokens += u.output_tokens.unwrap_or(0);
+                        usage.cache_creation_tokens += u.cache_creation_input_tokens.unwrap_or(0);
+                        usage.cache_read_tokens += u.cache_read_input_tokens.unwrap_or(0);
+                    }
+                }
+            }
+        }
+    }
+
+    usage.cost_usd = calculate_cost(&usage);
+    usage
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionUsageEntry {
+    pub session_id: String,
+    pub usage: SessionUsage,
+}
+
+#[tauri::command]
+async fn get_sessions_usage(project_id: String) -> Result<Vec<SessionUsageEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let project_dir = get_claude_dir().join("projects").join(&project_id);
+
+        if !project_dir.exists() {
+            return Err("Project not found".to_string());
+        }
+
+        let mut results = Vec::new();
+
+        for entry in fs::read_dir(&project_dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+
+            if name.ends_with(".jsonl") && !name.starts_with("agent-") {
+                let session_id = name.trim_end_matches(".jsonl").to_string();
+                let usage = read_session_usage(&path);
+                results.push(SessionUsageEntry { session_id, usage });
+            }
+        }
+
+        Ok(results)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -690,6 +796,7 @@ async fn list_all_sessions() -> Result<Vec<Session>, String> {
                 summary: final_summary,
                 message_count: head_msg_count, // approximate from head
                 last_modified,
+                usage: None,
             });
         }
 
@@ -736,6 +843,7 @@ async fn list_all_sessions() -> Result<Vec<Session>, String> {
                         summary,
                         message_count: head_msg_count,
                         last_modified,
+                        usage: None,
                     });
                 }
             }
@@ -2493,6 +2601,7 @@ fn find_session_project(session_id: String) -> Result<Option<Session>, String> {
                 summary,
                 message_count: 0,
                 last_modified: 0,
+                usage: None,
             }));
         }
     }
@@ -7260,6 +7369,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             list_projects,
             list_sessions,
+            get_sessions_usage,
             list_all_sessions,
             list_all_chats,
             get_session_messages,

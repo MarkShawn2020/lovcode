@@ -42,6 +42,14 @@ export interface Project {
   last_active: number;
 }
 
+export interface SessionUsage {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  cost_usd: number;
+}
+
 export interface Session {
   id: string;
   project_id: string;
@@ -49,6 +57,12 @@ export interface Session {
   summary: string | null;
   message_count: number;
   last_modified: number;
+  usage?: SessionUsage;
+}
+
+export interface SessionUsageEntry {
+  session_id: string;
+  usage: SessionUsage;
 }
 
 export interface Message {
