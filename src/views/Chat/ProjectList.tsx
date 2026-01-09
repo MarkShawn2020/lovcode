@@ -6,7 +6,7 @@ import { useAtom } from "jotai";
 import { chatViewModeAtom, allProjectsSortByAtom, hideEmptySessionsAllAtom } from "../../store";
 import { useAppConfig } from "../../context";
 import { VirtualChatList } from "./VirtualChatList";
-import { formatRelativeTime } from "./utils";
+import { formatRelativeTime, useReadableText } from "./utils";
 import { useInvokeQuery } from "../../hooks";
 import type { Project, Session, ChatMessage, SearchResult, ChatsResponse } from "../../types";
 
@@ -19,6 +19,7 @@ interface ProjectListProps {
 export function ProjectList({ onSelectProject, onSelectSession, onSelectChat }: ProjectListProps) {
   const { formatPath } = useAppConfig();
   const [viewMode, setViewMode] = useAtom(chatViewModeAtom);
+  const toReadable = useReadableText();
 
   // Use react-query for cached data fetching
   const { data: projects, isLoading: loadingProjects } = useInvokeQuery<Project[]>(["projects"], "list_projects");
@@ -270,7 +271,7 @@ export function ProjectList({ onSelectProject, onSelectSession, onSelectChat }: 
               onClick={() => onSelectSession(session)}
               className="w-full text-left bg-card rounded-xl p-4 border border-border hover:border-primary transition-colors"
             >
-              <p className="font-medium text-ink line-clamp-2">{session.summary || "Untitled session"}</p>
+              <p className="font-medium text-ink line-clamp-2">{toReadable(session.summary) || "Untitled session"}</p>
               <p className="text-sm text-muted-foreground mt-1 truncate">
                 {session.project_path ? formatPath(session.project_path) : session.project_id}
               </p>

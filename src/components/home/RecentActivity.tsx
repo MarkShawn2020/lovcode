@@ -1,5 +1,6 @@
 import { FolderOpen, MessageSquare } from "lucide-react";
 import type { Project, Session } from "../../types";
+import { useReadableText } from "../../views/Chat/utils";
 
 type ActivityItem =
   | { type: "project"; data: Project }
@@ -20,6 +21,8 @@ export function RecentActivity({
   onSessionClick,
   maxItems = 5,
 }: RecentActivityProps) {
+  const toReadable = useReadableText();
+
   // Merge and sort by last_modified
   const activities: ActivityItem[] = [
     ...projects.map((p) => ({ type: "project" as const, data: p })),
@@ -94,7 +97,7 @@ export function RecentActivity({
               <MessageSquare className="w-4 h-4 text-muted-foreground/70 shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-foreground truncate group-hover:text-primary transition-colors">
-                  {session.summary || "Untitled session"}
+                  {toReadable(session.summary) || "Untitled session"}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {session.message_count} messages

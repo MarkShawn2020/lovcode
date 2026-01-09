@@ -5,5 +5,5 @@ export { ExportDialog } from "./ExportDialog";
 export { MessageView } from "./MessageView";
 export { CollapsibleContent } from "./CollapsibleContent";
 export { CopyButton } from "./CopyButton";
-export { restoreSlashCommand, formatRelativeTime, formatDate } from "./utils";
+export { restoreSlashCommand, formatRelativeTime, formatDate, useReadableText } from "./utils";
 export type { SortKey, ChatViewMode, ExportFormat, MarkdownStyle } from "./types";

@@ -4,7 +4,6 @@ import {
   ChevronDownIcon,
   ChevronRightIcon,
   ChevronLeftIcon,
-  ChatBubbleIcon,
   DotsVerticalIcon,
 } from "@radix-ui/react-icons";
 import {
@@ -15,7 +14,12 @@ import {
 } from "@/store";
 import { useNavigate, useInvokeQuery } from "@/hooks";
 import { invoke } from "@tauri-apps/api/core";
-import type { Session } from "@/types";
+import type { Session, Message } from "@/types";
+import {
+  Tooltip,
+  TooltipTrigger,
+  TooltipContent,
+} from "@/components/ui/tooltip";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -25,6 +29,7 @@ import { ProjectLogo } from "@/views/Workspace/ProjectLogo";
 import { SessionDropdownMenuItems } from "@/components/shared/SessionMenuItems";
 import { NewTerminalSplitButton } from "@/components/ui/new-terminal-button";
 import type { WorkspaceData, WorkspaceProject } from "@/views/Workspace/types";
+import { useReadableText, restoreSlashCommand } from "@/views/Chat/utils";
 
 const MIN_WIDTH = 180;
 const MAX_WIDTH = 400;
@@ -133,6 +138,7 @@ function ProjectSessionsGroup({
 }: ProjectSessionsGroupProps) {
   const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
   const navigate = useNavigate();
+  const toReadable = useReadableText();
 
   // Fetch all CC sessions, then filter by project path
   const { data: allSessions = [], isLoading } = useInvokeQuery<Session[]>(
@@ -181,7 +187,7 @@ function ProjectSessionsGroup({
       const currentProject = currentWorkspace.projects.find((p) => p.id === project.id);
       if (!currentProject) return currentWorkspace;
 
-      const title = session.summary || "Untitled";
+      const title = toReadable(session.summary) || "Untitled";
       const command = `claude --resume "${session.id}"`;
       const panels = currentProject.panels || [];
       const panelId = panels[0]?.id;
@@ -391,6 +397,10 @@ interface SessionItemProps {
 }
 
 function SessionItem({ session, onResume }: SessionItemProps) {
+  const [userPrompts, setUserPrompts] = useState<string[] | null>(null);
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const toReadable = useReadableText();
+
   const formatDate = (ts: number) => {
     const d = new Date(ts * 1000);
     const now = new Date();
@@ -408,21 +418,69 @@ function SessionItem({ session, onResume }: SessionItemProps) {
     }
   };
 
+  // Lazy-load user prompts when tooltip opens
+  const handleTooltipOpen = async (open: boolean) => {
+    setIsTooltipOpen(open);
+    if (open && userPrompts === null) {
+      try {
+        const messages = await invoke<Message[]>("get_session_messages", {
+          projectId: session.project_id,
+          sessionId: session.id,
+        });
+        const prompts = messages
+          .filter((m) => m.role === "user")
+          .map((m) => {
+            // Convert first, then truncate (order matters for regex matching)
+            const text = restoreSlashCommand(m.content.trim());
+            return text.length > 100 ? text.slice(0, 100) + "..." : text;
+          });
+        setUserPrompts(prompts);
+      } catch {
+        setUserPrompts([]);
+      }
+    }
+  };
+
   return (
     <div className="flex items-center gap-0.5 group">
-      <button
-        onClick={onResume}
-        className="flex-1 flex items-center gap-1.5 px-2 py-1 rounded text-left transition-colors text-muted-foreground hover:text-ink hover:bg-card-alt min-w-0"
-        title={`Resume: ${session.summary || "Untitled"}`}
-      >
-        <ChatBubbleIcon className="w-2.5 h-2.5 flex-shrink-0" />
-        <span className="text-xs truncate flex-1">
-          {session.summary || "Untitled"}
-        </span>
-        <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
-          {formatDate(session.last_modified)}
-        </span>
-      </button>
+      <Tooltip open={isTooltipOpen} onOpenChange={handleTooltipOpen}>
+        <TooltipTrigger asChild>
+          <button
+            onClick={onResume}
+            className="flex-1 flex items-center gap-1.5 px-2 py-1 rounded text-left transition-colors text-muted-foreground hover:text-ink hover:bg-card-alt min-w-0"
+          >
+            <span className="text-xs truncate flex-1">
+              {toReadable(session.summary) || "Untitled"}
+            </span>
+            <span className="text-[10px] text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+              {formatDate(session.last_modified)}
+            </span>
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="right" className="max-w-[300px] p-2 bg-card text-ink border border-border">
+          <div className="space-y-1.5">
+            <div className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">
+              User Prompts ({userPrompts?.length ?? "..."})
+            </div>
+            {userPrompts === null ? (
+              <div className="text-xs text-muted-foreground">Loading...</div>
+            ) : userPrompts.length === 0 ? (
+              <div className="text-xs text-muted-foreground">No prompts</div>
+            ) : (
+              <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                {userPrompts.map((prompt, i) => (
+                  <div
+                    key={i}
+                    className="text-xs text-ink/80 bg-muted/50 rounded px-1.5 py-1 truncate"
+                  >
+                    {prompt}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </TooltipContent>
+      </Tooltip>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button

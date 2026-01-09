@@ -1,3 +1,6 @@
+import { useAtomValue } from "jotai";
+import { originalChatAtom } from "../../store";
+
 export function restoreSlashCommand(content: string): string {
   // Use [\s\S]*? to match any chars including newlines between tags
   const pattern = /<command-message>[\s\S]*?<\/command-message>[\s\S]*?<command-name>(\/[^\n<]+)<\/command-name>(?:[\s\S]*?<command-args>([\s\S]*?)<\/command-args>)?/g;
@@ -19,4 +22,13 @@ export function formatRelativeTime(ts: number): string {
 
 export function formatDate(ts: number): string {
   return new Date(ts * 1000).toLocaleString();
+}
+
+/** Hook that returns a function to convert text based on global readable setting */
+export function useReadableText(): (text: string | null | undefined) => string {
+  const readable = useAtomValue(originalChatAtom);
+  return (text) => {
+    if (!text) return "";
+    return readable ? restoreSlashCommand(text) : text;
+  };
 }

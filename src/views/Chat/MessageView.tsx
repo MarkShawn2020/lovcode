@@ -21,7 +21,7 @@ import { useAtom } from "jotai";
 import { originalChatAtom, markdownPreviewAtom } from "../../store";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ExportDialog } from "./ExportDialog";
-import { restoreSlashCommand } from "./utils";
+import { useReadableText } from "./utils";
 import { useAppConfig } from "../../context";
 import type { Message } from "../../types";
 
@@ -38,9 +38,10 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [freshSummary, setFreshSummary] = useState<string | null>(initialSummary);
-  const displaySummary = freshSummary ? restoreSlashCommand(freshSummary) : "Session";
   const [originalChat, setOriginalChat] = useAtom(originalChatAtom);
   const [markdownPreview, setMarkdownPreview] = useAtom(markdownPreviewAtom);
+  const toReadable = useReadableText();
+  const displaySummary = toReadable(freshSummary) || "Session";
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [sessionFilePath, setSessionFilePath] = useState("");
@@ -58,9 +59,7 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
       .catch(() => {});
   }, [projectId, sessionId]);
 
-  const processContent = (content: string) => {
-    return originalChat ? restoreSlashCommand(content) : content;
-  };
+  const processContent = (content: string) => toReadable(content);
 
   const handleCopyContent = (content: string) => {
     invoke("copy_to_clipboard", { text: content });

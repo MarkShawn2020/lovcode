@@ -7,9 +7,9 @@ import { ContextFileItem } from "../../components/ContextFileItem";
 import { useAtom } from "jotai";
 import { sessionContextTabAtom, sessionSelectModeAtom, hideEmptySessionsAtom, userPromptsOnlyAtom } from "../../store";
 import { useAppConfig } from "../../context";
-import { formatDate } from "./utils";
+import { formatDate, useReadableText } from "./utils";
 import { useInvokeQuery } from "../../hooks";
-import type { Session, ContextFile, Message, SearchResult } from "../../types";
+import type { Session, ContextFile, Message, SearchResult, SessionUsageEntry, SessionUsage } from "../../types";
 
 interface SessionListProps {
   projectId: string;
@@ -18,8 +18,22 @@ interface SessionListProps {
   onSelect: (s: Session) => void;
 }
 
+// Format token count (e.g., 1234567 -> "1.23M")
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return n.toString();
+}
+
+// Format cost (e.g., 0.1234 -> "$0.12")
+function formatCost(cost: number): string {
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  return `$${cost.toFixed(2)}`;
+}
+
 export function SessionList({ projectId, projectPath, onBack, onSelect }: SessionListProps) {
   const { formatPath } = useAppConfig();
+  const toReadable = useReadableText();
 
   // Use react-query for cached data
   const { data: sessions = [], isLoading: loadingSessions } = useInvokeQuery<Session[]>(
@@ -36,6 +50,33 @@ export function SessionList({ projectId, projectPath, onBack, onSelect }: Sessio
     "get_project_context",
     { projectPath },
   );
+
+  // Load usage data separately (lazy loading for performance)
+  const { data: usageData = [] } = useInvokeQuery<SessionUsageEntry[]>(
+    ["sessionsUsage", projectId],
+    "get_sessions_usage",
+    { projectId }
+  );
+
+  // Create usage map for quick lookup
+  const usageMap = useMemo(() => {
+    const map = new Map<string, SessionUsage>();
+    usageData.forEach((entry) => map.set(entry.session_id, entry.usage));
+    return map;
+  }, [usageData]);
+
+  // Calculate total usage for all sessions
+  const totalUsage = useMemo(() => {
+    let total = { input_tokens: 0, output_tokens: 0, cache_creation_tokens: 0, cache_read_tokens: 0, cost_usd: 0 };
+    usageData.forEach((entry) => {
+      total.input_tokens += entry.usage.input_tokens;
+      total.output_tokens += entry.usage.output_tokens;
+      total.cache_creation_tokens += entry.usage.cache_creation_tokens;
+      total.cache_read_tokens += entry.usage.cache_read_tokens;
+      total.cost_usd += entry.usage.cost_usd;
+    });
+    return total;
+  }, [usageData]);
 
   const globalContext = useMemo(() => allContextFiles.filter((f) => f.scope === "global"), [allContextFiles]);
   const loading = loadingSessions || loadingContext;
@@ -108,7 +149,7 @@ generator: "Lovcode"
           .replace(/\s+/g, "-");
       const toc = selected
         .map((s, i) => {
-          const title = `Session ${i + 1}: ${s.summary || "Untitled"}`;
+          const title = `Session ${i + 1}: ${toReadable(s.summary) || "Untitled"}`;
           return `- [${title}](#${toAnchor(title)})`;
         })
         .join("\n");
@@ -126,7 +167,7 @@ generator: "Lovcode"
           .join("\n\n---\n\n");
         const msgCountLabel = userPromptsOnly ? `${messages.length} prompts` : `${session.message_count} messages`;
         const meta = `_${msgCountLabel} · ${formatDate(session.last_modified)}_`;
-        parts.push(`## Session ${i + 1}: ${session.summary || "Untitled"}\n\n${meta}\n\n${sessionMd}`);
+        parts.push(`## Session ${i + 1}: ${toReadable(session.summary) || "Untitled"}\n\n${meta}\n\n${sessionMd}`);
       }
       const body = parts.join("\n\n<br>\n\n---\n\n<br>\n\n");
       const header = `# ${projectName}
@@ -162,9 +203,21 @@ generator: "Lovcode"
         <button onClick={onBack} className="text-muted-foreground hover:text-ink mb-2 flex items-center gap-1 text-sm">
           <span>←</span> Projects
         </button>
-        <h1 className="font-serif text-2xl font-semibold text-ink truncate">
-          {projectPath ? formatPath(projectPath) : projectId}
-        </h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="font-serif text-2xl font-semibold text-ink truncate">
+            {projectPath ? formatPath(projectPath) : projectId}
+          </h1>
+          {totalUsage.cost_usd > 0 && (
+            <div className="flex items-center gap-3 text-sm text-muted-foreground shrink-0">
+              <span title="Total tokens (input + output)">
+                {formatTokens(totalUsage.input_tokens + totalUsage.output_tokens)} tokens
+              </span>
+              <span className="font-medium text-primary" title="Estimated cost">
+                {formatCost(totalUsage.cost_usd)}
+              </span>
+            </div>
+          )}
+        </div>
       </header>
 
       <div className="relative mb-6">
@@ -305,6 +358,7 @@ generator: "Lovcode"
           <div className="space-y-3">
             {filteredSessions.map((session) => {
               const isSelected = selectedIds.has(session.id);
+              const usage = usageMap.get(session.id);
               return (
                 <div
                   key={session.id}
@@ -315,10 +369,21 @@ generator: "Lovcode"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-ink line-clamp-2">{session.summary || "Untitled session"}</p>
-                      <p className="text-sm text-muted-foreground mt-2">
-                        {session.message_count} messages · {formatDate(session.last_modified)}
-                      </p>
+                      <p className="font-medium text-ink line-clamp-2">{toReadable(session.summary) || "Untitled session"}</p>
+                      <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground">
+                        <span>{session.message_count} messages</span>
+                        <span>·</span>
+                        <span>{formatDate(session.last_modified)}</span>
+                        {usage && usage.cost_usd > 0 && (
+                          <>
+                            <span>·</span>
+                            <span title={`Input: ${formatTokens(usage.input_tokens)}, Output: ${formatTokens(usage.output_tokens)}`}>
+                              {formatTokens(usage.input_tokens + usage.output_tokens)} tokens
+                            </span>
+                            <span className="text-primary font-medium">{formatCost(usage.cost_usd)}</span>
+                          </>
+                        )}
+                      </div>
                     </div>
                     {selectMode && (
                       <input

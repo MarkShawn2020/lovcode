@@ -84,7 +84,7 @@ export function SessionDropdownMenuItems({
           <DropdownMenuSeparator />
           {setOriginalChat && (
             <DropdownMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-              Original View
+              Readable Slash Command
             </DropdownMenuCheckboxItem>
           )}
           {setMarkdownPreview && (
@@ -153,7 +153,7 @@ export function SessionContextMenuItems({
           <ContextMenuSeparator />
           {setOriginalChat && (
             <ContextMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-              Original View
+              Readable Slash Command
             </ContextMenuCheckboxItem>
           )}
           {setMarkdownPreview && (

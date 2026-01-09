@@ -17,6 +17,7 @@ import { SessionDropdownMenuItems } from "@/components/shared/SessionMenuItems";
 import { NewTerminalSplitButton } from "@/components/ui/new-terminal-button";
 import type { WorkspaceProject } from "./types";
 import type { Session } from "@/types";
+import { useReadableText } from "@/views/Chat/utils";
 import type { WorkspaceData } from "./types";
 
 interface ProjectDashboardProps {
@@ -54,6 +55,7 @@ function BentoCard({
 
 export function ProjectDashboard({ project }: ProjectDashboardProps) {
   const [, setWorkspace] = useAtom(workspaceDataAtom);
+  const toReadable = useReadableText();
 
   // Fetch all CC sessions
   const { data: allSessions = [], isLoading } = useInvokeQuery<Session[]>(
@@ -87,7 +89,7 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
 
       const panels = currentProject.panels || [];
       const panelId = panels[0]?.id;
-      const title = session.summary || "Untitled";
+      const title = toReadable(session.summary) || "Untitled";
       const command = `claude --resume "${session.id}"`;
 
       if (!panelId) {
@@ -261,7 +263,7 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
                     className="flex-shrink-0 px-3 py-1.5 text-sm bg-muted hover:bg-muted/80 rounded-lg transition-colors flex items-center gap-1.5"
                   >
                     <ChatBubbleIcon className="w-3 h-3 text-muted-foreground" />
-                    <span className="truncate max-w-[200px]">{session.summary || "Untitled"}</span>
+                    <span className="truncate max-w-[200px]">{toReadable(session.summary) || "Untitled"}</span>
                   </button>
                 ))}
               </div>
@@ -297,7 +299,7 @@ export function ProjectDashboard({ project }: ProjectDashboardProps) {
                         <ChatBubbleIcon className="w-4 h-4 text-muted-foreground flex-shrink-0" />
                         <div className="flex-1 min-w-0">
                           <p className="text-sm truncate">
-                            {session.summary || "Untitled"}
+                            {toReadable(session.summary) || "Untitled"}
                           </p>
                           <p className="text-xs text-muted-foreground">
                             {session.message_count} messages · {formatDate(session.last_modified)}
