@@ -200,12 +200,21 @@ interface StatusBarSettings {
   scriptPath?: string;
 }
 
+type SettingsSection = "display" | "terminal" | "statusbar";
+
+const settingsSections: { id: SettingsSection; label: string }[] = [
+  { id: "display", label: "Display" },
+  { id: "terminal", label: "Terminal" },
+  { id: "statusbar", label: "StatusBar" },
+];
+
 function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { shortenPaths, setShortenPaths } = useAppConfig();
   const [autoCopy, setAutoCopy] = useState(getAutoCopyOnSelect);
   const [featureTabsLayout, setFeatureTabsLayout] = useAtom(featureTabsLayoutAtom);
   const [statusBarEnabled, setStatusBarEnabled] = useState(false);
   const [statusBarScript, setStatusBarScript] = useState("~/.lovstudio/lovcode/statusbar/default.sh");
+  const [activeSection, setActiveSection] = useState<SettingsSection>("display");
 
   // Load statusbar settings on open
   useEffect(() => {
@@ -252,79 +261,103 @@ function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => vo
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-card rounded-xl border border-border shadow-xl w-[28rem] max-w-[90vw] max-h-[80vh] overflow-y-auto">
-        <div className="px-5 py-4 border-b border-border flex items-center justify-between sticky top-0 bg-card z-10">
+      <div className="relative bg-card rounded-xl border border-border shadow-xl w-[38rem] max-w-[90vw] h-[28rem] max-h-[80vh] flex flex-col overflow-hidden">
+        {/* Header */}
+        <div className="px-5 py-3 border-b border-border flex items-center justify-between shrink-0">
           <h2 className="text-lg font-semibold text-ink">Settings</h2>
           <button onClick={onClose} className="text-muted-foreground hover:text-ink text-xl leading-none">&times;</button>
         </div>
-        <div className="p-5 space-y-5">
-          <div className="space-y-3">
-            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Display</h3>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-ink">Shorten paths</p>
-                <p className="text-xs text-muted-foreground">Replace home directory with ~</p>
-              </div>
-              <Switch checked={shortenPaths} onCheckedChange={setShortenPaths} />
-            </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-ink">Project tabs layout</p>
-                <p className="text-xs text-muted-foreground">Position of project/feature tabs</p>
-              </div>
-              <div className="flex gap-0.5 p-0.5 bg-muted rounded-lg">
-                <button
-                  onClick={() => setFeatureTabsLayout("horizontal")}
-                  className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                    featureTabsLayout === "horizontal" ? "bg-background text-ink shadow-sm" : "text-muted-foreground hover:text-ink"
-                  }`}
-                >
-                  Horizontal
-                </button>
-                <button
-                  onClick={() => setFeatureTabsLayout("vertical")}
-                  className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                    featureTabsLayout === "vertical" ? "bg-background text-ink shadow-sm" : "text-muted-foreground hover:text-ink"
-                  }`}
-                >
-                  Vertical
-                </button>
-              </div>
-            </div>
+        {/* Two-column layout */}
+        <div className="flex flex-1 min-h-0">
+          {/* Left sidebar */}
+          <div className="w-40 shrink-0 border-r border-border bg-muted/30 p-2 space-y-1">
+            {settingsSections.map((section) => (
+              <button
+                key={section.id}
+                onClick={() => setActiveSection(section.id)}
+                className={`w-full text-left px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                  activeSection === section.id
+                    ? "bg-primary/10 text-primary font-medium"
+                    : "text-muted-foreground hover:text-ink hover:bg-muted"
+                }`}
+              >
+                {section.label}
+              </button>
+            ))}
           </div>
-          <div className="space-y-3">
-            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Behavior</h3>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-ink">Auto-copy on select</p>
-                <p className="text-xs text-muted-foreground">Copy selected text automatically</p>
+          {/* Right content */}
+          <div className="flex-1 p-5 overflow-y-auto">
+            {activeSection === "display" && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-ink">Shorten paths</p>
+                    <p className="text-xs text-muted-foreground">Replace home directory with ~</p>
+                  </div>
+                  <Switch checked={shortenPaths} onCheckedChange={setShortenPaths} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-ink">Project tabs layout</p>
+                    <p className="text-xs text-muted-foreground">Position of project/feature tabs</p>
+                  </div>
+                  <div className="flex gap-0.5 p-0.5 bg-muted rounded-lg">
+                    <button
+                      onClick={() => setFeatureTabsLayout("horizontal")}
+                      className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                        featureTabsLayout === "horizontal" ? "bg-background text-ink shadow-sm" : "text-muted-foreground hover:text-ink"
+                      }`}
+                    >
+                      Horizontal
+                    </button>
+                    <button
+                      onClick={() => setFeatureTabsLayout("vertical")}
+                      className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                        featureTabsLayout === "vertical" ? "bg-background text-ink shadow-sm" : "text-muted-foreground hover:text-ink"
+                      }`}
+                    >
+                      Vertical
+                    </button>
+                  </div>
+                </div>
               </div>
-              <Switch checked={autoCopy} onCheckedChange={handleAutoCopyChange} />
-            </div>
-          </div>
-          <div className="space-y-3">
-            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">StatusBar</h3>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium text-ink">Custom script mode</p>
-                <p className="text-xs text-muted-foreground">Use a script to generate status bar content</p>
+            )}
+            {activeSection === "terminal" && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-ink">Auto-copy on select</p>
+                    <p className="text-xs text-muted-foreground">Copy selected text automatically</p>
+                  </div>
+                  <Switch checked={autoCopy} onCheckedChange={handleAutoCopyChange} />
+                </div>
               </div>
-              <Switch checked={statusBarEnabled} onCheckedChange={handleStatusBarEnabledChange} />
-            </div>
-            {statusBarEnabled && (
-              <div className="space-y-2 pl-0.5">
-                <label className="text-xs font-medium text-ink">Script path</label>
-                <Input
-                  className="text-xs font-mono"
-                  placeholder="~/.lovstudio/lovcode/statusbar/default.sh"
-                  value={statusBarScript}
-                  onChange={(e) => handleStatusBarScriptChange(e.target.value)}
-                />
-                <p className="text-[10px] text-muted-foreground">
-                  Script receives JSON context via stdin. First line of stdout becomes the status bar.
-                  <br />
-                  <span className="text-muted-foreground/70">Supports ANSI color codes.</span>
-                </p>
+            )}
+            {activeSection === "statusbar" && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-ink">Custom script mode</p>
+                    <p className="text-xs text-muted-foreground">Use a script to generate status bar content</p>
+                  </div>
+                  <Switch checked={statusBarEnabled} onCheckedChange={handleStatusBarEnabledChange} />
+                </div>
+                {statusBarEnabled && (
+                  <div className="space-y-2">
+                    <label className="text-xs font-medium text-ink">Script path</label>
+                    <Input
+                      className="text-xs font-mono"
+                      placeholder="~/.lovstudio/lovcode/statusbar/default.sh"
+                      value={statusBarScript}
+                      onChange={(e) => handleStatusBarScriptChange(e.target.value)}
+                    />
+                    <p className="text-[10px] text-muted-foreground">
+                      Script receives JSON context via stdin. First line of stdout becomes the status bar.
+                      <br />
+                      <span className="text-muted-foreground/70">Supports ANSI color codes.</span>
+                    </p>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -368,10 +401,6 @@ function ProfileDialog({ open, onClose, profile, onSave }: { open: boolean; onCl
               <Label htmlFor="nickname">Name</Label>
               <Input id="nickname" value={nickname} onChange={(e) => setNickname(e.target.value)} placeholder="Your name" />
             </div>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="avatar">Avatar URL</Label>
-            <Input id="avatar" value={avatarUrl} onChange={(e) => setAvatarUrl(e.target.value)} placeholder="https://..." />
           </div>
         </div>
         <div className="flex justify-end gap-2">
