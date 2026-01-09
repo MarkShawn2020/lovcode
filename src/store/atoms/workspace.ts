@@ -18,3 +18,6 @@ export const featureSidebarFilesExpandedAtom = atomWithStorage("feature-sidebar-
 // VerticalFeatureTabs sidebar mode
 export type SidebarMode = "feats" | "sessions";
 export const sidebarModeAtom = atomWithStorage<SidebarMode>("sidebar-mode", "feats");
+
+// Dashboard sessions panel visibility
+export const dashboardSessionsVisibleAtom = atomWithStorage("dashboard-sessions-visible", true);

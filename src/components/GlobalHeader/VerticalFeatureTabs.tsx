@@ -3,6 +3,7 @@ import { useAtom } from "jotai";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
+  ChevronLeftIcon,
   ChatBubbleIcon,
   DotsVerticalIcon,
 } from "@radix-ui/react-icons";
@@ -10,6 +11,7 @@ import {
   workspaceDataAtom,
   collapsedProjectGroupsAtom,
   verticalTabsSidebarWidthAtom,
+  dashboardSessionsVisibleAtom,
 } from "@/store";
 import { useNavigate, useInvokeQuery } from "@/hooks";
 import { invoke } from "@tauri-apps/api/core";
@@ -31,6 +33,7 @@ export function VerticalFeatureTabs() {
   const [workspace] = useAtom(workspaceDataAtom);
   const [collapsedGroups, setCollapsedGroups] = useAtom(collapsedProjectGroupsAtom);
   const [sidebarWidth, setSidebarWidth] = useAtom(verticalTabsSidebarWidthAtom);
+  const [, setSidebarVisible] = useAtom(dashboardSessionsVisibleAtom);
   const [isResizing, setIsResizing] = useState(false);
   const resizeRef = useRef<HTMLDivElement>(null);
 
@@ -85,6 +88,18 @@ export function VerticalFeatureTabs() {
             />
           ))}
         </div>
+      </div>
+
+      {/* Hide Sidebar Button */}
+      <div className="shrink-0 border-t border-border p-2">
+        <button
+          onClick={() => setSidebarVisible(false)}
+          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground hover:text-ink hover:bg-muted rounded-lg transition-colors"
+          title="Hide sidebar"
+        >
+          <ChevronLeftIcon className="w-3.5 h-3.5" />
+          <span>Hide</span>
+        </button>
       </div>
 
       {/* Resize Handle */}

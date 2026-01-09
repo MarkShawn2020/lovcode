@@ -33,7 +33,7 @@ export {
   primaryFeatureAtom,
   workspaceDataAtom, workspaceLoadingAtom, collapsedProjectGroupsAtom,
   featureSidebarExpandedPanelsAtom, featureSidebarPinnedExpandedAtom, featureSidebarFilesExpandedAtom,
-  sidebarModeAtom,
+  sidebarModeAtom, dashboardSessionsVisibleAtom,
   type SidebarMode,
 } from "./atoms/workspace";
 
