@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.24.6
+
+### Patch Changes
+
+- refactor(settings): Apple style dual-column layout
+  feat(statusbar): script-configurable statusbar
+  feat(workspace): Dashboard sidebar show/hide toggle
+  feat(ui): add bottom statusbar
+  fix(knowledge): fix distill detail 404 issue
+
 ## 0.24.5
 
 ### Patch Changes
