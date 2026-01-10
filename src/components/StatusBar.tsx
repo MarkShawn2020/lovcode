@@ -20,8 +20,7 @@ import {
   ClockIcon,
   SettingsIcon,
 } from "lucide-react";
-
-const VERSION = "0.24.5";
+import { version as VERSION } from "../../package.json";
 
 interface NetworkInfo {
   region: string;
@@ -323,7 +322,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
       {/* Left: Product name & version */}
       <div className="flex items-center gap-4">
         <span className="font-medium text-ink">Lovcode</span>
-        <span className="text-muted-foreground/70">v{VERSION}</span>
+        <span className="text-muted-foreground">v{VERSION}</span>
 
         {/* Stats */}
         <div className="flex items-center gap-3 ml-2 border-l border-border/50 pl-4">
