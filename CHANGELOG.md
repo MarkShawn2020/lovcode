@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.8
+
+### Patch Changes
+
+- 修复在中文输入法下 shift 键相关的 IME 符号输入问题
+
 ## 0.24.7
 
 ### Patch Changes
