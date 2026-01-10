@@ -102,34 +102,65 @@ export function TerminalPane({
     // IME Fix: Handle direct non-ASCII input (Shift+punctuation) to bypass xterm's buggy CompositionHelper
     // Composition input (pinyin) should go through xterm normally
     // See: https://github.com/xtermjs/xterm.js/issues/3070
-    const textarea = pooled.container.querySelector('textarea') as HTMLTextAreaElement;
-    // Track the key press that triggered direct non-ASCII input
-    // We use a counter to identify key presses, avoiding timing issues with flags
-    let currentKeyPressId = 0;
-    let directInputKeyPressId = -1;
-    let lastDirectInputSent: string | null = null;
+    const textarea = pooled.container.querySelector("textarea") as HTMLTextAreaElement;
+    const pendingDirectInputs: Array<{ data: string; asciiFallback?: string; ts: number }> = [];
+    const DIRECT_INPUT_TIMEOUT_MS = 120;
+    const asciiSymbolRegex = /^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]$/;
+
+    const getAsciiFallback = (data: string): string | null => {
+      if (data.length !== 1) return null;
+      const code = data.charCodeAt(0);
+      if (code >= 0xff01 && code <= 0xff5e) {
+        return String.fromCharCode(code - 0xfee0);
+      }
+      return null;
+    };
+
+    const enqueueDirectInput = (data: string) => {
+      pendingDirectInputs.push({
+        data,
+        asciiFallback: getAsciiFallback(data) ?? undefined,
+        ts: Date.now(),
+      });
+      if (pendingDirectInputs.length > 5) pendingDirectInputs.shift();
+    };
+
+    const shouldSkipXtermInput = (data: string) => {
+      if (pendingDirectInputs.length === 0) return false;
+      const now = Date.now();
+      while (pendingDirectInputs.length > 0 && now - pendingDirectInputs[0].ts > DIRECT_INPUT_TIMEOUT_MS) {
+        pendingDirectInputs.shift();
+      }
+      const pending = pendingDirectInputs[0];
+      if (!pending) return false;
+      if (data === pending.data || (pending.asciiFallback && data === pending.asciiFallback)) {
+        pendingDirectInputs.shift();
+        return true;
+      }
+      return false;
+    };
 
     if (textarea) {
-      // Increment key press counter on each keydown
-      textarea.addEventListener('keydown', () => {
-        currentKeyPressId++;
-      }, { capture: true });
-
       // Use beforeinput to intercept BEFORE the character enters textarea
       // inputType 'insertText' is for direct input, 'insertCompositionText' is for IME composition
-      textarea.addEventListener('beforeinput', (e) => {
+      textarea.addEventListener("beforeinput", (e) => {
         const ie = e as InputEvent;
 
-        // Only handle direct non-ASCII input (Shift+punctuation), not composition
-        if (ie.inputType === 'insertText' && ie.data && /[^\x00-\x7f]/.test(ie.data)) {
-          e.preventDefault(); // Prevent xterm from seeing it at all
-          directInputKeyPressId = currentKeyPressId;
-          lastDirectInputSent = ie.data;
-          // Send directly to PTY
-          if (ptyReadySessions.has(sessionId)) {
-            const encoder = new TextEncoder();
-            invoke("pty_write", { id: sessionId, data: Array.from(encoder.encode(ie.data)) });
-          }
+        const isInsertText = ie.inputType === "insertText";
+        const isInsertComposition = ie.inputType === "insertCompositionText";
+        if ((!isInsertText && !isInsertComposition) || !ie.data) return;
+        const isNonAscii = /[^\x00-\x7f]/.test(ie.data);
+        const isAsciiSymbol = asciiSymbolRegex.test(ie.data);
+        const shouldHandleNonAscii = isNonAscii && isInsertText;
+        const shouldHandleAsciiSymbol = isAsciiSymbol && (isInsertText || isInsertComposition);
+        if (!shouldHandleNonAscii && !shouldHandleAsciiSymbol) return;
+
+        e.preventDefault(); // Prevent xterm from seeing it at all
+        enqueueDirectInput(ie.data);
+        // Send directly to PTY
+        if (ptyReadySessions.has(sessionId)) {
+          const encoder = new TextEncoder();
+          invoke("pty_write", { id: sessionId, data: Array.from(encoder.encode(ie.data)) });
         }
       }, { capture: true });
     }
@@ -307,27 +338,7 @@ export function TerminalPane({
     const onDataDisposable = term.onData((data) => {
       if (!ptyReadySessions.has(sessionId)) return;
 
-      // Check if this data is from the same key press as our direct non-ASCII input
-      const isSameKeyPress = directInputKeyPressId === currentKeyPressId;
-
-      if (isSameKeyPress && lastDirectInputSent) {
-        // Skip if this exact data was already sent by our direct input handler
-        if (lastDirectInputSent === data) {
-          lastDirectInputSent = null;
-          return;
-        }
-        // Skip ASCII punctuation that accompanies direct non-ASCII input
-        // (e.g., xterm sends "(" from keydown while IME produces "（")
-        if (/^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]$/.test(data)) {
-          lastDirectInputSent = null;
-          return;
-        }
-      }
-
-      // Clear stale state from previous key presses
-      if (!isSameKeyPress) {
-        lastDirectInputSent = null;
-      }
+      if (shouldSkipXtermInput(data)) return;
 
       const encoder = new TextEncoder();
       const bytes = Array.from(encoder.encode(data));
