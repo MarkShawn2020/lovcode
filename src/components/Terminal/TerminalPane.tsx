@@ -1,6 +1,22 @@
-import { useEffect, useRef, useCallback } from "react";
+import { useEffect, useRef, useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import {
+  CrossCircledIcon,
+  ExclamationTriangleIcon,
+  InfoCircledIcon,
+} from "@radix-ui/react-icons";
+import { useNavigate } from "@/hooks";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../ui/dialog";
+import { Button } from "../ui/button";
+import type { ClaudeSettings } from "@/types";
 import "@xterm/xterm/css/xterm.css";
 import {
   getOrCreateTerminal,
@@ -19,6 +35,131 @@ interface PtyDataEvent {
 
 interface PtyExitEvent {
   id: string;
+}
+
+type CommandKind = "claude" | "codex";
+type DiagnosticSeverity = "error" | "warning" | "info";
+type DiagnosticIssueCode = "cli-not-found" | "missing-credentials" | "command-exited" | "command-failed";
+
+interface DiagnosticIssue {
+  code: DiagnosticIssueCode;
+  severity: DiagnosticSeverity;
+  title: string;
+  detail?: string;
+}
+
+interface CommandDiagnostics {
+  command: string;
+  commandKind: CommandKind;
+  commandLabel: string;
+  cliPath?: string;
+  description?: string;
+  issues: DiagnosticIssue[];
+}
+
+const QUICK_EXIT_MS = 1500;
+
+const getCommandKind = (command?: string): CommandKind | null => {
+  if (!command) return null;
+  const trimmed = command.trim();
+  if (!trimmed) return null;
+  const firstToken = trimmed.split(/\s+/)[0]?.replace(/^['"]|['"]$/g, "");
+  const base = firstToken?.split("/").pop();
+  if (base === "claude" || base === "codex") return base;
+  return null;
+};
+
+const getCommandLabel = (kind: CommandKind) => (kind === "claude" ? "Claude Code" : "Codex");
+
+const getEnvFromSettings = (settings: ClaudeSettings | null | undefined): Record<string, string> => {
+  const raw = settings?.raw;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const envValue = (raw as Record<string, unknown>).env;
+  if (!envValue || typeof envValue !== "object" || Array.isArray(envValue)) return {};
+  return Object.fromEntries(
+    Object.entries(envValue as Record<string, unknown>).map(([key, value]) => [key, String(value ?? "").trim()])
+  );
+};
+
+const isTruthyEnv = (value: string) => {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+};
+
+async function runCommandDiagnostics(command: string, cwd: string): Promise<CommandDiagnostics | null> {
+  const commandKind = getCommandKind(command);
+  if (!commandKind) return null;
+
+  const commandLabel = getCommandLabel(commandKind);
+  const issues: DiagnosticIssue[] = [];
+  let cliPath: string | undefined;
+
+  try {
+    const output = await invoke<string>("exec_shell_command", {
+      command: `command -v ${commandKind} 2>/dev/null`,
+      cwd,
+    });
+    const trimmed = output.trim();
+    cliPath = trimmed || undefined;
+    if (!cliPath) {
+      issues.push({
+        code: "cli-not-found",
+        severity: "error",
+        title: `${commandLabel} CLI not found in PATH`,
+        detail: `Install ${commandKind} and ensure your shell PATH includes it.`,
+      });
+    }
+  } catch {
+    issues.push({
+      code: "cli-not-found",
+      severity: "error",
+      title: `${commandLabel} CLI not found in PATH`,
+      detail: `Install ${commandKind} and ensure your shell PATH includes it.`,
+    });
+  }
+
+  if (commandKind === "claude") {
+    try {
+      const settings = await invoke<ClaudeSettings>("get_settings");
+      const env = getEnvFromSettings(settings);
+      const hasOauth = isTruthyEnv(env.CLAUDE_CODE_USE_OAUTH || "");
+      const hasAuthToken = Boolean(env.ANTHROPIC_AUTH_TOKEN);
+      const hasApiKey = Boolean(env.ANTHROPIC_API_KEY);
+      const hasProxyKey = Boolean(
+        env.ZENMUX_API_KEY ||
+        env.MODELGATE_API_KEY ||
+        env.QINIU_API_KEY ||
+        env.SILICONFLOW_API_KEY
+      );
+
+      if (!hasOauth && !hasAuthToken && !hasApiKey && !hasProxyKey) {
+        issues.push({
+          code: "missing-credentials",
+          severity: "warning",
+          title: "Claude credentials not configured",
+          detail: "Set ANTHROPIC_AUTH_TOKEN / ANTHROPIC_API_KEY or enable OAuth (CLAUDE_CODE_USE_OAUTH=1). In CN, configure a proxy in LLM Providers.",
+        });
+      }
+    } catch {
+      issues.push({
+        code: "missing-credentials",
+        severity: "warning",
+        title: "Unable to read Claude settings",
+        detail: "Check ~/.claude/settings.json and ensure Lovcode has access to it.",
+      });
+    }
+  }
+
+  if (issues.length === 0) return null;
+
+  return {
+    command,
+    commandKind,
+    commandLabel,
+    cliPath,
+    description: "Lovcode couldn't launch the CLI session. Review the issues below.",
+    issues,
+  };
 }
 
 export interface TerminalPaneProps {
@@ -56,6 +197,7 @@ export function TerminalPane({
   onTitleChange,
   className = "",
 }: TerminalPaneProps) {
+  const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null);
   const cwdRef = useRef(cwd);
   const commandRef = useRef(command);
@@ -64,6 +206,13 @@ export function TerminalPane({
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
   const onTitleChangeRef = useRef(onTitleChange);
+  const preflightRef = useRef<CommandDiagnostics | null>(null);
+  const commandStartRef = useRef<number | null>(null);
+  const hadOutputRef = useRef(false);
+  const commandExitHandledRef = useRef(false);
+  const diagnosticShownRef = useRef(false);
+  const [diagnostic, setDiagnostic] = useState<CommandDiagnostics | null>(null);
+  const [diagnosticOpen, setDiagnosticOpen] = useState(false);
 
   useEffect(() => { cwdRef.current = cwd; }, [cwd]);
   useEffect(() => { commandRef.current = command; }, [command]);
@@ -72,6 +221,22 @@ export function TerminalPane({
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onExitRef.current = onExit; }, [onExit]);
   useEffect(() => { onTitleChangeRef.current = onTitleChange; }, [onTitleChange]);
+  useEffect(() => {
+    diagnosticShownRef.current = false;
+    preflightRef.current = null;
+    commandStartRef.current = null;
+    hadOutputRef.current = false;
+    commandExitHandledRef.current = false;
+    setDiagnostic(null);
+    setDiagnosticOpen(false);
+  }, [ptyId]);
+
+  const openDiagnostic = useCallback((diag: CommandDiagnostics) => {
+    if (diagnosticShownRef.current) return;
+    diagnosticShownRef.current = true;
+    setDiagnostic(diag);
+    setDiagnosticOpen(true);
+  }, []);
 
   // Load/unload WebGL based on visibility to prevent context exhaustion
   useEffect(() => {
@@ -191,6 +356,18 @@ export function TerminalPane({
 
         const isNewPty = !exists;
         if (isNewPty) {
+          const commandText = commandRef.current?.trim();
+          if (commandText) {
+            commandStartRef.current = Date.now();
+            hadOutputRef.current = false;
+            commandExitHandledRef.current = false;
+            const diagnostics = await runCommandDiagnostics(commandText, cwdRef.current);
+            if (!mountState.isMounted) return;
+            if (diagnostics) {
+              preflightRef.current = diagnostics;
+              openDiagnostic(diagnostics);
+            }
+          }
           await invoke("pty_create", { id: sessionId, cwd: cwdRef.current, command: commandRef.current });
         }
 
@@ -244,6 +421,22 @@ export function TerminalPane({
         onReadyRef.current?.();
       } catch (err) {
         if (mountState.isMounted) {
+          const commandText = commandRef.current?.trim();
+          const commandKind = getCommandKind(commandText);
+          if (commandText && commandKind) {
+            openDiagnostic({
+              command: commandText,
+              commandKind,
+              commandLabel: getCommandLabel(commandKind),
+              description: "Lovcode couldn't create the CLI session.",
+              issues: [{
+                code: "command-failed",
+                severity: "error",
+                title: "Failed to start the CLI process",
+                detail: String(err),
+              }],
+            });
+          }
           console.error("Failed to initialize PTY:", err);
           term.writeln(`\r\n\x1b[31mFailed to create terminal: ${err}\x1b[0m`);
         }
@@ -390,6 +583,9 @@ export function TerminalPane({
 
     const unlistenData = listen<PtyDataEvent>("pty-data", (event) => {
       if (event.payload.id === sessionId && mountState.isMounted) {
+        if (event.payload.data.length > 0) {
+          hadOutputRef.current = true;
+        }
         // Send initial input on first data received (shell prompt is ready)
         if (!initialInputSent && initialInputRef.current) {
           initialInputSent = true;
@@ -423,6 +619,36 @@ export function TerminalPane({
 
         // For command sessions (claude/codex), fall back to shell automatically
         if (commandRef.current) {
+          if (!commandExitHandledRef.current) {
+            const commandText = commandRef.current.trim();
+            const commandKind = getCommandKind(commandText);
+            if (commandKind) {
+              const now = Date.now();
+              const startedAt = commandStartRef.current ?? now;
+              const exitedQuickly = now - startedAt < QUICK_EXIT_MS;
+              const noOutput = !hadOutputRef.current;
+              const preflight = preflightRef.current;
+              if (!diagnosticShownRef.current && (preflight || (exitedQuickly && noOutput))) {
+                const base = preflight ?? {
+                  command: commandText,
+                  commandKind,
+                  commandLabel: getCommandLabel(commandKind),
+                  issues: [],
+                };
+                const issues = [...base.issues];
+                if (exitedQuickly && noOutput) {
+                  issues.push({
+                    code: "command-exited",
+                    severity: "error",
+                    title: `${base.commandLabel} exited immediately`,
+                    detail: "The CLI process ended before producing output. Check login, proxy, or network settings.",
+                  });
+                }
+                openDiagnostic({ ...base, issues });
+              }
+            }
+            commandExitHandledRef.current = true;
+          }
           fallbackToShell();
         } else {
           // Plain shell session ended - close the tab
@@ -509,10 +735,90 @@ export function TerminalPane({
   }, [ptyId]);
 
   return (
-    <div
-      ref={containerRef}
-      className={`w-full h-full bg-[#1a1a1a] ${className}`}
-      onClick={handleClick}
-    />
+    <>
+      <div
+        ref={containerRef}
+        className={`w-full h-full bg-[#1a1a1a] ${className}`}
+        onClick={handleClick}
+      />
+      <Dialog open={diagnosticOpen} onOpenChange={setDiagnosticOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{diagnostic ? `Unable to start ${diagnostic.commandLabel}` : "Unable to start CLI"}</DialogTitle>
+            <DialogDescription>
+              {diagnostic?.description ?? "Lovcode couldn't launch the CLI session. Review the issues below."}
+            </DialogDescription>
+          </DialogHeader>
+          {diagnostic && (
+            <div className="space-y-3">
+              <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                <div className="font-medium text-ink">Command</div>
+                <code className="break-all">{diagnostic.command}</code>
+                {diagnostic.cliPath && (
+                  <div className="mt-2">
+                    <div className="font-medium text-ink">Detected CLI</div>
+                    <code className="break-all">{diagnostic.cliPath}</code>
+                  </div>
+                )}
+              </div>
+              <div className="space-y-2">
+                {diagnostic.issues.map((issue, index) => {
+                  const icon = issue.severity === "error"
+                    ? <CrossCircledIcon className="w-4 h-4 text-red-500" />
+                    : issue.severity === "warning"
+                    ? <ExclamationTriangleIcon className="w-4 h-4 text-amber-500" />
+                    : <InfoCircledIcon className="w-4 h-4 text-blue-500" />;
+                  return (
+                    <div key={`${issue.code}-${index}`} className="flex items-start gap-2">
+                      <div className="mt-0.5">{icon}</div>
+                      <div className="space-y-0.5">
+                        <div className="text-sm font-medium text-ink">{issue.title}</div>
+                        {issue.detail && (
+                          <div className="text-xs text-muted-foreground">{issue.detail}</div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            {diagnostic?.commandKind === "claude" && diagnostic.issues.some((issue) => issue.code === "cli-not-found") && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDiagnosticOpen(false);
+                  navigate({ type: "basic-version" });
+                }}
+              >
+                Open CC Version
+              </Button>
+            )}
+            {diagnostic?.commandKind === "claude" && !diagnostic.issues.some((issue) => issue.code === "cli-not-found") && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDiagnosticOpen(false);
+                  navigate({ type: "basic-llm" });
+                }}
+              >
+                Open LLM Providers
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDiagnosticOpen(false);
+                navigate({ type: "basic-env" });
+              }}
+            >
+              Open Environment
+            </Button>
+            <Button onClick={() => setDiagnosticOpen(false)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }
