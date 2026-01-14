@@ -274,7 +274,7 @@ export function PanelGrid({
     const dropdownButtonClass = "inline-flex items-center justify-between gap-3 px-4 py-2.5 text-sm border border-border bg-card hover:bg-card-alt rounded-xl transition-colors";
 
     return (
-      <div className="h-full w-full flex items-center justify-center bg-canvas bg-[radial-gradient(#e5e5e5_1px,transparent_1px)] dark:bg-[radial-gradient(#333_1px,transparent_1px)] [background-size:20px_20px]">
+      <div className="h-full w-full flex items-start justify-center pt-[20vh] bg-canvas bg-[radial-gradient(#e5e5e5_1px,transparent_1px)] dark:bg-[radial-gradient(#333_1px,transparent_1px)] [background-size:20px_20px]">
         <div className="flex flex-col items-center gap-5 w-full max-w-xl px-6">
           {/* App logo */}
           <div className="mb-2">
@@ -435,7 +435,7 @@ export function PanelGrid({
               {showSlashMenu ? (
                 selectedTerminalType.type === "terminal" ? (
                   <div className="px-3 py-2.5 border-t border-border bg-muted/30 text-sm text-muted-foreground">
-                    Slash commands not supported in Terminal. Switch to Claude Code or Codex.
+                    Slash commands are only available in Claude Code or Codex mode
                   </div>
                 ) : (
                   <SlashCommandMenu
