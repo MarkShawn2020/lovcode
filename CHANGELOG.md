@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.9
+
+### Patch Changes
+
+- 修复 slash command 菜单交互和布局问题
+
 ## 0.24.8
 
 ### Patch Changes
