@@ -5,6 +5,9 @@ import { ChevronLeftIcon, ChevronRightIcon, DrawingPinFilledIcon, ChevronDownIco
 import { SessionPanel } from "./SessionPanel";
 import type { LayoutNode } from "../../views/Workspace/types";
 import { TERMINAL_OPTIONS, type ProjectOption } from "../ui/new-terminal-button";
+import { SlashCommandMenu } from "../ui/slash-command-menu";
+import { useInvokeQuery } from "../../hooks";
+import type { LocalCommand } from "../../types";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -180,6 +183,18 @@ export function PanelGrid({
   const [inputCommand, setInputCommand] = useState("");
   // Track IME composing state
   const composingRef = useRef(false);
+  // Textarea ref for positioning slash command menu
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Slash command menu state
+  const [showSlashMenu, setShowSlashMenu] = useState(false);
+  const [slashFilter, setSlashFilter] = useState("");
+  const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
+
+  // Fetch local commands for slash autocomplete
+  const { data: localCommands = [] } = useInvokeQuery<LocalCommand[]>(
+    ["commands"],
+    "list_local_commands"
+  );
 
   // Sync with activeProjectId when it changes
   useEffect(() => {
@@ -322,9 +337,30 @@ export function PanelGrid({
           <div className="w-full max-w-md">
             <div className="border border-border rounded-2xl bg-card overflow-hidden shadow-sm">
               <textarea
+                ref={textareaRef}
                 value={inputCommand}
-                onChange={(e) => setInputCommand(e.target.value)}
-                placeholder="Enter a command or describe what you want to do..."
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setInputCommand(value);
+
+                  // Only show slash menu in claude/codex mode
+                  if (selectedTerminalType.type === "claude" || selectedTerminalType.type === "codex") {
+                    // Check if we're typing a slash command at the start of input
+                    if (value.startsWith("/")) {
+                      const filter = value.slice(1); // Remove leading /
+                      setSlashFilter(filter);
+                      setSlashSelectedIndex(0); // Reset selection on filter change
+                      setShowSlashMenu(true);
+                    } else {
+                      setShowSlashMenu(false);
+                    }
+                  }
+                }}
+                placeholder={
+                  selectedTerminalType.type === "claude" || selectedTerminalType.type === "codex"
+                    ? "Type / for commands, or describe what you want to do..."
+                    : "Enter a command or describe what you want to do..."
+                }
                 className="w-full p-4 bg-transparent resize-none outline-none text-sm min-h-[80px] placeholder:text-muted-foreground/60"
                 onCompositionStart={() => { composingRef.current = true; }}
                 onCompositionEnd={() => {
@@ -334,20 +370,73 @@ export function PanelGrid({
                 onKeyDown={(e) => {
                   // 'Process' key indicates IME is handling the input
                   if (e.key === 'Process' || composingRef.current) return;
+
+                  // Handle slash menu navigation
+                  if (showSlashMenu) {
+                    const activeCommands = localCommands.filter(cmd => cmd.status === "active");
+                    const filteredCommands = activeCommands
+                      .filter(cmd => {
+                        const search = slashFilter.toLowerCase();
+                        return cmd.name.toLowerCase().includes(search) ||
+                          (cmd.description?.toLowerCase().includes(search) ?? false);
+                      })
+                      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+                    const maxIndex = filteredCommands.length - 1;
+
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setSlashSelectedIndex(i => Math.min(i + 1, maxIndex));
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setSlashSelectedIndex(i => Math.max(i - 1, 0));
+                      return;
+                    }
+                    if (e.key === 'Enter' || e.key === 'Tab') {
+                      e.preventDefault();
+                      const selected = filteredCommands[slashSelectedIndex];
+                      if (selected) {
+                        setInputCommand(selected.name + " ");
+                        setShowSlashMenu(false);
+                      }
+                      return;
+                    }
+                    if (e.key === 'Escape') {
+                      e.preventDefault();
+                      setShowSlashMenu(false);
+                      return;
+                    }
+                  }
+
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault();
                     handleCreate(inputCommand || undefined);
                   }
                 }}
               />
-              <div className="flex items-center justify-end px-3 py-2.5 border-t border-border bg-muted/30">
-                <button
-                  onClick={() => handleCreate(inputCommand || undefined)}
-                  className="px-4 py-1.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
-                >
-                  Start
-                </button>
-              </div>
+              {/* Bottom area: slash commands or start button */}
+              {showSlashMenu ? (
+                <SlashCommandMenu
+                  commands={localCommands.filter(cmd => cmd.status === "active")}
+                  filter={slashFilter}
+                  selectedIndex={slashSelectedIndex}
+                  onSelect={(cmd) => {
+                    setInputCommand(cmd.name + " ");
+                    setShowSlashMenu(false);
+                    textareaRef.current?.focus();
+                  }}
+                />
+              ) : (
+                <div className="flex items-center justify-end px-3 py-2.5 border-t border-border bg-muted/30">
+                  <button
+                    onClick={() => handleCreate(inputCommand || undefined)}
+                    className="px-4 py-1.5 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
+                  >
+                    Start
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 
