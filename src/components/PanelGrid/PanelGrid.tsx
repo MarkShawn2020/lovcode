@@ -5,9 +5,9 @@ import { ChevronLeftIcon, ChevronRightIcon, DrawingPinFilledIcon, ChevronDownIco
 import { SessionPanel } from "./SessionPanel";
 import type { LayoutNode } from "../../views/Workspace/types";
 import { TERMINAL_OPTIONS, type ProjectOption } from "../ui/new-terminal-button";
-import { SlashCommandMenu } from "../ui/slash-command-menu";
+import { SlashCommandMenu, type CommandItem } from "../ui/slash-command-menu";
 import { useInvokeQuery } from "../../hooks";
-import type { LocalCommand } from "../../types";
+import type { LocalCommand, CodexCommand } from "../../types";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -177,8 +177,11 @@ export function PanelGrid({
 }: PanelGridProps) {
   // Selected project for empty state (default to active project)
   const [selectedProjectId, setSelectedProjectId] = useState<string | undefined>(activeProjectId);
-  // Selected terminal type for empty state
-  const [selectedTerminalType, setSelectedTerminalType] = useState(TERMINAL_OPTIONS[0]);
+  // Selected terminal type for empty state (persisted)
+  const [selectedTerminalType, setSelectedTerminalType] = useState(() => {
+    const saved = localStorage.getItem("lovcode:terminalType");
+    return TERMINAL_OPTIONS.find(o => o.type === saved) || TERMINAL_OPTIONS[0];
+  });
   // Input command for empty state
   const [inputCommand, setInputCommand] = useState("");
   // Track IME composing state
@@ -190,11 +193,20 @@ export function PanelGrid({
   const [slashFilter, setSlashFilter] = useState("");
   const [slashSelectedIndex, setSlashSelectedIndex] = useState(0);
 
-  // Fetch local commands for slash autocomplete
+  // Fetch commands for autocomplete
   const { data: localCommands = [] } = useInvokeQuery<LocalCommand[]>(
     ["commands"],
     "list_local_commands"
   );
+  const { data: codexCommands = [] } = useInvokeQuery<CodexCommand[]>(
+    ["codexCommands"],
+    "list_codex_commands"
+  );
+
+  // Get commands based on terminal type (both use / trigger)
+  const commandItems: CommandItem[] = selectedTerminalType.type === "codex"
+    ? codexCommands.map(c => ({ name: c.name, description: c.description, path: c.path || c.name }))
+    : localCommands.filter(c => c.status === "active").map(c => ({ name: c.name, description: c.description, path: c.path }));
 
   // Sync with activeProjectId when it changes
   useEffect(() => {
@@ -322,7 +334,10 @@ export function PanelGrid({
                 {TERMINAL_OPTIONS.map((opt) => (
                   <DropdownMenuItem
                     key={opt.type}
-                    onClick={() => setSelectedTerminalType(opt)}
+                    onClick={() => {
+                      setSelectedTerminalType(opt);
+                      localStorage.setItem("lovcode:terminalType", opt.type);
+                    }}
                   >
                     <span className={opt.type === selectedTerminalType.type ? "font-medium" : ""}>
                       {opt.label}
@@ -343,9 +358,9 @@ export function PanelGrid({
                   const value = e.target.value;
                   setInputCommand(value);
 
-                  // Only show slash menu in claude/codex mode
+                  // Only show command menu in claude/codex mode (both use / trigger)
                   if (selectedTerminalType.type === "claude" || selectedTerminalType.type === "codex") {
-                    // Check if we're typing a slash command at the start of input
+                    // Check if we're typing a command at the start of input
                     if (value.startsWith("/")) {
                       const filter = value.slice(1); // Remove leading /
                       setSlashFilter(filter);
@@ -371,10 +386,9 @@ export function PanelGrid({
                   // 'Process' key indicates IME is handling the input
                   if (e.key === 'Process' || composingRef.current) return;
 
-                  // Handle slash menu navigation
+                  // Handle command menu navigation
                   if (showSlashMenu) {
-                    const activeCommands = localCommands.filter(cmd => cmd.status === "active");
-                    const filteredCommands = activeCommands
+                    const filteredCommands = commandItems
                       .filter(cmd => {
                         const search = slashFilter.toLowerCase();
                         return cmd.name.toLowerCase().includes(search) ||
@@ -415,10 +429,10 @@ export function PanelGrid({
                   }
                 }}
               />
-              {/* Bottom area: slash commands or start button */}
+              {/* Bottom area: commands or start button */}
               {showSlashMenu ? (
                 <SlashCommandMenu
-                  commands={localCommands.filter(cmd => cmd.status === "active")}
+                  commands={commandItems}
                   filter={slashFilter}
                   selectedIndex={slashSelectedIndex}
                   onSelect={(cmd) => {

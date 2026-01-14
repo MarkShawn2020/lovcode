@@ -1,11 +1,16 @@
 import { useRef, useEffect } from "react";
-import type { LocalCommand } from "../../types";
+
+export interface CommandItem {
+  name: string;
+  description: string | null;
+  path: string;
+}
 
 interface SlashCommandMenuProps {
-  commands: LocalCommand[];
+  commands: CommandItem[];
   filter: string;
   selectedIndex: number;
-  onSelect: (command: LocalCommand) => void;
+  onSelect: (command: CommandItem) => void;
 }
 
 export function SlashCommandMenu({

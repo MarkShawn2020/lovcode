@@ -127,6 +127,13 @@ export interface LocalAgent {
   content: string;
 }
 
+export interface CodexCommand {
+  name: string;
+  path: string | null;
+  description: string | null;
+  is_builtin: boolean;
+}
+
 export interface MarketplaceMeta {
   source_id?: string | null;
   source_name?: string | null;
