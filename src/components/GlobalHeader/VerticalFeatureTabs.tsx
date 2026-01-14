@@ -5,7 +5,9 @@ import {
   ChevronRightIcon,
   ChevronLeftIcon,
   DotsVerticalIcon,
+  PlusIcon,
 } from "@radix-ui/react-icons";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   workspaceDataAtom,
   collapsedProjectGroupsAtom,
@@ -35,12 +37,34 @@ const MIN_WIDTH = 180;
 const MAX_WIDTH = 400;
 
 export function VerticalFeatureTabs() {
-  const [workspace] = useAtom(workspaceDataAtom);
+  const [workspace, setWorkspace] = useAtom(workspaceDataAtom);
   const [collapsedGroups, setCollapsedGroups] = useAtom(collapsedProjectGroupsAtom);
   const [sidebarWidth, setSidebarWidth] = useAtom(verticalTabsSidebarWidthAtom);
   const [, setSidebarVisible] = useAtom(dashboardSessionsVisibleAtom);
   const [isResizing, setIsResizing] = useState(false);
   const resizeRef = useRef<HTMLDivElement>(null);
+
+  const handleAddProject = useCallback(async () => {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Select Project Directory",
+    });
+
+    if (selected && typeof selected === "string") {
+      const project = await invoke<WorkspaceProject>("workspace_add_project", {
+        path: selected,
+      });
+      setWorkspace((prev) => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          projects: [...prev.projects, project],
+          active_project_id: project.id,
+        };
+      });
+    }
+  }, [setWorkspace]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -95,11 +119,19 @@ export function VerticalFeatureTabs() {
         </div>
       </div>
 
-      {/* Hide Sidebar Button */}
-      <div className="shrink-0 border-t border-border p-2">
+      {/* Footer Actions */}
+      <div className="shrink-0 border-t border-border p-2 flex gap-1">
+        <button
+          onClick={handleAddProject}
+          className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground hover:text-ink hover:bg-muted rounded-lg transition-colors"
+          title="Add project"
+        >
+          <PlusIcon className="w-3.5 h-3.5" />
+          <span>Add</span>
+        </button>
         <button
           onClick={() => setSidebarVisible(false)}
-          className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground hover:text-ink hover:bg-muted rounded-lg transition-colors"
+          className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs text-muted-foreground hover:text-ink hover:bg-muted rounded-lg transition-colors"
           title="Hide sidebar"
         >
           <ChevronLeftIcon className="w-3.5 h-3.5" />
