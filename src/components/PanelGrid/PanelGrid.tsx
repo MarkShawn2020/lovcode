@@ -337,6 +337,11 @@ export function PanelGrid({
                     onClick={() => {
                       setSelectedTerminalType(opt);
                       localStorage.setItem("lovcode:terminalType", opt.type);
+                      // Update menu state based on input
+                      if (inputCommand.startsWith("/")) {
+                        setShowSlashMenu(true);
+                        setSlashSelectedIndex(0);
+                      }
                     }}
                   >
                     <span className={opt.type === selectedTerminalType.type ? "font-medium" : ""}>
@@ -358,17 +363,14 @@ export function PanelGrid({
                   const value = e.target.value;
                   setInputCommand(value);
 
-                  // Only show command menu in claude/codex mode (both use / trigger)
-                  if (selectedTerminalType.type === "claude" || selectedTerminalType.type === "codex") {
-                    // Check if we're typing a command at the start of input
-                    if (value.startsWith("/")) {
-                      const filter = value.slice(1); // Remove leading /
-                      setSlashFilter(filter);
-                      setSlashSelectedIndex(0); // Reset selection on filter change
-                      setShowSlashMenu(true);
-                    } else {
-                      setShowSlashMenu(false);
-                    }
+                  // Show command menu when typing / (all modes, but terminal shows hint)
+                  if (value.startsWith("/")) {
+                    const filter = value.slice(1); // Remove leading /
+                    setSlashFilter(filter);
+                    setSlashSelectedIndex(0); // Reset selection on filter change
+                    setShowSlashMenu(true);
+                  } else {
+                    setShowSlashMenu(false);
                   }
                 }}
                 placeholder={
@@ -429,18 +431,24 @@ export function PanelGrid({
                   }
                 }}
               />
-              {/* Bottom area: commands or start button */}
+              {/* Bottom area: command menu or start button */}
               {showSlashMenu ? (
-                <SlashCommandMenu
-                  commands={commandItems}
-                  filter={slashFilter}
-                  selectedIndex={slashSelectedIndex}
-                  onSelect={(cmd) => {
-                    setInputCommand(cmd.name + " ");
-                    setShowSlashMenu(false);
-                    textareaRef.current?.focus();
-                  }}
-                />
+                selectedTerminalType.type === "terminal" ? (
+                  <div className="px-3 py-2.5 border-t border-border bg-muted/30 text-sm text-muted-foreground">
+                    Slash commands not supported in Terminal. Switch to Claude Code or Codex.
+                  </div>
+                ) : (
+                  <SlashCommandMenu
+                    commands={commandItems}
+                    filter={slashFilter}
+                    selectedIndex={slashSelectedIndex}
+                    onSelect={(cmd) => {
+                      setInputCommand(cmd.name + " ");
+                      setShowSlashMenu(false);
+                      textareaRef.current?.focus();
+                    }}
+                  />
+                )
               ) : (
                 <div className="flex items-center justify-end px-3 py-2.5 border-t border-border bg-muted/30">
                   <button
