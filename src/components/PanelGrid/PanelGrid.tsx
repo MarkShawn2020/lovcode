@@ -363,8 +363,9 @@ export function PanelGrid({
                   const value = e.target.value;
                   setInputCommand(value);
 
-                  // Show command menu when typing / (all modes, but terminal shows hint)
-                  if (value.startsWith("/")) {
+                  // Show command menu when typing / without space (still selecting command)
+                  // Once there's a space, user is typing arguments - hide menu
+                  if (value.startsWith("/") && !value.includes(" ")) {
                     const filter = value.slice(1); // Remove leading /
                     setSlashFilter(filter);
                     setSlashSelectedIndex(0); // Reset selection on filter change
