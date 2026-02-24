@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.24.10
+
+### Patch Changes
+
+- fix(GlobalHeader): 导航栏布局优化 + 设置窗口最小尺寸
+
 ## 0.24.9
 
 ### Patch Changes
