@@ -17,6 +17,8 @@
         "title": "Lovcode",
         "width": 800,
         "height": 600,
+        "minWidth": 680,
+        "minHeight": 480,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "trafficLightPosition": {

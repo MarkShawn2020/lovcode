@@ -63,60 +63,58 @@ export function GlobalHeader({
   if (sidebarCollapsed) {
     // Collapsed layout - full nav in header
     return (
-      <div data-tauri-drag-region className="h-[52px] shrink-0 flex items-center justify-between border-b border-border bg-card">
-        <div className="flex items-center pl-[80px]">
-          <div className="flex items-center gap-0.5">
-            <NavButton
-              isActive={primaryFeature === null}
-              onClick={() => { setPrimaryFeature(null); onNavigate({ type: "home" }); }}
-              icon={<img src="/logo.svg" alt="Lovcode" className="w-4 h-4" />}
-              label="Lovcode"
-            />
-            <NavButton
-              isActive={primaryFeature === "workspace"}
-              onClick={() => handleMainNavClick("workspace")}
-              icon={<RocketIcon className="w-4 h-4" />}
-              label="Dashboard"
-            />
-            <NavButton
-              isActive={primaryFeature === "features"}
-              onClick={() => handleMainNavClick("features")}
-              icon={<LayersIcon className="w-4 h-4" />}
-              label="Configuration"
-            />
-            <NavButton
-              isActive={primaryFeature === "chat"}
-              onClick={() => handleMainNavClick("chat")}
-              icon={<CounterClockwiseClockIcon className="w-4 h-4" />}
-              label="Chat"
-            />
-            <NavButton
-              isActive={primaryFeature?.startsWith("kb-") ?? false}
-              onClick={() => handleMainNavClick("kb-distill")}
-              icon={<BookmarkIcon className="w-4 h-4" />}
-              label="Knowledge"
-            />
-          </div>
-          <div className="h-4 border-l border-border mx-2" />
-          <div className="flex items-center gap-0.5">
-            <button
-              onClick={onGoBack}
-              disabled={!canGoBack}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
-              title="Go back"
-            >
-              <ChevronLeftIcon className="w-5 h-5" />
-            </button>
-            <button
-              onClick={onGoForward}
-              disabled={!canGoForward}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
-              title="Go forward"
-            >
-              <ChevronRightIcon className="w-5 h-5" />
-            </button>
-          </div>
-          {/* Feature Tabs */}
+      <div data-tauri-drag-region className="h-[52px] shrink-0 flex items-center border-b border-border bg-card">
+        {/* Left: back/forward */}
+        <div className="flex items-center gap-0.5 pl-[80px]">
+          <button
+            onClick={onGoBack}
+            disabled={!canGoBack}
+            className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
+            title="Go back"
+          >
+            <ChevronLeftIcon className="w-5 h-5" />
+          </button>
+          <button
+            onClick={onGoForward}
+            disabled={!canGoForward}
+            className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
+            title="Go forward"
+          >
+            <ChevronRightIcon className="w-5 h-5" />
+          </button>
+        </div>
+        {/* Center: menu group */}
+        <div className="flex-1 flex items-center justify-center gap-0.5">
+          <NavButton
+            isActive={primaryFeature === null}
+            onClick={() => { setPrimaryFeature(null); onNavigate({ type: "home" }); }}
+            icon={<img src="/logo.svg" alt="Lovcode" className="w-4 h-4" />}
+            label="Lovcode"
+          />
+          <NavButton
+            isActive={primaryFeature === "workspace"}
+            onClick={() => handleMainNavClick("workspace")}
+            icon={<RocketIcon className="w-4 h-4" />}
+            label="Dashboard"
+          />
+          <NavButton
+            isActive={primaryFeature === "features"}
+            onClick={() => handleMainNavClick("features")}
+            icon={<LayersIcon className="w-4 h-4" />}
+            label="Configuration"
+          />
+          <NavButton
+            isActive={primaryFeature === "chat"}
+            onClick={() => handleMainNavClick("chat")}
+            icon={<CounterClockwiseClockIcon className="w-4 h-4" />}
+            label="Chat"
+          />
+          <NavButton
+            isActive={primaryFeature?.startsWith("kb-") ?? false}
+            onClick={() => handleMainNavClick("kb-distill")}
+            icon={<BookmarkIcon className="w-4 h-4" />}
+            label="Knowledge"
+          />
           {showFeatureTabs && (
             <>
               <div className="h-4 border-l border-border mx-2" />
@@ -124,6 +122,7 @@ export function GlobalHeader({
             </>
           )}
         </div>
+        {/* Right: profile */}
         <ProfileMenu
           profile={profile}
           onShowProfileDialog={onShowProfileDialog}
