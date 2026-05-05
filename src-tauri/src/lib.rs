@@ -35,6 +35,10 @@ static JIEBA: LazyLock<Jieba> = LazyLock::new(|| Jieba::new());
 static COMMAND_STATS_CACHE: LazyLock<Mutex<CommandStatsCache>> =
     LazyLock::new(|| Mutex::new(CommandStatsCache::default()));
 
+static LOVCODE_RELEASES_CACHE: LazyLock<Mutex<Option<(SystemTime, Vec<LovcodeRelease>)>>> =
+    LazyLock::new(|| Mutex::new(None));
+const LOVCODE_RELEASES_CACHE_TTL: Duration = Duration::from_secs(30 * 60);
+
 #[derive(Default)]
 struct CommandStatsCache {
     stats: HashMap<String, usize>,
@@ -644,6 +648,10 @@ fn get_lovstudio_dir() -> PathBuf {
 
 fn get_lovcode_updater_settings_path() -> PathBuf {
     get_lovstudio_dir().join("updater-settings.json")
+}
+
+fn get_lovcode_releases_cache_path() -> PathBuf {
+    get_lovstudio_dir().join("releases-cache.json")
 }
 
 fn get_disabled_env_path() -> PathBuf {
@@ -11548,7 +11556,7 @@ fn set_claude_code_autoupdater(disabled: bool) -> Result<(), String> {
 // Lovcode Version Management
 // ============================================================================
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct LovcodeRelease {
     version: String,
     tag_name: String,
@@ -11560,12 +11568,22 @@ struct LovcodeRelease {
     draft: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LovcodeReleaseSource {
+    GithubApi,
+    Cache,
+    GithubAtom,
+}
+
 #[derive(Debug, Serialize)]
 struct LovcodeVersionInfo {
     current_version: String,
     latest_version: Option<String>,
     releases: Vec<LovcodeRelease>,
     auto_update_enabled: bool,
+    release_source: LovcodeReleaseSource,
+    releases_truncated: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -11577,6 +11595,18 @@ struct GithubRelease {
     body: Option<String>,
     prerelease: bool,
     draft: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct LovcodeReleaseCacheFile {
+    fetched_at_unix: u64,
+    releases: Vec<LovcodeRelease>,
+}
+
+struct LovcodeReleaseFetch {
+    releases: Vec<LovcodeRelease>,
+    source: LovcodeReleaseSource,
+    releases_truncated: bool,
 }
 
 fn decode_xml_entities(input: &str) -> String {
@@ -12450,10 +12480,336 @@ async fn fetch_remote_image_data_url(url: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)))
 }
 
+const LOVSTUDIO_AUTH_START_ENDPOINT: &str = "https://lovstudio.ai/api/lovcode/auth/start";
+const LOVSTUDIO_AUTH_POLL_ENDPOINT: &str = "https://lovstudio.ai/api/lovcode/auth/poll";
+const LOVSTUDIO_AUTH_REFRESH_ENDPOINT: &str = "https://lovstudio.ai/api/lovcode/auth/refresh";
+const LOVSTUDIO_AUTH_REFRESH_GRACE_SECONDS: i64 = 120;
 const FEEDBACK_ENDPOINT: &str = "https://lovstudio.ai/api/lovcode/feedback";
 const FEEDBACK_RECIPIENT_EMAIL: &str = "mark@lovstudio.ai";
 const MAX_FEEDBACK_MESSAGE_CHARS: usize = 5000;
 const MAX_FEEDBACK_FIELD_CHARS: usize = 300;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LovstudioAuthUser {
+    id: String,
+    email: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LovstudioAuthSession {
+    access_token: String,
+    refresh_token: String,
+    expires_at: i64,
+    user: LovstudioAuthUser,
+}
+
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+struct LovstudioAuthState {
+    expires_at: i64,
+    user: LovstudioAuthUser,
+}
+
+impl LovstudioAuthState {
+    fn from_session(session: &LovstudioAuthSession) -> Self {
+        Self {
+            expires_at: session.expires_at,
+            user: session.user.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LovstudioLoginStartResult {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    verification_uri_complete: String,
+    expires_in: i64,
+    interval: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LovstudioLoginPollResult {
+    status: String,
+    session: Option<LovstudioAuthState>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LovstudioAuthTokenResponse {
+    status: Option<String>,
+    error: Option<String>,
+    detail: Option<String>,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    expires_in: Option<i64>,
+    expires_at: Option<i64>,
+    user: Option<LovstudioAuthUser>,
+}
+
+fn get_lovstudio_auth_path() -> PathBuf {
+    get_lovstudio_dir().join("lovstudio-auth.json")
+}
+
+fn now_unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+fn load_lovstudio_auth_session() -> Result<Option<LovstudioAuthSession>, String> {
+    let path = get_lovstudio_auth_path();
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    if content.trim().is_empty() {
+        return Ok(None);
+    }
+
+    let session: LovstudioAuthSession =
+        serde_json::from_str(&content).map_err(|e| format!("读取 Lovstudio 登录状态失败: {}", e))?;
+
+    if session.access_token.trim().is_empty()
+        || session.refresh_token.trim().is_empty()
+        || session.user.id.trim().is_empty()
+        || session.user.email.trim().is_empty()
+    {
+        return Ok(None);
+    }
+
+    Ok(Some(session))
+}
+
+fn save_lovstudio_auth_session(session: &LovstudioAuthSession) -> Result<(), String> {
+    let path = get_lovstudio_auth_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let output = serde_json::to_string_pretty(session).map_err(|e| e.to_string())?;
+    fs::write(&path, output).map_err(|e| e.to_string())
+}
+
+fn clear_lovstudio_auth_session() -> Result<(), String> {
+    let path = get_lovstudio_auth_path();
+    if path.exists() {
+        fs::remove_file(&path).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+fn build_lovstudio_http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .map_err(|e| format!("创建 Lovstudio 请求失败: {}", e))
+}
+
+fn lovstudio_session_from_token_response(
+    payload: LovstudioAuthTokenResponse,
+) -> Result<LovstudioAuthSession, String> {
+    let access_token = payload
+        .access_token
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Lovstudio 登录响应缺少 access token。".to_string())?;
+    let refresh_token = payload
+        .refresh_token
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Lovstudio 登录响应缺少 refresh token。".to_string())?;
+    let user = payload
+        .user
+        .filter(|value| !value.id.trim().is_empty() && !value.email.trim().is_empty())
+        .ok_or_else(|| "Lovstudio 登录响应缺少账号信息。".to_string())?;
+    let expires_at = payload
+        .expires_at
+        .unwrap_or_else(|| now_unix_seconds() + payload.expires_in.unwrap_or(3600));
+
+    Ok(LovstudioAuthSession {
+        access_token,
+        refresh_token,
+        expires_at,
+        user,
+    })
+}
+
+async fn refresh_lovstudio_auth_session(
+    session: &LovstudioAuthSession,
+) -> Result<LovstudioAuthSession, String> {
+    use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
+
+    let client = build_lovstudio_http_client()?;
+    let response = client
+        .post(LOVSTUDIO_AUTH_REFRESH_ENDPOINT)
+        .header(USER_AGENT, "Lovcode Auth")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .json(&serde_json::json!({ "refreshToken": session.refresh_token }))
+        .send()
+        .await
+        .map_err(|e| format!("刷新 Lovstudio 登录失败: {}", e))?;
+
+    let status = response.status();
+    let response_text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!(
+            "刷新 Lovstudio 登录失败，HTTP {}: {}",
+            status.as_u16(),
+            response_text.chars().take(200).collect::<String>()
+        ));
+    }
+
+    let payload: LovstudioAuthTokenResponse = serde_json::from_str(&response_text)
+        .map_err(|e| format!("解析 Lovstudio 登录刷新响应失败: {}", e))?;
+    lovstudio_session_from_token_response(payload)
+}
+
+async fn ensure_lovstudio_auth_session(
+    strict: bool,
+) -> Result<Option<LovstudioAuthSession>, String> {
+    let Some(session) = load_lovstudio_auth_session()? else {
+        return Ok(None);
+    };
+
+    if session.expires_at > now_unix_seconds() + LOVSTUDIO_AUTH_REFRESH_GRACE_SECONDS {
+        return Ok(Some(session));
+    }
+
+    match refresh_lovstudio_auth_session(&session).await {
+        Ok(refreshed) => {
+            save_lovstudio_auth_session(&refreshed)?;
+            Ok(Some(refreshed))
+        }
+        Err(err) => {
+            let _ = clear_lovstudio_auth_session();
+            if strict {
+                Err(format!("Lovstudio 登录已过期，请重新登录后再提交反馈。{}", err))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn get_lovstudio_auth_state() -> Result<Option<LovstudioAuthState>, String> {
+    Ok(ensure_lovstudio_auth_session(false)
+        .await?
+        .as_ref()
+        .map(LovstudioAuthState::from_session))
+}
+
+#[tauri::command]
+async fn start_lovstudio_login(app_version: Option<String>) -> Result<LovstudioLoginStartResult, String> {
+    use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
+
+    let version = app_version
+        .map(|value| value.trim().chars().take(40).collect::<String>())
+        .filter(|value| !value.is_empty());
+    let client_name = version
+        .map(|value| format!("Lovcode {}", value))
+        .unwrap_or_else(|| "Lovcode".to_string());
+    let client = build_lovstudio_http_client()?;
+    let response = client
+        .post(LOVSTUDIO_AUTH_START_ENDPOINT)
+        .header(USER_AGENT, "Lovcode Auth")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .json(&serde_json::json!({
+            "clientName": client_name,
+            "scope": "lovcode",
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("发起 Lovstudio 登录失败: {}", e))?;
+
+    let status = response.status();
+    let response_text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!(
+            "Lovstudio 登录接口返回 HTTP {}: {}",
+            status.as_u16(),
+            response_text.chars().take(200).collect::<String>()
+        ));
+    }
+
+    serde_json::from_str::<LovstudioLoginStartResult>(&response_text)
+        .map_err(|e| format!("解析 Lovstudio 登录响应失败: {}", e))
+}
+
+#[tauri::command]
+async fn poll_lovstudio_login(device_code: String) -> Result<LovstudioLoginPollResult, String> {
+    use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
+
+    let normalized_device_code = device_code.trim().to_string();
+    if normalized_device_code.is_empty() {
+        return Err("Lovstudio 登录 code 为空。".to_string());
+    }
+
+    let client = build_lovstudio_http_client()?;
+    let response = client
+        .post(LOVSTUDIO_AUTH_POLL_ENDPOINT)
+        .header(USER_AGENT, "Lovcode Auth")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .json(&serde_json::json!({ "deviceCode": normalized_device_code }))
+        .send()
+        .await
+        .map_err(|e| format!("检查 Lovstudio 登录状态失败: {}", e))?;
+
+    let status = response.status();
+    let response_text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!(
+            "Lovstudio 登录轮询返回 HTTP {}: {}",
+            status.as_u16(),
+            response_text.chars().take(200).collect::<String>()
+        ));
+    }
+
+    let payload: LovstudioAuthTokenResponse = serde_json::from_str(&response_text)
+        .map_err(|e| format!("解析 Lovstudio 登录轮询响应失败: {}", e))?;
+
+    if payload.status.as_deref() == Some("pending")
+        || payload.error.as_deref() == Some("authorization_pending")
+    {
+        return Ok(LovstudioLoginPollResult {
+            status: "pending".to_string(),
+            session: None,
+        });
+    }
+
+    if let Some(error) = payload.error.as_deref() {
+        let detail = payload
+            .detail
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .map(|value| format!(": {}", value))
+            .unwrap_or_default();
+        return Err(format!("Lovstudio 登录失败: {}{}", error, detail));
+    }
+
+    let session = lovstudio_session_from_token_response(payload)?;
+    save_lovstudio_auth_session(&session)?;
+
+    Ok(LovstudioLoginPollResult {
+        status: "authenticated".to_string(),
+        session: Some(LovstudioAuthState::from_session(&session)),
+    })
+}
+
+#[tauri::command]
+fn logout_lovstudio() -> Result<(), String> {
+    clear_lovstudio_auth_session()
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -12475,6 +12831,8 @@ struct FeedbackSubmitResult {
     feedback_id: String,
     endpoint: String,
     recipient_email: String,
+    submitter_email: Option<String>,
+    authenticated: bool,
 }
 
 fn normalize_feedback_field(value: Option<String>) -> Option<String> {
@@ -12509,6 +12867,10 @@ async fn submit_feedback(payload: FeedbackSubmission) -> Result<FeedbackSubmitRe
         _ => "idea".to_string(),
     };
     let feedback_id = uuid::Uuid::new_v4().to_string();
+    let auth_session = ensure_lovstudio_auth_session(true).await?;
+    let submitter_email = auth_session
+        .as_ref()
+        .map(|session| session.user.email.clone());
 
     let body = serde_json::json!({
         "id": feedback_id,
@@ -12522,6 +12884,7 @@ async fn submit_feedback(payload: FeedbackSubmission) -> Result<FeedbackSubmitRe
         "locale": normalize_feedback_field(payload.locale),
         "timezone": normalize_feedback_field(payload.timezone),
         "recipientEmail": FEEDBACK_RECIPIENT_EMAIL,
+        "submitterEmail": submitter_email,
         "metadata": payload.metadata.unwrap_or(Value::Null),
     });
 
@@ -12531,11 +12894,17 @@ async fn submit_feedback(payload: FeedbackSubmission) -> Result<FeedbackSubmitRe
         .build()
         .map_err(|e| format!("创建反馈请求失败: {}", e))?;
 
-    let response = client
+    let mut request = client
         .post(FEEDBACK_ENDPOINT)
         .header(USER_AGENT, "Lovcode Feedback")
         .header(ACCEPT, "application/json")
-        .header(CONTENT_TYPE, "application/json")
+        .header(CONTENT_TYPE, "application/json");
+
+    if let Some(session) = auth_session.as_ref() {
+        request = request.bearer_auth(&session.access_token);
+    }
+
+    let response = request
         .json(&body)
         .send()
         .await
@@ -12553,8 +12922,9 @@ async fn submit_feedback(payload: FeedbackSubmission) -> Result<FeedbackSubmitRe
         return Err(format!("反馈接口返回 HTTP {}{}", status.as_u16(), suffix));
     }
 
-    let returned_id = serde_json::from_str::<Value>(&response_text)
-        .ok()
+    let response_value = serde_json::from_str::<Value>(&response_text).ok();
+    let returned_id = response_value
+        .as_ref()
         .and_then(|value| {
             value
                 .get("feedbackId")
@@ -12563,11 +12933,23 @@ async fn submit_feedback(payload: FeedbackSubmission) -> Result<FeedbackSubmitRe
                 .map(str::to_string)
         })
         .unwrap_or(feedback_id);
+    let returned_submitter_email = response_value
+        .as_ref()
+        .and_then(|value| value.get("submitterEmail"))
+        .and_then(|value| value.as_str())
+        .map(str::to_string);
+    let authenticated = response_value
+        .as_ref()
+        .and_then(|value| value.get("authenticated"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or_else(|| auth_session.is_some());
 
     Ok(FeedbackSubmitResult {
         feedback_id: returned_id,
         endpoint: FEEDBACK_ENDPOINT.to_string(),
         recipient_email: FEEDBACK_RECIPIENT_EMAIL.to_string(),
+        submitter_email: returned_submitter_email,
+        authenticated,
     })
 }
 
@@ -14527,6 +14909,10 @@ pub fn run() {
             delete_project_logo,
             read_file_base64,
             fetch_remote_image_data_url,
+            get_lovstudio_auth_state,
+            start_lovstudio_login,
+            poll_lovstudio_login,
+            logout_lovstudio,
             submit_feedback,
             exec_shell_command,
             hook_get_monitored,

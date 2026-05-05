@@ -1,7 +1,7 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { CheckCircle2, Copy, ExternalLink, Loader2, Mail, MessageSquarePlus, Send } from "lucide-react";
+import { CheckCircle2, Copy, ExternalLink, Loader2, LogIn, LogOut, Mail, MessageSquarePlus, Send, UserRound } from "lucide-react";
 import { version as APP_VERSION } from "../../package.json";
 import { Button } from "./ui/button";
 import {
@@ -33,6 +33,36 @@ interface FeedbackSubmitResult {
   feedbackId: string;
   endpoint: string;
   recipientEmail: string;
+  submitterEmail?: string | null;
+  authenticated?: boolean;
+}
+
+interface LovstudioAuthUser {
+  id: string;
+  email: string;
+}
+
+interface LovstudioAuthState {
+  expiresAt: number;
+  user: LovstudioAuthUser;
+}
+
+interface LovstudioLoginStartResult {
+  deviceCode: string;
+  userCode: string;
+  verificationUri: string;
+  verificationUriComplete: string;
+  expiresIn: number;
+  interval: number;
+}
+
+interface ActiveLoginFlow extends LovstudioLoginStartResult {
+  startedAt: number;
+}
+
+interface LovstudioLoginPollResult {
+  status: "pending" | "authenticated";
+  session?: LovstudioAuthState | null;
 }
 
 function getCurrentPath() {
@@ -59,6 +89,10 @@ export function FeedbackButton() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [submittedTicket, setSubmittedTicket] = useState<FeedbackSubmitResult | null>(null);
+  const [authState, setAuthState] = useState<LovstudioAuthState | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [loginFlow, setLoginFlow] = useState<ActiveLoginFlow | null>(null);
+  const [loginPolling, setLoginPolling] = useState(false);
 
   const trimmedMessage = message.trim();
   const messageLength = charCount(trimmedMessage);
@@ -70,12 +104,82 @@ export function FeedbackButton() {
     [category],
   );
 
+  useEffect(() => {
+    if (!open) return;
+
+    let cancelled = false;
+    setAuthLoading(true);
+    invoke<LovstudioAuthState | null>("get_lovstudio_auth_state")
+      .then((state) => {
+        if (!cancelled) setAuthState(state);
+      })
+      .catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!cancelled) toast.error(`读取登录状态失败: ${message}`);
+      })
+      .finally(() => {
+        if (!cancelled) setAuthLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !loginFlow || authState) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+
+    const poll = async () => {
+      if (cancelled) return;
+
+      if (Date.now() - loginFlow.startedAt > loginFlow.expiresIn * 1000) {
+        setLoginFlow(null);
+        setLoginPolling(false);
+        toast.error("Lovstudio 登录授权已过期，请重新登录。");
+        return;
+      }
+
+      setLoginPolling(true);
+      try {
+        const result = await invoke<LovstudioLoginPollResult>("poll_lovstudio_login", {
+          deviceCode: loginFlow.deviceCode,
+        });
+        if (cancelled) return;
+        if (result.status === "authenticated" && result.session) {
+          setAuthState(result.session);
+          setLoginFlow(null);
+          toast.success("Lovstudio 已登录");
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const message = err instanceof Error ? err.message : String(err);
+        setLoginFlow(null);
+        toast.error(`Lovstudio 登录失败: ${message}`);
+      } finally {
+        if (!cancelled) setLoginPolling(false);
+      }
+    };
+
+    void poll();
+    timer = window.setInterval(poll, Math.max(loginFlow.interval, 3) * 1000);
+
+    return () => {
+      cancelled = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [authState, loginFlow, open]);
+
   const resetForm = () => {
     setCategory("idea");
     setMessage("");
     setContact("");
     setError("");
     setSubmittedTicket(null);
+    setLoginFlow(null);
+    setLoginPolling(false);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -129,6 +233,32 @@ export function FeedbackButton() {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       toast.error(`打开用户中心失败: ${message}`);
+    }
+  };
+
+  const handleStartLogin = async () => {
+    try {
+      const result = await invoke<LovstudioLoginStartResult>("start_lovstudio_login", {
+        appVersion: APP_VERSION,
+      });
+      setLoginFlow({ ...result, startedAt: Date.now() });
+      await openUrl(result.verificationUriComplete);
+      toast.success("已打开 Lovstudio 登录/注册页面");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`发起登录失败: ${message}`);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await invoke("logout_lovstudio");
+      setAuthState(null);
+      setLoginFlow(null);
+      toast.success("已退出 Lovstudio");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`退出失败: ${message}`);
     }
   };
 
@@ -193,7 +323,7 @@ export function FeedbackButton() {
             <DialogDescription>
               {submittedTicket
                 ? "反馈已进入工单系统。"
-                : `同步到 lovstudio.ai，并通知 ${FEEDBACK_EMAIL}。`}
+                : `登录 Lovstudio 后会自动绑定工单，并通知 ${FEEDBACK_EMAIL}。`}
             </DialogDescription>
           </DialogHeader>
 
@@ -205,7 +335,9 @@ export function FeedbackButton() {
                   <div className="min-w-0 flex-1 space-y-2">
                     <p className="font-medium text-foreground">反馈已提交</p>
                     <p className="text-sm text-muted-foreground">
-                      复制工单 ID，后续可以在用户中心查看处理状态。
+                      {submittedTicket.authenticated
+                        ? `已绑定 ${submittedTicket.submitterEmail || "当前 Lovstudio 账号"}，后续可以在用户中心查看处理状态。`
+                        : "这次未绑定账号，请复制工单 ID 保存；登录后提交的工单会自动进入用户中心。"}
                     </p>
                     <div className="grid min-w-0 max-w-full gap-2 rounded-lg border border-border bg-background px-3 py-2">
                       <code className="block max-w-full whitespace-normal break-all rounded bg-muted/50 px-2 py-1 font-mono text-xs leading-relaxed text-foreground">
@@ -226,7 +358,13 @@ export function FeedbackButton() {
                 </div>
               </div>
 
-              <DialogFooter className="gap-2 sm:space-x-0">
+              <DialogFooter className="gap-2 sm:space-x-0 [&>button]:w-full sm:[&>button]:w-auto">
+                {!submittedTicket.authenticated && (
+                  <Button type="button" variant="outline" onClick={handleStartLogin}>
+                    <LogIn className="mr-2 h-4 w-4" />
+                    登录 / 注册
+                  </Button>
+                )}
                 <Button type="button" variant="outline" onClick={handleOpenTickets}>
                   <ExternalLink className="mr-2 h-4 w-4" />
                   用户中心
@@ -273,17 +411,69 @@ export function FeedbackButton() {
               </div>
             </div>
 
+            <div className="grid gap-3 rounded-xl border border-border bg-muted/30 p-3 sm:grid-cols-[1fr_auto] sm:items-start">
+              <div className="flex min-w-0 gap-3">
+                <UserRound className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
+                <div className="min-w-0 space-y-1">
+                  <p className="text-sm font-medium text-foreground">Lovstudio 账号</p>
+                  {authState ? (
+                    <p className="break-all text-xs text-muted-foreground">
+                      已登录 {authState.user.email}
+                    </p>
+                  ) : loginFlow ? (
+                    <div className="space-y-1">
+                      <p className="text-xs text-muted-foreground">
+                        在浏览器完成登录/注册授权后，Lovcode 会自动绑定账号。
+                      </p>
+                      <p className="inline-flex max-w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs tracking-widest text-foreground">
+                        {loginFlow.userCode}
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      登录/注册后，提交的反馈会自动出现在用户中心。
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              {authState ? (
+                <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={handleLogout}>
+                  <LogOut className="mr-2 h-4 w-4" />
+                  退出
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant={loginFlow ? "outline" : "default"}
+                  size="sm"
+                  className="w-full sm:w-auto"
+                  onClick={handleStartLogin}
+                  disabled={authLoading}
+                >
+                  {authLoading || loginPolling ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <LogIn className="mr-2 h-4 w-4" />
+                  )}
+                  {loginFlow ? "重新打开" : "登录 / 注册"}
+                </Button>
+              )}
+            </div>
+
             <div className="space-y-2">
-              <Label htmlFor="feedback-contact">联系方式</Label>
+              <Label htmlFor="feedback-contact">补充联系方式</Label>
               <Input
                 id="feedback-contact"
                 value={contact}
                 onChange={(event) => setContact(event.target.value)}
-                placeholder="建议填写 lovstudio.ai 登录邮箱（可选）"
+                placeholder="微信、电话或备用邮箱（可选）"
                 maxLength={200}
               />
               <p className="text-xs text-muted-foreground">
-                使用登录邮箱提交后，可在用户中心查看已提交工单。
+                {authState
+                  ? "工单会绑定到已登录账号，这里只用于补充其他联系方式。"
+                  : "未登录也可提交，但不会自动出现在用户中心；建议先登录/注册。"}
               </p>
             </div>
 
