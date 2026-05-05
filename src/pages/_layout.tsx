@@ -9,6 +9,7 @@ import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { PersonIcon } from "@radix-ui/react-icons";
 import { GlobalHeader } from "../components/GlobalHeader";
 import { GlobalChatSearch } from "../components/GlobalChatSearch";
+import { FeedbackButton } from "../components/FeedbackButton";
 import { StatusBar } from "../components/StatusBar";
 import { UpdateChecker } from "../components/UpdateChecker";
 import { ChatFilePreviewProvider } from "../views/Chat/FilePreviewContext";
@@ -223,6 +224,7 @@ export default function RootLayout() {
       <AppSettingsDialog open={showSettings} onClose={() => setShowSettings(false)} />
       <ProfileDialog open={showProfileDialog} onClose={() => setShowProfileDialog(false)} profile={profile} onSave={setProfile} />
       <GlobalChatSearch />
+      <FeedbackButton />
       <UpdateChecker />
     </AppConfigContext.Provider>
   );

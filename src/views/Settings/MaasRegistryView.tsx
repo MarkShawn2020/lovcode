@@ -98,12 +98,28 @@ function isProviderRuntimeAvailable(provider: MaasProvider, runtimeId: MaasRunti
   return provider.key !== "anthropic-subscription";
 }
 
+function isOAuthProvider(provider: MaasProvider): boolean {
+  return provider.key === "anthropic-subscription";
+}
+
 function getRuntimeUnavailableReason(provider: MaasProvider, runtimeId: MaasRuntimeId): string | null {
   if (isProviderRuntimeAvailable(provider, runtimeId)) return null;
   if (provider.key === "anthropic-subscription" && runtimeId === "codex") {
     return "Codex cannot use Claude Code OAuth. Choose an API-key provider for Codex.";
   }
   return "This provider does not support this runtime yet.";
+}
+
+function getEffectiveRuntimeIds(provider: MaasProvider, runtimeIds: MaasRuntimeId[]): MaasRuntimeId[] {
+  if (isOAuthProvider(provider)) return ["claude-code"];
+  return runtimeIds.filter((runtimeId) => isProviderRuntimeAvailable(provider, runtimeId));
+}
+
+function getRuntimeIdsToPersist(provider: MaasProvider, runtimeIds: MaasRuntimeId[]): MaasRuntimeId[] {
+  if (!isOAuthProvider(provider) || runtimeIds.includes("claude-code")) return runtimeIds;
+  return DEFAULT_MAAS_RUNTIME_IDS.filter(
+    (runtimeId) => runtimeId === "claude-code" || runtimeIds.includes(runtimeId),
+  );
 }
 
 function HoverHint({
@@ -117,7 +133,7 @@ function HoverHint({
 }) {
   if (!content) return <>{children}</>;
   return (
-    <Tooltip>
+    <Tooltip delayDuration={500}>
       <TooltipTrigger asChild>
         <span className={className}>{children}</span>
       </TooltipTrigger>
@@ -552,7 +568,7 @@ export function MaasRegistryView() {
     if (!draft) return;
 
     // Anthropic Subscription: OAuth — probe `claude --print` and check it's logged in.
-    if (draft.key === "anthropic-subscription") {
+    if (isOAuthProvider(draft)) {
       setVerifyState("testing");
       setVerifyMessage("");
       try {
@@ -634,14 +650,12 @@ export function MaasRegistryView() {
       setError("This provider is not yet available");
       return;
     }
-    const verifyOk = getProviderVerifyStatus(draft).verified;
+    const verifyOk = isOAuthProvider(draft) || getProviderVerifyStatus(draft).verified;
     if (!verifyOk) {
       setError("Verify the token before enabling this provider");
       return;
     }
-    const effectiveRuntimeIds = selectedRuntimeIds.filter((runtimeId) =>
-      isProviderRuntimeAvailable(draft, runtimeId),
-    );
+    const effectiveRuntimeIds = getEffectiveRuntimeIds(draft, selectedRuntimeIds);
     if (effectiveRuntimeIds.length === 0) {
       setError("Select at least one runtime");
       return;
@@ -670,8 +684,9 @@ export function MaasRegistryView() {
       }
 
       if (shouldApplyClaudeCode) {
-        if (draft.key === "anthropic-subscription") {
-          // OAuth flow: clear token + base url, set the OAuth flag.
+        if (isOAuthProvider(draft)) {
+          // OAuth flow: only switch local Claude Code settings. Login remains
+          // an independent Claude Code interaction via `/login` in the session.
           await invoke("update_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" });
           await invoke("delete_settings_env", { envKey: "ANTHROPIC_AUTH_TOKEN" }).catch(() => {});
           await invoke("delete_settings_env", { envKey: "ANTHROPIC_BASE_URL" }).catch(() => {});
@@ -699,11 +714,13 @@ export function MaasRegistryView() {
       for (const runtimeId of effectiveRuntimeIds) {
         nextActiveProviders[runtimeId] = draft.key;
       }
+      const runtimeIdsToPersist = getRuntimeIdsToPersist(draft, selectedRuntimeIds);
       await persistLovcodeSettings({
         activeProvider: nextActiveProviders["claude-code"] ?? getLegacyActiveProvider(settings?.raw),
         activeProviders: nextActiveProviders,
-        maasEnableRuntimes: selectedRuntimeIds,
+        maasEnableRuntimes: runtimeIdsToPersist,
       });
+      setSelectedRuntimeIds(runtimeIdsToPersist);
       setError(null);
     } catch (e) {
       setError(`Failed to enable: ${e}`);
@@ -925,7 +942,9 @@ export function MaasRegistryView() {
                 </div>
                 <div className="flex flex-col gap-1.5 col-span-2">
                   <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <Label htmlFor="maas-authtoken">API Key / Token</Label>
+                    <Label htmlFor="maas-authtoken">
+                      {isOAuthProvider(draft) ? "OAuth Login" : "API Key / Token"}
+                    </Label>
                     <div className="flex items-center gap-3">
                       {PROVIDER_API_KEY_URLS[draft.key] && (
                         <a
@@ -950,12 +969,19 @@ export function MaasRegistryView() {
                       autoComplete="off"
                       spellCheck={false}
                       value={
-                        showToken || isEditingToken
-                          ? draft.authToken
-                          : maskToken(draft.authToken)
+                        isOAuthProvider(draft)
+                          ? ""
+                          : showToken || isEditingToken
+                            ? draft.authToken
+                            : maskToken(draft.authToken)
                       }
-                      placeholder="sk-... / sb_secret_... / Bearer token"
+                      placeholder={
+                        isOAuthProvider(draft)
+                          ? "Managed by Claude Code /login"
+                          : "sk-... / sb_secret_... / Bearer token"
+                      }
                       className="pr-20 font-mono"
+                      disabled={isOAuthProvider(draft)}
                       onFocus={() => setIsEditingToken(true)}
                       onChange={(e) => {
                         updateDraft({ authToken: e.target.value });
@@ -970,11 +996,20 @@ export function MaasRegistryView() {
                       }}
                     />
                     <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                      <HoverHint content={showToken ? "Hide" : "Show full token"}>
+                      <HoverHint
+                        content={
+                          isOAuthProvider(draft)
+                            ? "OAuth login does not use a token"
+                            : showToken
+                              ? "Hide"
+                              : "Show full token"
+                        }
+                      >
                         <button
                           type="button"
                           onClick={() => setShowToken((v) => !v)}
-                          className="p-1.5 text-muted-foreground hover:text-foreground"
+                          disabled={isOAuthProvider(draft)}
+                          className="p-1.5 text-muted-foreground hover:text-foreground disabled:opacity-50 disabled:pointer-events-none"
                         >
                           {showToken ? (
                             <EyeClosedIcon className="w-4 h-4" />
@@ -993,7 +1028,9 @@ export function MaasRegistryView() {
                                 ? `Failed — ${verifyMessage} (click to retry)`
                                 : verifyState === "testing"
                                   ? "Verifying..."
-                                  : "Verify token by calling the provider's API"
+                                  : isOAuthProvider(draft)
+                                    ? "Check Claude Code login"
+                                    : "Verify token by calling the provider's API"
                         }
                       >
                         <button
@@ -1043,13 +1080,9 @@ export function MaasRegistryView() {
               </div>
 
               {(() => {
+                const isOAuth = isOAuthProvider(draft);
                 const activeRuntimeIds = getProviderActiveRuntimeIds(draft.key);
-                const availableRuntimeIds = MAAS_RUNTIME_OPTIONS.map((option) => option.id).filter((runtimeId) =>
-                  isProviderRuntimeAvailable(draft, runtimeId),
-                );
-                const effectiveSelectedRuntimeIds = selectedRuntimeIds.filter((runtimeId) =>
-                  availableRuntimeIds.includes(runtimeId),
-                );
+                const effectiveSelectedRuntimeIds = getEffectiveRuntimeIds(draft, selectedRuntimeIds);
                 const isActive = activeRuntimeIds.length > 0;
                 const isActiveForSelection =
                   effectiveSelectedRuntimeIds.length > 0 &&
@@ -1062,14 +1095,15 @@ export function MaasRegistryView() {
                   const reason = getRuntimeUnavailableReason(draft, option.id);
                   return reason ? `${option.label}: ${reason}` : null;
                 }).filter((message): message is string => Boolean(message));
-                const verifyOk = getProviderVerifyStatus(draft).verified;
-                const reason = effectiveSelectedRuntimeIds.length === 0
-                  ? "Select at least one runtime"
-                  : !verifyOk
-                  ? "Verify the token first"
-                  : isActiveForSelection
-                    ? "This provider is currently active for the selected runtime scope"
-                    : "";
+                const verifyOk = isOAuth || getProviderVerifyStatus(draft).verified;
+                const reason =
+                  effectiveSelectedRuntimeIds.length === 0
+                    ? "Select at least one runtime"
+                    : !verifyOk
+                      ? "Verify the token first"
+                      : isActiveForSelection
+                        ? "This provider is currently active for the selected runtime scope"
+                        : "";
                 return (
                   <div
                     className={`flex flex-col gap-3 rounded-xl border px-4 py-3 transition-colors ${
@@ -1094,16 +1128,19 @@ export function MaasRegistryView() {
                       <span className="text-xs text-muted-foreground">
                         {isActive
                           ? `${activeRuntimeLabel} ${activeRuntimeIds.length === 1 ? "is" : "are"} using this provider.`
-                          : verifyOk
-                            ? `Set as the active LLM provider for ${selectedRuntimeLabel || "selected runtimes"}.`
-                            : "Verify the token first to unlock activation."}
+                          : isOAuth
+                            ? `Set as the active Claude Code provider for ${selectedRuntimeLabel || "selected runtimes"}.`
+                            : verifyOk
+                              ? `Set as the active LLM provider for ${selectedRuntimeLabel || "selected runtimes"}.`
+                              : "Verify the token first to unlock activation."}
                       </span>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       {MAAS_RUNTIME_OPTIONS.map((option) => {
                         const unavailableReason = getRuntimeUnavailableReason(draft, option.id);
                         const available = !unavailableReason;
-                        const checked = available && selectedRuntimeIds.includes(option.id);
+                        const lockedByOAuth = isOAuth && option.id === "claude-code";
+                        const checked = available && (selectedRuntimeIds.includes(option.id) || lockedByOAuth);
                         const runtimeActive = activeProviderKeys[option.id] === draft.key;
                         return (
                           <label
@@ -1112,13 +1149,19 @@ export function MaasRegistryView() {
                               checked
                                 ? "border-primary/50 bg-primary/5 text-foreground"
                                 : "border-border bg-card text-muted-foreground hover:bg-card-alt hover:text-foreground"
-                            } ${available ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
+                            } ${
+                              !available
+                                ? "cursor-not-allowed opacity-50"
+                                : lockedByOAuth
+                                  ? "cursor-default"
+                                  : "cursor-pointer"
+                            }`}
                           >
                             <input
                               type="checkbox"
                               className="h-4 w-4 rounded border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                               checked={checked}
-                              disabled={!available}
+                              disabled={!available || lockedByOAuth}
                               onChange={(e) =>
                                 handleRuntimeSelectionChange(option.id, e.currentTarget.checked)
                               }

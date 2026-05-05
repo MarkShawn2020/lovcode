@@ -12450,6 +12450,127 @@ async fn fetch_remote_image_data_url(url: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime, STANDARD.encode(&bytes)))
 }
 
+const FEEDBACK_ENDPOINT: &str = "https://lovstudio.ai/api/lovcode/feedback";
+const FEEDBACK_RECIPIENT_EMAIL: &str = "mark@lovstudio.ai";
+const MAX_FEEDBACK_MESSAGE_CHARS: usize = 5000;
+const MAX_FEEDBACK_FIELD_CHARS: usize = 300;
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedbackSubmission {
+    category: String,
+    message: String,
+    contact: Option<String>,
+    path: Option<String>,
+    app_version: Option<String>,
+    user_agent: Option<String>,
+    locale: Option<String>,
+    timezone: Option<String>,
+    metadata: Option<Value>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedbackSubmitResult {
+    feedback_id: String,
+    endpoint: String,
+    recipient_email: String,
+}
+
+fn normalize_feedback_field(value: Option<String>) -> Option<String> {
+    value
+        .map(|v| {
+            v.trim()
+                .chars()
+                .take(MAX_FEEDBACK_FIELD_CHARS)
+                .collect::<String>()
+        })
+        .filter(|v| !v.is_empty())
+}
+
+#[tauri::command]
+async fn submit_feedback(payload: FeedbackSubmission) -> Result<FeedbackSubmitResult, String> {
+    use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
+
+    let message = payload.message.trim().to_string();
+    let message_len = message.chars().count();
+    if message_len < 4 {
+        return Err("反馈内容太短，请至少输入 4 个字符。".to_string());
+    }
+    if message_len > MAX_FEEDBACK_MESSAGE_CHARS {
+        return Err(format!(
+            "反馈内容过长，请控制在 {} 个字符以内。",
+            MAX_FEEDBACK_MESSAGE_CHARS
+        ));
+    }
+
+    let category = match payload.category.trim() {
+        "bug" | "idea" | "contact" => payload.category.trim().to_string(),
+        _ => "idea".to_string(),
+    };
+    let feedback_id = uuid::Uuid::new_v4().to_string();
+
+    let body = serde_json::json!({
+        "id": feedback_id,
+        "source": "lovcode-desktop",
+        "category": category,
+        "message": message,
+        "contact": normalize_feedback_field(payload.contact),
+        "path": normalize_feedback_field(payload.path),
+        "appVersion": normalize_feedback_field(payload.app_version),
+        "userAgent": normalize_feedback_field(payload.user_agent),
+        "locale": normalize_feedback_field(payload.locale),
+        "timezone": normalize_feedback_field(payload.timezone),
+        "recipientEmail": FEEDBACK_RECIPIENT_EMAIL,
+        "metadata": payload.metadata.unwrap_or(Value::Null),
+    });
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .map_err(|e| format!("创建反馈请求失败: {}", e))?;
+
+    let response = client
+        .post(FEEDBACK_ENDPOINT)
+        .header(USER_AGENT, "Lovcode Feedback")
+        .header(ACCEPT, "application/json")
+        .header(CONTENT_TYPE, "application/json")
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("反馈提交网络失败: {}", e))?;
+
+    let status = response.status();
+    let response_text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        let detail: String = response_text.chars().take(300).collect();
+        let suffix = if detail.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", detail)
+        };
+        return Err(format!("反馈接口返回 HTTP {}{}", status.as_u16(), suffix));
+    }
+
+    let returned_id = serde_json::from_str::<Value>(&response_text)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("feedbackId")
+                .or_else(|| value.get("id"))
+                .and_then(|id| id.as_str())
+                .map(str::to_string)
+        })
+        .unwrap_or(feedback_id);
+
+    Ok(FeedbackSubmitResult {
+        feedback_id: returned_id,
+        endpoint: FEEDBACK_ENDPOINT.to_string(),
+        recipient_email: FEEDBACK_RECIPIENT_EMAIL.to_string(),
+    })
+}
+
 /// Run a shell command in specified directory using login shell (async, non-blocking)
 #[tauri::command]
 async fn exec_shell_command(command: String, cwd: String) -> Result<String, String> {
@@ -14406,6 +14527,7 @@ pub fn run() {
             delete_project_logo,
             read_file_base64,
             fetch_remote_image_data_url,
+            submit_feedback,
             exec_shell_command,
             hook_get_monitored,
             hook_notify_complete,

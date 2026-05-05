@@ -1703,8 +1703,9 @@ export default function AgentWorkspacePage() {
     (row) => row.runtime && !row.archived && (row.runtime.status === "running" || row.runtime.workState === "working"),
   ).length;
   const unreadAgentCount = allWorkbenchRows.filter((row) => !row.archived && row.unread).length;
+  const sessionsHeaderTitle = sessionListMode === "archived" ? "Archived" : "Conversations";
   const sessionsHeaderSummary =
-        sessionListMode === "archived"
+    sessionListMode === "archived"
       ? `${archivedConversationCount} archived conversations`
       : [
           `${workbenchRows.length} conversations`,
@@ -1992,35 +1993,31 @@ export default function AgentWorkspacePage() {
       >
         <div className="border-b border-border px-4 py-3">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <h1 className="font-serif text-xl font-semibold text-foreground">Workbench</h1>
-              <p className="mt-1 truncate text-xs text-muted-foreground" title={workspacePath ?? undefined}>
-                {saving ? "Saving..." : workspacePath ? `Agent state · ${workspacePath}` : "Loading workbench"}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={openNewSession}
-              className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border transition-colors ${
-                showNewSessionView
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-card text-muted-foreground hover:bg-card-alt hover:text-foreground"
-              }`}
-              title="New conversation"
-              aria-label="New conversation"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="mt-3 flex items-center justify-between gap-3">
-            <div className="min-w-0">
-              <h2 className="font-serif text-base font-semibold text-foreground">
-                {sessionListMode === "archived" ? "Archived Conversations" : "Conversations"}
-              </h2>
+            <div className="min-w-0" title={workspacePath ?? undefined}>
+              <div className="flex min-w-0 items-center gap-2">
+                <h1 className="truncate font-serif text-lg font-semibold text-foreground">{sessionsHeaderTitle}</h1>
+                {saving ? (
+                  <span className="shrink-0 rounded-md bg-card-alt px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    Saving
+                  </span>
+                ) : null}
+              </div>
               <p className="truncate text-xs text-muted-foreground">{sessionsHeaderSummary}</p>
             </div>
             <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={openNewSession}
+                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border transition-colors ${
+                  showNewSessionView
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-background text-muted-foreground hover:bg-card-alt hover:text-foreground"
+                }`}
+                title="New conversation"
+                aria-label="New conversation"
+              >
+                <Plus className="h-4 w-4" />
+              </button>
               <WorkbenchOutlineMenu
                 outlineMode={outlineMode}
                 onOutlineModeChange={setPersistedOutlineMode}

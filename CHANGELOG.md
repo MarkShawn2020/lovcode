@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.35.1
+
+### Patch Changes
+
+- Improve the workbench composer model picker, add in-app feedback submission, and let Anthropic Subscription OAuth be enabled without an API token.
+
 ## 0.35.0
 
 ### Minor Changes
