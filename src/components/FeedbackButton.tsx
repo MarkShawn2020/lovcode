@@ -207,15 +207,15 @@ export function FeedbackButton() {
                     <p className="text-sm text-muted-foreground">
                       复制工单 ID，后续可以在用户中心查看处理状态。
                     </p>
-                    <div className="flex min-w-0 flex-col items-stretch gap-2 rounded-lg border border-border bg-background px-3 py-2 sm:flex-row sm:items-center">
-                      <code className="min-w-0 break-all rounded bg-muted/50 px-2 py-1 font-mono text-xs text-foreground sm:flex-1 sm:truncate sm:bg-transparent sm:px-0 sm:py-0 sm:text-sm">
+                    <div className="grid min-w-0 max-w-full gap-2 rounded-lg border border-border bg-background px-3 py-2">
+                      <code className="block max-w-full whitespace-normal break-all rounded bg-muted/50 px-2 py-1 font-mono text-xs leading-relaxed text-foreground">
                         {submittedTicket.feedbackId}
                       </code>
                       <Button
                         type="button"
                         size="sm"
                         variant="outline"
-                        className="w-full shrink-0 sm:w-auto"
+                        className="w-full"
                         onClick={handleCopyTicketId}
                       >
                         <Copy className="mr-2 h-4 w-4" />
