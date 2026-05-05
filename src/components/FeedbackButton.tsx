@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Loader2, Mail, MessageSquarePlus, Send } from "lucide-react";
+import { CheckCircle2, Copy, ExternalLink, Loader2, Mail, MessageSquarePlus, Send } from "lucide-react";
 import { version as APP_VERSION } from "../../package.json";
 import { Button } from "./ui/button";
 import {
@@ -18,6 +18,8 @@ import { toast } from "./ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const FEEDBACK_EMAIL = "mark@lovstudio.ai";
+const MIN_MESSAGE_CHARS = 4;
+const TICKETS_URL = "https://lovstudio.ai/account/tickets";
 
 const categoryOptions = [
   { value: "bug", label: "问题" },
@@ -45,6 +47,10 @@ function getTimezone() {
   }
 }
 
+function charCount(value: string) {
+  return Array.from(value).length;
+}
+
 export function FeedbackButton() {
   const [open, setOpen] = useState(false);
   const [category, setCategory] = useState<FeedbackCategory>("idea");
@@ -52,9 +58,12 @@ export function FeedbackButton() {
   const [contact, setContact] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [submittedTicket, setSubmittedTicket] = useState<FeedbackSubmitResult | null>(null);
 
   const trimmedMessage = message.trim();
-  const canSubmit = trimmedMessage.length >= 4 && !submitting;
+  const messageLength = charCount(trimmedMessage);
+  const isMessageTooShort = messageLength > 0 && messageLength < MIN_MESSAGE_CHARS;
+  const canSubmit = messageLength >= MIN_MESSAGE_CHARS && !submitting;
 
   const selectedCategoryLabel = useMemo(
     () => categoryOptions.find((item) => item.value === category)?.label ?? "建议",
@@ -66,12 +75,15 @@ export function FeedbackButton() {
     setMessage("");
     setContact("");
     setError("");
+    setSubmittedTicket(null);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen);
     if (nextOpen) {
       setError("");
+    } else {
+      resetForm();
     }
   };
 
@@ -99,6 +111,27 @@ export function FeedbackButton() {
     }
   };
 
+  const handleCopyTicketId = async () => {
+    if (!submittedTicket?.feedbackId) return;
+
+    try {
+      await navigator.clipboard.writeText(submittedTicket.feedbackId);
+      toast.success("工单 ID 已复制");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`复制失败: ${message}`);
+    }
+  };
+
+  const handleOpenTickets = async () => {
+    try {
+      await openUrl(TICKETS_URL);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast.error(`打开用户中心失败: ${message}`);
+    }
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!canSubmit) return;
@@ -107,7 +140,7 @@ export function FeedbackButton() {
     setError("");
 
     try {
-      await invoke<FeedbackSubmitResult>("submit_feedback", {
+      const result = await invoke<FeedbackSubmitResult>("submit_feedback", {
         payload: {
           category,
           message: trimmedMessage,
@@ -124,9 +157,9 @@ export function FeedbackButton() {
         },
       });
 
-      toast.success("反馈已提交");
-      resetForm();
-      setOpen(false);
+      setSubmittedTicket(result);
+      setMessage("");
+      toast.success("反馈已提交，请复制工单 ID");
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -158,11 +191,47 @@ export function FeedbackButton() {
           <DialogHeader>
             <DialogTitle className="font-serif">提交反馈</DialogTitle>
             <DialogDescription>
-              同步到 lovstudio.ai，并通知 {FEEDBACK_EMAIL}。
+              {submittedTicket
+                ? "反馈已进入工单系统。"
+                : `同步到 lovstudio.ai，并通知 ${FEEDBACK_EMAIL}。`}
             </DialogDescription>
           </DialogHeader>
 
-          <form className="space-y-4" onSubmit={handleSubmit}>
+          {submittedTicket ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
+                <div className="flex items-start gap-3">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 text-primary" />
+                  <div className="min-w-0 flex-1 space-y-2">
+                    <p className="font-medium text-foreground">反馈已提交</p>
+                    <p className="text-sm text-muted-foreground">
+                      复制工单 ID，后续可以在用户中心查看处理状态。
+                    </p>
+                    <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
+                      <code className="min-w-0 flex-1 truncate font-mono text-sm text-foreground">
+                        {submittedTicket.feedbackId}
+                      </code>
+                      <Button type="button" size="sm" variant="outline" onClick={handleCopyTicketId}>
+                        <Copy className="mr-2 h-4 w-4" />
+                        复制
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <DialogFooter className="gap-2 sm:space-x-0">
+                <Button type="button" variant="outline" onClick={handleOpenTickets}>
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  用户中心
+                </Button>
+                <Button type="button" onClick={() => handleOpenChange(false)}>
+                  完成
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <form className="space-y-4" onSubmit={handleSubmit}>
             <div className="grid grid-cols-3 gap-2">
               {categoryOptions.map((item) => (
                 <button
@@ -190,6 +259,12 @@ export function FeedbackButton() {
                 maxLength={5000}
                 className="min-h-32 w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
               />
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span className={isMessageTooShort ? "text-destructive" : ""}>
+                  {isMessageTooShort ? `至少输入 ${MIN_MESSAGE_CHARS} 个字符` : " "}
+                </span>
+                <span>{messageLength}/5000</span>
+              </div>
             </div>
 
             <div className="space-y-2">
@@ -198,9 +273,12 @@ export function FeedbackButton() {
                 id="feedback-contact"
                 value={contact}
                 onChange={(event) => setContact(event.target.value)}
-                placeholder="邮箱、微信或其他联系方式（可选）"
+                placeholder="建议填写 lovstudio.ai 登录邮箱（可选）"
                 maxLength={200}
               />
+              <p className="text-xs text-muted-foreground">
+                使用登录邮箱提交后，可在用户中心查看已提交工单。
+              </p>
             </div>
 
             {error && (
@@ -219,7 +297,8 @@ export function FeedbackButton() {
                 提交
               </Button>
             </DialogFooter>
-          </form>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
     </>
