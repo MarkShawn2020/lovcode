@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, useLayoutEffect, useCallback, memo } from "react";
+import { useState, useMemo, useEffect, useRef, useLayoutEffect, useCallback, memo, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -107,6 +107,14 @@ const composerPtyHeightAtom = atomWithStorage<number>(
   PTY_HEIGHT_DEFAULT,
 );
 
+function getSessionSelectionPath(session: Pick<Session, "project_id" | "id">): string {
+  return `/history?projectId=${encodeURIComponent(session.project_id)}&sessionId=${encodeURIComponent(session.id)}`;
+}
+
+function rememberLastPath(path: string): void {
+  try { localStorage.setItem("lovcode:lastPath", path); } catch {}
+}
+
 export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession }: ProjectListProps) {
   const toReadable = useReadableText();
   const queryClient = useQueryClient();
@@ -116,17 +124,17 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
   // splash can fade and the list paints, instead of waiting for the full 1500-row
   // IPC roundtrip + JSON.parse. The hook also writes the final set into
   // react-query's ["sessions"] cache so other consumers (search, etc.) get it.
-  const { sessions: allSessions, initialLoading: loadingSessions } = useStreamedSessions();
+  const { sessions: allSessions, initialLoading: loadingSessions, streaming } = useStreamedSessions();
 
   const [importing, setImporting] = useState(false);
   // Two-level tab model:
-  //   top: "all" | "local" | "app"
+  //   top: "all" | "local" | "codex" | "app"
   //   sub (only when top==="app"): "code" | "web" | "cowork"
   // Flattened into one DataSource value so filters key off a single variable.
   type DataSource = ProjectListDataSource;
   const [dataSource, setDataSource] = useAtom(allProjectsDataSourceAtom);
-  const topTab: "all" | "local" | "app" =
-    dataSource === "all" ? "all" : dataSource === "local" ? "local" : "app";
+  const topTab: "all" | "local" | "codex" | "app" =
+    dataSource === "all" ? "all" : dataSource === "local" ? "local" : dataSource === "codex" ? "codex" : "app";
 
   const [sortBy, setSortBy] = useAtom(allProjectsSortByAtom);
   const [hideEmptySessions, setHideEmptySessions] = useAtom(hideEmptySessionsAllAtom);
@@ -141,31 +149,130 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     [collapsedGroupsArr],
   );
   const [selectedSessionRaw, setSelectedSessionRaw] = useState<Session | null>(null);
+  const defaultSelectionDoneRef = useRef(false);
+  const setSelectedSession = useCallback((session: Session | null) => {
+    if (session) defaultSelectionDoneRef.current = true;
+    setSelectedSessionRaw((prev) => {
+      if (!session) return prev === null ? prev : null;
+      if (prev?.id === session.id && prev.project_id === session.project_id) return prev;
+      return session;
+    });
+  }, []);
 
   // Auto-select a session when navigated here with a hint (e.g. from global search).
   // Source: location.state.selectSessionId. Cleared after consumption so a
   // back→forward navigation doesn't re-trigger selection.
   const location = useLocation();
   const navigate = useNavigate();
+  const selectedSessionIdFromUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("sessionId");
+  }, [location.search]);
+  const selectedProjectIdFromUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("projectId");
+  }, [location.search]);
+  const selectSessionHintId = (location.state as { selectSessionId?: string } | null)
+    ?.selectSessionId;
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollToSessionRef = useRef<string | null>(null);
-  useEffect(() => {
-    const hintId = (location.state as { selectSessionId?: string } | null)?.selectSessionId;
-    if (!hintId || allSessions.length === 0) return;
-    const s = allSessions.find((x) => x.id === hintId);
-    if (!s) return;
-    setSelectedSessionRaw(s);
-    // Expand sections / project group so the target row is in the DOM.
+  const urlSelectedSessionRef = useRef<string | null>(selectedSessionIdFromUrl);
+  const revealSessionInSidebar = useCallback((session: Session) => {
     setRecentCollapsed(false);
     setPinnedCollapsed(false);
     setCollapsedGroupsArr((prev) => {
-      if (prev === null) return prev;
-      if (!prev.includes(s.project_id)) return prev;
-      return prev.filter((id) => id !== s.project_id);
+      if (prev === null) {
+        if (projects.length === 0) return prev;
+        return projects.map((p) => p.id).filter((id) => id !== session.project_id);
+      }
+      if (!prev.includes(session.project_id)) return prev;
+      return prev.filter((id) => id !== session.project_id);
     });
-    pendingScrollToSessionRef.current = hintId;
-    navigate(location.pathname, { replace: true, state: null });
-  }, [location.state, location.pathname, allSessions, navigate, setRecentCollapsed, setPinnedCollapsed, setCollapsedGroupsArr]);
+  }, [projects, setRecentCollapsed, setPinnedCollapsed, setCollapsedGroupsArr]);
+  const selectSession = useCallback((session: Session) => {
+    const path = getSessionSelectionPath(session);
+    setSelectedSession(session);
+    rememberLastPath(path);
+    navigate(path, { replace: true });
+  }, [navigate, setSelectedSession]);
+  const clearSelectedSession = useCallback(() => {
+    defaultSelectionDoneRef.current = true;
+    setSelectedSession(null);
+    if (selectedSessionIdFromUrl) {
+      rememberLastPath("/history");
+      navigate("/history", { replace: true });
+    }
+  }, [navigate, selectedSessionIdFromUrl, setSelectedSession]);
+
+  useEffect(() => {
+    if (!selectSessionHintId) return;
+    if (allSessions.length === 0) {
+      if (!streaming) navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
+    const s = allSessions.find((x) => x.id === selectSessionHintId);
+    if (!s) {
+      if (!streaming) navigate(location.pathname, { replace: true, state: null });
+      return;
+    }
+    setSelectedSession(s);
+    revealSessionInSidebar(s);
+    pendingScrollToSessionRef.current = selectSessionHintId;
+    const path = getSessionSelectionPath(s);
+    rememberLastPath(path);
+    navigate(path, { replace: true, state: null });
+  }, [
+    selectSessionHintId,
+    location.pathname,
+    allSessions,
+    streaming,
+    navigate,
+    setSelectedSession,
+    revealSessionInSidebar,
+  ]);
+
+  useEffect(() => {
+    if (!selectedSessionIdFromUrl) return;
+    urlSelectedSessionRef.current = selectedSessionIdFromUrl;
+    if (allSessions.length === 0) {
+      if (!streaming) {
+        setSelectedSession(null);
+        navigate("/history", { replace: true });
+      }
+      return;
+    }
+
+    const s = allSessions.find((x) =>
+      x.id === selectedSessionIdFromUrl &&
+      (!selectedProjectIdFromUrl || x.project_id === selectedProjectIdFromUrl)
+    );
+    if (!s) {
+      if (!streaming) {
+        setSelectedSession(null);
+        navigate("/history", { replace: true });
+      }
+      return;
+    }
+
+    setSelectedSession(s);
+    revealSessionInSidebar(s);
+    pendingScrollToSessionRef.current = selectedSessionIdFromUrl;
+  }, [
+    selectedSessionIdFromUrl,
+    selectedProjectIdFromUrl,
+    allSessions,
+    streaming,
+    navigate,
+    setSelectedSession,
+    revealSessionInSidebar,
+  ]);
+
+  useEffect(() => {
+    if (selectedSessionIdFromUrl) return;
+    if (!urlSelectedSessionRef.current) return;
+    urlSelectedSessionRef.current = null;
+    setSelectedSession(null);
+  }, [selectedSessionIdFromUrl, setSelectedSession]);
 
   // After sidebar re-renders with the target row visible, scroll it into view.
   // Re-runs on every sidebar shape change until the row exists, then clears.
@@ -188,9 +295,11 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
   // picks up the new object (with updated project_path / project_id) automatically.
   const selectedSession: Session | null = useMemo(() => {
     if (!selectedSessionRaw) return null;
-    return allSessions.find((s) => s.id === selectedSessionRaw.id) ?? selectedSessionRaw;
+    return allSessions.find((s) =>
+      s.id === selectedSessionRaw.id &&
+      s.project_id === selectedSessionRaw.project_id
+    ) ?? selectedSessionRaw;
   }, [selectedSessionRaw, allSessions]);
-  const setSelectedSession: typeof setSelectedSessionRaw = setSelectedSessionRaw;
   const [recentProjects, setRecentProjects] = useAtom(recentProjectsAtom);
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
   // Seed activeCwd once we know something. Prefer most-recent MRU entry; else
@@ -232,6 +341,7 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     switch (dataSource) {
       case "all":        return true;
       case "local":      return s.source === "cli";
+      case "codex":      return s.source === "codex";
       case "app-code":   return s.source === "app-code";
       case "app-web":    return s.source === "app-web";
       case "app-cowork": return s.source === "app-cowork";
@@ -498,6 +608,55 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
       });
   }, [allSessions, sortBy, hideEmptySessions, grouped, dataSource, effectivePinnedSet]);
 
+  const latestSelectableSession = useMemo(() => {
+    const candidates = new Map<string, Session>();
+    const add = (session: Session) => candidates.set(session.id, session);
+    pinnedSessions.forEach(add);
+    if (grouped) {
+      for (const list of sessionsByProject.values()) list.forEach(add);
+    } else {
+      flatSessions.forEach(add);
+    }
+
+    let latest: Session | null = null;
+    for (const session of candidates.values()) {
+      if (!latest || session.last_modified > latest.last_modified) latest = session;
+    }
+    return latest;
+  }, [pinnedSessions, grouped, sessionsByProject, flatSessions]);
+
+  useEffect(() => {
+    if (
+      loading ||
+      selectedSessionIdFromUrl ||
+      selectSessionHintId ||
+      defaultSelectionDoneRef.current ||
+      !latestSelectableSession
+    ) return;
+
+    setSelectedSession(latestSelectableSession);
+    setRecentCollapsed(false);
+    setPinnedCollapsed(false);
+    setCollapsedGroupsArr((prev) => {
+      const withoutSelected = (ids: string[]) =>
+        ids.filter((id) => id !== latestSelectableSession.project_id);
+      if (prev === null) return withoutSelected(projects.map((p) => p.id));
+      if (!prev.includes(latestSelectableSession.project_id)) return prev;
+      return withoutSelected(prev);
+    });
+    pendingScrollToSessionRef.current = latestSelectableSession.id;
+  }, [
+    loading,
+    selectedSessionIdFromUrl,
+    selectSessionHintId,
+    latestSelectableSession,
+    projects,
+    setSelectedSession,
+    setRecentCollapsed,
+    setPinnedCollapsed,
+    setCollapsedGroupsArr,
+  ]);
+
   const doImport = async (path: string) => {
     setImporting(true);
     try {
@@ -539,7 +698,7 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     return (
       <div className="flex flex-col items-center justify-center h-full gap-2">
         <p className="text-muted-foreground">Reading {what}…</p>
-        <p className="text-xs text-muted-foreground/60">~/.claude/projects</p>
+        <p className="text-xs text-muted-foreground/60">~/.claude/projects + ~/.codex/sessions</p>
       </div>
     );
   }
@@ -564,19 +723,21 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
             {sortedProjects.length} projects · {visibleSessions.length} sessions
           </p>
 
-          {/* Top-level source tabs: All / Local / App.
+          {/* Top-level source tabs: All / Local / Codex / App.
               When App is active, a sub-tab row appears below for Code / Web / Cowork. */}
           <div className="flex gap-0.5 mb-2 p-0.5 rounded-lg bg-card-alt">
             {([
               { key: "all", label: "All" },
               { key: "local", label: "Local" },
+              { key: "codex", label: "Codex" },
               { key: "app", label: "App" },
-            ] as { key: "all" | "local" | "app"; label: string }[]).map(({ key, label }) => (
+            ] as { key: "all" | "local" | "codex" | "app"; label: string }[]).map(({ key, label }) => (
               <button
                 key={key}
                 onClick={() => {
                   if (key === "all") setDataSource("all");
                   else if (key === "local") setDataSource("local");
+                  else if (key === "codex") setDataSource("codex");
                   else setDataSource("app-code"); // entering App defaults to Code sub-tab
                 }}
                 className={`flex-1 px-2 py-1 rounded-md text-xs transition-colors ${
@@ -653,10 +814,10 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
                 <div className="space-y-0.5">
                   {pinnedSessions.map((session) => (
                     <SessionItemButton
-                      key={`pinned-${session.id}`}
+                      key={`pinned-${session.project_id}:${session.id}`}
                       session={session}
-                      isSelected={selectedSession?.id === session.id}
-                      onClick={() => setSelectedSession(session)}
+                      isSelected={selectedSession?.id === session.id && selectedSession.project_id === session.project_id}
+                      onClick={() => selectSession(session)}
                       toReadable={toReadable}
                       showProject
                       isPinned
@@ -751,10 +912,10 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
                       ) : (
                         sessions.map((session) => (
                           <SessionItemButton
-                            key={session.id}
+                            key={`${session.project_id}:${session.id}`}
                             session={session}
-                            isSelected={selectedSession?.id === session.id}
-                            onClick={() => setSelectedSession(session)}
+                            isSelected={selectedSession?.id === session.id && selectedSession.project_id === session.project_id}
+                            onClick={() => selectSession(session)}
                             toReadable={toReadable}
                             isPinned={effectivePinnedSet.has(session.id)}
                             onTogglePin={() => togglePin(session.id)}
@@ -774,10 +935,10 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
               </div>
             ) : flatSessions.map((session) => (
               <SessionItemButton
-                key={session.id}
+                key={`${session.project_id}:${session.id}`}
                 session={session}
-                isSelected={selectedSession?.id === session.id}
-                onClick={() => setSelectedSession(session)}
+                isSelected={selectedSession?.id === session.id && selectedSession.project_id === session.project_id}
+                onClick={() => selectSession(session)}
                 toReadable={toReadable}
                 showProject
                 isPinned={effectivePinnedSet.has(session.id)}
@@ -834,7 +995,7 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
           <ChatFilePreviewProvider>
             <SessionDetail
               session={selectedSession}
-              onClose={() => setSelectedSession(null)}
+              onClose={clearSelectedSession}
             />
           </ChatFilePreviewProvider>
         ) : (
@@ -864,10 +1025,11 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
 }
 
 // Friendly label fragment for "No __ sessions" in empty states.
-function emptyStateLabel(ds: "all" | "local" | "app-code" | "app-web" | "app-cowork"): string {
+function emptyStateLabel(ds: ProjectListDataSource): string {
   switch (ds) {
     case "all":        return "";
     case "local":      return "local ";
+    case "codex":      return "codex ";
     case "app-code":   return "app code ";
     case "app-web":    return "app web ";
     case "app-cowork": return "cowork ";
@@ -1011,6 +1173,7 @@ function SessionItemButton({
             <SessionDropdownMenuItems
               projectId={session.project_id}
               sessionId={session.id}
+              source={session.source}
               projectPath={session.project_path ?? undefined}
               isPinnedOverride={isPinned}
               onTogglePinOverride={onTogglePin}
@@ -1070,6 +1233,28 @@ function groupConsecutiveByRole(messages: Message[]): Message[][] {
   return groups;
 }
 
+export interface SessionForkPayload {
+  session: Session;
+  messageId: string;
+  lineNumber: number;
+  context: string;
+}
+
+function buildForkContext(groups: Message[][], throughGroupIndex: number, toReadable: (s: string | null) => string) {
+  const lines = groups
+    .slice(0, throughGroupIndex + 1)
+    .flat()
+    .filter((message) => !message.is_meta)
+    .map((message) => {
+      const role = message.is_tool ? "tool" : message.role || "message";
+      const content = toReadable(message.content).trim();
+      return content ? `[${role}]\n${content}` : "";
+    })
+    .filter(Boolean);
+  const joined = lines.join("\n\n---\n\n");
+  return joined.length > 16000 ? joined.slice(-16000) : joined;
+}
+
 function useGroupCollapse(deps: unknown[], initialExpanded = false) {
   const [expanded, setExpanded] = useState(initialExpanded);
   const [isOverflow, setIsOverflow] = useState(false);
@@ -1097,6 +1282,7 @@ function StickyPromptList({
   highlight,
   toReadable,
   onCopy,
+  onFork,
   cwd,
 }: {
   groupedMessages: Message[][];
@@ -1107,6 +1293,7 @@ function StickyPromptList({
   highlight?: string;
   toReadable: (s: string | null) => string;
   onCopy: (content: string) => void;
+  onFork?: (payload: { message: Message; context: string }) => void;
   cwd?: string;
 }) {
   // Slice grouped messages into "sections": each section starts with a user prompt
@@ -1138,10 +1325,11 @@ function StickyPromptList({
         const headIsUser = isUserPromptGroup(head);
         return (
           <div key={`${head[0].uuid}-${head[0].line_number}`}>
-            {section.groups.map((group) => {
+            {section.groups.map((group, localIndex) => {
               const isUserGroup = isUserPromptGroup(group);
               const promptIndex = isUserGroup ? ++userCounter : undefined;
               const sticky = isUserGroup && headIsUser && !userPromptsOnly;
+              const groupIndex = section.startIdx + localIndex;
               return (
                 <MessageGroupCard
                   key={`${group[0].uuid}-${group[0].line_number}`}
@@ -1152,6 +1340,14 @@ function StickyPromptList({
                   highlight={highlight}
                   toReadable={toReadable}
                   onCopy={onCopy}
+                  onFork={
+                    isUserGroup && onFork
+                      ? () => onFork({
+                          message: group[0],
+                          context: buildForkContext(groupedMessages, groupIndex, toReadable),
+                        })
+                      : undefined
+                  }
                   cwd={cwd}
                   promptIndex={promptIndex}
                   sticky={sticky}
@@ -1209,6 +1405,7 @@ const MessageGroupCard = memo(function MessageGroupCard({
   highlight,
   toReadable,
   onCopy,
+  onFork,
   cwd,
   promptIndex,
   sticky,
@@ -1220,6 +1417,7 @@ const MessageGroupCard = memo(function MessageGroupCard({
   highlight?: string;
   toReadable: (s: string | null) => string;
   onCopy: (content: string) => void;
+  onFork?: () => void;
   cwd?: string;
   promptIndex?: number;
   sticky?: boolean;
@@ -1363,6 +1561,12 @@ const MessageGroupCard = memo(function MessageGroupCard({
                 Open in window
               </DropdownMenuItem>
             )}
+            {isUser && onFork && (
+              <DropdownMenuItem onClick={onFork} className="gap-2 text-xs">
+                <RocketIcon width={13} />
+                Fork from here
+              </DropdownMenuItem>
+            )}
             <DropdownMenuItem onClick={() => onCopy(groupContent)} className="gap-2 text-xs">
               <Copy size={13} />
               Copy
@@ -1488,8 +1692,21 @@ function EditableSessionTitle({
   );
 }
 
-function SessionDetail({ session, onClose, highlight }: { session: Session; onClose: () => void; highlight?: string }) {
+export function SessionDetail({
+  session,
+  onClose,
+  highlight,
+  composerOverride,
+  onFork,
+}: {
+  session: Session;
+  onClose: () => void;
+  highlight?: string;
+  composerOverride?: ReactNode;
+  onFork?: (payload: SessionForkPayload) => void;
+}) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
   const toReadable = useReadableText();
   const missingCwds = useCwdValidity([session.project_path]);
   const cwdMissing = !!session.project_path && missingCwds.has(session.project_path);
@@ -1513,20 +1730,51 @@ function SessionDetail({ session, onClose, highlight }: { session: Session; onCl
   const usage = liveUsage ?? session.usage;
 
   const selection = useMaasActiveSelection();
+  const messageLoadSeqRef = useRef(0);
+  const liveSyncScrollRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setMessages([]);
-    invoke<Message[]>("get_session_messages", {
+  const loadMessages = useCallback((reset: boolean) => {
+    const seq = messageLoadSeqRef.current + 1;
+    messageLoadSeqRef.current = seq;
+
+    if (reset) {
+      setLoading(true);
+      setMessages([]);
+    }
+
+    return invoke<Message[]>("get_session_messages", {
       projectId: session.project_id,
       sessionId: session.id,
     })
-      .then((m) => { if (!cancelled) setMessages(m); })
-      .catch(() => { if (!cancelled) setMessages([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+      .then((m) => {
+        if (messageLoadSeqRef.current === seq) setMessages(m);
+      })
+      .catch(() => {
+        if (messageLoadSeqRef.current === seq) setMessages([]);
+      })
+      .finally(() => {
+        if (messageLoadSeqRef.current === seq) setLoading(false);
+      });
   }, [session.project_id, session.id]);
+
+  useEffect(() => {
+    liveSyncScrollRef.current = false;
+    void loadMessages(true);
+    return () => {
+      messageLoadSeqRef.current += 1;
+    };
+  }, [loadMessages]);
+
+  useEffect(() => {
+    const unlisten = listen("sessions-changed", () => {
+      const scroller = scrollRef.current;
+      liveSyncScrollRef.current = !scroller
+        || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+      queryClient.invalidateQueries({ queryKey: ["session-usage", session.project_id, session.id] });
+      void loadMessages(false);
+    });
+    return () => { unlisten.then((fn) => fn()).catch(() => {}); };
+  }, [loadMessages, queryClient, session.project_id, session.id]);
 
   const filteredMessages = useMemo(() => {
     let result = originalChat ? messages.filter((m) => !m.is_meta) : messages;
@@ -1554,11 +1802,16 @@ function SessionDetail({ session, onClose, highlight }: { session: Session; onCl
   const contentRef = useRef<HTMLDivElement>(null);
   const [activeMatch, setActiveMatch] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
+  const bottomScrolledSessionRef = useRef<string | null>(null);
 
   // Resume-conversation state: prompt-box + spawned terminal
   // Only local CLI sessions can be resumed via `claude --resume`/`codex resume`.
   // app-code sessions point to the same .jsonl on disk, so they're also resumable.
-  const canResume = (session.source === "cli" || session.source === "app-code") && !!session.project_path;
+  const canResume = (
+    session.source === "cli" ||
+    session.source === "app-code" ||
+    session.source === "codex"
+  ) && !!session.project_path;
 
   // Count matches from the actual rendered DOM (source of truth) after every render
   useEffect(() => {
@@ -1579,6 +1832,25 @@ function SessionDetail({ session, onClose, highlight }: { session: Session; onCl
   useEffect(() => {
     setActiveMatch(0);
   }, [highlight, filteredMessages]);
+
+  useEffect(() => {
+    bottomScrolledSessionRef.current = null;
+  }, [session.id]);
+
+  useEffect(() => {
+    if (loading || highlight?.trim() || filteredMessages.length === 0) return;
+    const shouldScroll = bottomScrolledSessionRef.current !== session.id || liveSyncScrollRef.current;
+    if (!shouldScroll) return;
+
+    const raf = requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      scroller.scrollTop = scroller.scrollHeight;
+      bottomScrolledSessionRef.current = session.id;
+      liveSyncScrollRef.current = false;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [loading, highlight, filteredMessages.length, session.id]);
 
   useEffect(() => {
     if (!contentRef.current || matchCount === 0 || loading) return;
@@ -1706,6 +1978,7 @@ function SessionDetail({ session, onClose, highlight }: { session: Session; onCl
               <SessionDropdownMenuItems
                 projectId={session.project_id}
                 sessionId={session.id}
+                source={session.source}
                 projectPath={session.project_path ?? undefined}
                 onExport={() => setExportDialogOpen(true)}
               />
@@ -1747,6 +2020,16 @@ function SessionDetail({ session, onClose, highlight }: { session: Session; onCl
             highlight={highlight}
             toReadable={toReadable}
             onCopy={handleCopyContent}
+            onFork={
+              onFork
+                ? ({ message, context }) => onFork({
+                    session,
+                    messageId: message.uuid,
+                    lineNumber: message.line_number,
+                    context,
+                  })
+                : undefined
+            }
             cwd={session.project_path ?? undefined}
           />
         </div>
@@ -1764,9 +2047,11 @@ function SessionDetail({ session, onClose, highlight }: { session: Session; onCl
       </div>
 
       {/* Continue conversation: terminal-style prompt box pinned to the right pane bottom */}
+      {composerOverride ?? (
       <Composer
         cwd={canResume ? session.project_path ?? null : null}
         resetKey={session.id}
+        defaultTerminalType={session.source === "codex" ? "codex" : "claude"}
         emptyMessage={
           canResume
             ? undefined
@@ -1783,11 +2068,13 @@ function SessionDetail({ session, onClose, highlight }: { session: Session; onCl
         }
         buildCommand={(t, prompt) => {
           if (t.type === "terminal") return { initialInput: prompt || undefined };
-          const extra = t.type === "claude" ? `--resume ${session.id}` : `resume ${session.id}`;
-          return { command: buildAgentCommand(t.type, prompt, extra) };
+          const agentType = session.source === "codex" ? "codex" : t.type;
+          const extra = agentType === "claude" ? `--resume ${session.id}` : `resume ${session.id}`;
+          return { command: buildAgentCommand(agentType, prompt, extra) };
         }}
         trailing={<PlatformModelPicker selection={selection} usage={usage} />}
       />
+      )}
     </div>
   );
 }
@@ -1796,7 +2083,7 @@ function SessionDetail({ session, onClose, highlight }: { session: Session; onCl
 // Composer infrastructure
 // ----------------------------------------------------------------------------
 // Two call sites use the same terminal-style prompt box: `SessionDetail` (for
-// `claude --resume <id>`) and the right-panel empty state (for fresh
+// `claude --resume <id>` / `codex resume <id>`) and the right-panel empty state (for fresh
 // `claude` / `codex` / shell). They share the same input + Terminal selector
 // + inline PTY pattern; only the command builder and the toolbar trailing
 // slot differ. Everything below is the shared kit.
@@ -2330,6 +2617,7 @@ function Composer({
   emptyMessage,
   onSpawn,
   resetKey,
+  defaultTerminalType = "claude",
 }: {
   cwd: string | null;
   buildCommand: (
@@ -2347,8 +2635,9 @@ function Composer({
   /** Identity that should reset the input + tear down the PTY when it
    *  changes (e.g. switching between sessions). */
   resetKey?: string;
+  defaultTerminalType?: TerminalOption["type"];
 }) {
-  const defaultTerminal = TERMINAL_OPTIONS.find((o) => o.type === "claude") ?? TERMINAL_OPTIONS[0];
+  const defaultTerminal = TERMINAL_OPTIONS.find((o) => o.type === defaultTerminalType) ?? TERMINAL_OPTIONS[0];
   const [terminalOpt, setTerminalOpt] = useState<TerminalOption>(defaultTerminal);
   const [input, setInput] = useState("");
   const composingRef = useRef(false);
@@ -2378,6 +2667,7 @@ function Composer({
 
   useEffect(() => {
     setInput("");
+    setTerminalOpt(defaultTerminal);
     setActivePty((prev) => {
       if (prev) {
         disposeTerminal(prev.ptyId);
@@ -2386,7 +2676,7 @@ function Composer({
       }
       return null;
     });
-  }, [resetKey]);
+  }, [resetKey, defaultTerminal]);
 
   const submit = () => {
     if (disabled || !cwd) return;

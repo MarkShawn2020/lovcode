@@ -7,7 +7,10 @@ export default function FeaturesPage() {
 
   const handleFeatureClick = (feature: FeatureType) => {
     const routes: Record<FeatureType, string> = {
+      "dashboard": "/dashboard",
+      "workbench": "/workbench",
       "chat": "/history",
+      "workspace": "/workspace",
       "basic-env": "/settings/env",
       "basic-maas": "/settings/maas",
       "basic-version": "/settings/version",

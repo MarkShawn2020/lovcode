@@ -26,6 +26,7 @@ import {
   releaseWebGL,
   ptyReadySessions,
   ptyInitLocks,
+  hasTerminal,
 } from "./terminalPool";
 
 interface PtyDataEvent {
@@ -58,6 +59,7 @@ interface CommandDiagnostics {
 }
 
 const QUICK_EXIT_MS = 1500;
+const IME_ENTER_GUARD_MS = 160;
 
 const getCommandKind = (command?: string): CommandKind | null => {
   if (!command) return null;
@@ -175,10 +177,18 @@ export interface TerminalPaneProps {
   visible?: boolean;
   /** Auto focus terminal when ready */
   autoFocus?: boolean;
+  /** Whether a command session should open an interactive shell after the command exits */
+  fallbackToShellOnCommandExit?: boolean;
+  /** Restore terminal scrollback without creating or attaching to a live PTY */
+  restoreOnly?: boolean;
   /** Callback when terminal is ready */
   onReady?: () => void;
   /** Callback when terminal session ends */
   onExit?: () => void;
+  /** Callback when user submits input to the terminal application */
+  onUserSubmit?: () => void;
+  /** Callback when user sends an interrupt signal */
+  onUserInterrupt?: () => void;
   /** Callback when title changes */
   onTitleChange?: (title: string) => void;
   /** Custom class name */
@@ -192,8 +202,12 @@ export function TerminalPane({
   initialInput,
   visible = true,
   autoFocus = false,
+  fallbackToShellOnCommandExit = true,
+  restoreOnly = false,
   onReady,
   onExit,
+  onUserSubmit,
+  onUserInterrupt,
   onTitleChange,
   className = "",
 }: TerminalPaneProps) {
@@ -203,8 +217,12 @@ export function TerminalPane({
   const commandRef = useRef(command);
   const initialInputRef = useRef(initialInput);
   const autoFocusRef = useRef(autoFocus);
+  const fallbackToShellOnCommandExitRef = useRef(fallbackToShellOnCommandExit);
+  const restoreOnlyRef = useRef(restoreOnly);
   const onReadyRef = useRef(onReady);
   const onExitRef = useRef(onExit);
+  const onUserSubmitRef = useRef(onUserSubmit);
+  const onUserInterruptRef = useRef(onUserInterrupt);
   const onTitleChangeRef = useRef(onTitleChange);
   const preflightRef = useRef<CommandDiagnostics | null>(null);
   const commandStartRef = useRef<number | null>(null);
@@ -218,8 +236,12 @@ export function TerminalPane({
   useEffect(() => { commandRef.current = command; }, [command]);
   useEffect(() => { initialInputRef.current = initialInput; }, [initialInput]);
   useEffect(() => { autoFocusRef.current = autoFocus; }, [autoFocus]);
+  useEffect(() => { fallbackToShellOnCommandExitRef.current = fallbackToShellOnCommandExit; }, [fallbackToShellOnCommandExit]);
+  useEffect(() => { restoreOnlyRef.current = restoreOnly; }, [restoreOnly]);
   useEffect(() => { onReadyRef.current = onReady; }, [onReady]);
   useEffect(() => { onExitRef.current = onExit; }, [onExit]);
+  useEffect(() => { onUserSubmitRef.current = onUserSubmit; }, [onUserSubmit]);
+  useEffect(() => { onUserInterruptRef.current = onUserInterrupt; }, [onUserInterrupt]);
   useEffect(() => { onTitleChangeRef.current = onTitleChange; }, [onTitleChange]);
   useEffect(() => {
     diagnosticShownRef.current = false;
@@ -253,6 +275,7 @@ export function TerminalPane({
     const sessionId = ptyId;
 
     // Get or create pooled terminal (preserves history on remount)
+    const hadPooledTerminal = hasTerminal(sessionId);
     const pooled = getOrCreateTerminal(sessionId);
     const { term, fitAddon } = pooled;
 
@@ -271,6 +294,13 @@ export function TerminalPane({
     const pendingDirectInputs: Array<{ data: string; asciiFallback?: string; ts: number }> = [];
     const DIRECT_INPUT_TIMEOUT_MS = 120;
     const asciiSymbolRegex = /^[!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~]$/;
+    let isComposingInput = false;
+    let imeEnterGuardUntil = 0;
+
+    const isImeEnterGuardActive = () => isComposingInput || Date.now() < imeEnterGuardUntil;
+    const isImeKeyEvent = (event: KeyboardEvent) => {
+      return event.isComposing || event.keyCode === 229 || isImeEnterGuardActive();
+    };
 
     const getAsciiFallback = (data: string): string | null => {
       if (data.length !== 1) return null;
@@ -305,29 +335,40 @@ export function TerminalPane({
       return false;
     };
 
+    const handleCompositionStart = () => {
+      isComposingInput = true;
+    };
+    const handleCompositionEnd = () => {
+      isComposingInput = false;
+      imeEnterGuardUntil = Date.now() + IME_ENTER_GUARD_MS;
+    };
+    const handleBeforeInput = (e: Event) => {
+      const ie = e as InputEvent;
+
+      const isInsertText = ie.inputType === "insertText";
+      const isInsertComposition = ie.inputType === "insertCompositionText";
+      if ((!isInsertText && !isInsertComposition) || !ie.data) return;
+      const isNonAscii = /[^\x00-\x7f]/.test(ie.data);
+      const isAsciiSymbol = asciiSymbolRegex.test(ie.data);
+      const shouldHandleNonAscii = isNonAscii && isInsertText;
+      const shouldHandleAsciiSymbol = isAsciiSymbol && (isInsertText || isInsertComposition);
+      if (!shouldHandleNonAscii && !shouldHandleAsciiSymbol) return;
+
+      e.preventDefault(); // Prevent xterm from seeing it at all
+      enqueueDirectInput(ie.data);
+      // Send directly to PTY
+      if (ptyReadySessions.has(sessionId)) {
+        const encoder = new TextEncoder();
+        invoke("pty_write", { id: sessionId, data: Array.from(encoder.encode(ie.data)) });
+      }
+    };
+
     if (textarea) {
+      textarea.addEventListener("compositionstart", handleCompositionStart, { capture: true });
+      textarea.addEventListener("compositionend", handleCompositionEnd, { capture: true });
       // Use beforeinput to intercept BEFORE the character enters textarea
       // inputType 'insertText' is for direct input, 'insertCompositionText' is for IME composition
-      textarea.addEventListener("beforeinput", (e) => {
-        const ie = e as InputEvent;
-
-        const isInsertText = ie.inputType === "insertText";
-        const isInsertComposition = ie.inputType === "insertCompositionText";
-        if ((!isInsertText && !isInsertComposition) || !ie.data) return;
-        const isNonAscii = /[^\x00-\x7f]/.test(ie.data);
-        const isAsciiSymbol = asciiSymbolRegex.test(ie.data);
-        const shouldHandleNonAscii = isNonAscii && isInsertText;
-        const shouldHandleAsciiSymbol = isAsciiSymbol && (isInsertText || isInsertComposition);
-        if (!shouldHandleNonAscii && !shouldHandleAsciiSymbol) return;
-
-        e.preventDefault(); // Prevent xterm from seeing it at all
-        enqueueDirectInput(ie.data);
-        // Send directly to PTY
-        if (ptyReadySessions.has(sessionId)) {
-          const encoder = new TextEncoder();
-          invoke("pty_write", { id: sessionId, data: Array.from(encoder.encode(ie.data)) });
-        }
-      }, { capture: true });
+      textarea.addEventListener("beforeinput", handleBeforeInput, { capture: true });
     }
 
     // Track mount state and session state
@@ -355,7 +396,9 @@ export function TerminalPane({
         if (!mountState.isMounted) return;
 
         const isNewPty = !exists;
-        if (isNewPty) {
+        const shouldRestoreOnly = restoreOnlyRef.current && isNewPty;
+
+        if (isNewPty && !shouldRestoreOnly) {
           const commandText = commandRef.current?.trim();
           if (commandText) {
             commandStartRef.current = Date.now();
@@ -376,7 +419,22 @@ export function TerminalPane({
         if (scrollback.length > 0 && mountState.isMounted) {
           const bytes = new Uint8Array(scrollback);
           const text = new TextDecoder().decode(bytes);
+          if (hadPooledTerminal || shouldRestoreOnly) {
+            term.reset();
+          }
           term.write(text);
+        }
+
+        if (shouldRestoreOnly) {
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                fitAddon.fit();
+                resolve();
+              });
+            });
+          });
+          return;
         }
 
         ptyReadySessions.add(sessionId);
@@ -451,8 +509,21 @@ export function TerminalPane({
       if (event.type !== 'keydown') return true;
       if (!ptyReadySessions.has(sessionId)) return true;
 
+      if (event.key === 'c' && event.ctrlKey && !event.metaKey && !event.altKey) {
+        onUserInterruptRef.current?.();
+        return true;
+      }
+
+      if (event.key === 'Enter' && !event.shiftKey) {
+        if (!isImeKeyEvent(event)) {
+          onUserSubmitRef.current?.();
+        }
+        return true;
+      }
+
       // Shift+Enter: bracketed paste with U+2028 (Line Separator)
       if (event.key === 'Enter' && event.shiftKey) {
+        if (isImeKeyEvent(event)) return true;
         invoke("pty_write", { id: sessionId, data: [0x1b, 0x5b, 0x32, 0x30, 0x30, 0x7e, 0xe2, 0x80, 0xa8, 0x1b, 0x5b, 0x32, 0x30, 0x31, 0x7e] });
         return false;
       }
@@ -533,8 +604,20 @@ export function TerminalPane({
 
       if (shouldSkipXtermInput(data)) return;
 
+      const hasLineBreak = data.includes("\r") || data.includes("\n");
+      const shouldSuppressImeEnter = hasLineBreak && isImeEnterGuardActive();
+      const dataForPty = shouldSuppressImeEnter ? data.replace(/[\r\n]/g, "") : data;
+      if (!dataForPty) return;
+
+      if (dataForPty.includes("\x03")) {
+        onUserInterruptRef.current?.();
+      }
+      if (!shouldSuppressImeEnter && (dataForPty.includes("\r") || dataForPty.includes("\n"))) {
+        onUserSubmitRef.current?.();
+      }
+
       const encoder = new TextEncoder();
-      const bytes = Array.from(encoder.encode(data));
+      const bytes = Array.from(encoder.encode(dataForPty));
       invoke("pty_write", { id: sessionId, data: bytes }).catch(console.error);
     });
 
@@ -593,6 +676,7 @@ export function TerminalPane({
           initialInputRef.current = undefined;
           const encoder = new TextEncoder();
           const bytes = Array.from(encoder.encode(input));
+          onUserSubmitRef.current?.();
           invoke("pty_write", { id: sessionId, data: bytes }).catch(console.error);
           // Focus terminal after sending initial input
           term.focus();
@@ -617,7 +701,7 @@ export function TerminalPane({
         ptyReadySessions.delete(sessionId);
         sessionState.exited = true;
 
-        // For command sessions (claude/codex), fall back to shell automatically
+        // Command sessions can either fall back to shell or end the pane.
         if (commandRef.current) {
           if (!commandExitHandledRef.current) {
             const commandText = commandRef.current.trim();
@@ -649,7 +733,11 @@ export function TerminalPane({
             }
             commandExitHandledRef.current = true;
           }
-          fallbackToShell();
+          if (fallbackToShellOnCommandExitRef.current) {
+            fallbackToShell();
+          } else {
+            onExitRef.current?.();
+          }
         } else {
           // Plain shell session ended - close the tab
           onExitRef.current?.();
@@ -670,6 +758,11 @@ export function TerminalPane({
       onTitleDisposable.dispose();
       unlistenData.then((fn) => fn());
       unlistenExit.then((fn) => fn());
+      if (textarea) {
+        textarea.removeEventListener("compositionstart", handleCompositionStart, { capture: true });
+        textarea.removeEventListener("compositionend", handleCompositionEnd, { capture: true });
+        textarea.removeEventListener("beforeinput", handleBeforeInput, { capture: true });
+      }
 
       // Just detach from DOM, keep terminal alive in pool
       detachTerminal(sessionId);
@@ -738,7 +831,7 @@ export function TerminalPane({
     <>
       <div
         ref={containerRef}
-        className={`w-full h-full bg-[#1a1a1a] ${className}`}
+        className={`w-full h-full bg-terminal ${className}`}
         onClick={handleClick}
       />
       <Dialog open={diagnosticOpen} onOpenChange={setDiagnosticOpen}>

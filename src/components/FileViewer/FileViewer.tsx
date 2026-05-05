@@ -13,7 +13,7 @@ import {
   DotsHorizontalIcon,
   FileIcon,
 } from "@radix-ui/react-icons";
-import { Folder } from "lucide-react";
+import { Archive, FileWarning, Folder } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { MarkdownRenderer } from "../MarkdownRenderer";
 import {
@@ -83,6 +83,7 @@ function getLanguage(path: string): string {
 interface FileViewerProps {
   filePath: string;
   onClose: () => void;
+  onOpenFilePath?: (path: string) => void;
   /** Optional line to reveal once content is loaded (1-indexed). */
   revealLine?: number;
   /** Optional column to place the cursor at (1-indexed). */
@@ -102,6 +103,38 @@ interface DirEntry {
   name: string;
   path: string;
   is_dir: boolean;
+}
+
+interface ArchiveEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  compressed_size: number;
+}
+
+interface ArchiveListing {
+  entries: ArchiveEntry[];
+  total_entries: number;
+  truncated: boolean;
+}
+
+interface ArchiveTreeNode {
+  name: string;
+  path: string;
+  isDir: boolean;
+  children: ArchiveTreeNode[];
+  size: number;
+  compressedSize: number;
+}
+
+interface MutableArchiveTreeNode extends ArchiveTreeNode {
+  childMap: Map<string, MutableArchiveTreeNode>;
+}
+
+interface UnsupportedPreviewInfo {
+  title: string;
+  description: string;
 }
 
 interface BreadcrumbSegment {
@@ -124,6 +157,341 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function createArchiveTreeNode(name: string, path: string, isDir: boolean): MutableArchiveTreeNode {
+  return {
+    name,
+    path,
+    isDir,
+    children: [],
+    childMap: new Map(),
+    size: 0,
+    compressedSize: 0,
+  };
+}
+
+function toArchiveTreeNode(node: MutableArchiveTreeNode): ArchiveTreeNode {
+  const children = Array.from(node.childMap.values())
+    .sort((a, b) => {
+      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+    })
+    .map(toArchiveTreeNode);
+
+  return {
+    name: node.name,
+    path: node.path,
+    isDir: node.isDir,
+    size: node.size,
+    compressedSize: node.compressedSize,
+    children,
+  };
+}
+
+function buildArchiveTree(entries: ArchiveEntry[]): ArchiveTreeNode[] {
+  const root = createArchiveTreeNode("", "", true);
+
+  entries.forEach((entry) => {
+    const normalized = entry.path.replace(/\\/g, "/").replace(/^\/+/, "");
+    const isDirectoryEntry = entry.is_dir || normalized.endsWith("/");
+    const parts = normalized.split("/").filter(Boolean);
+    if (parts.length === 0) return;
+
+    let current = root;
+    let accumulated = "";
+
+    parts.forEach((part, index) => {
+      const isLast = index === parts.length - 1;
+      const isDir = !isLast || isDirectoryEntry;
+      accumulated = accumulated ? `${accumulated}/${part}` : part;
+
+      let child = current.childMap.get(part);
+      if (!child) {
+        child = createArchiveTreeNode(part, isDir ? `${accumulated}/` : accumulated, isDir);
+        current.childMap.set(part, child);
+      }
+
+      if (isLast && !isDir) {
+        child.size = entry.size;
+        child.compressedSize = entry.compressed_size;
+      }
+
+      current = child;
+    });
+  });
+
+  return Array.from(root.childMap.values()).map(toArchiveTreeNode);
+}
+
+function countArchiveTree(nodes: ArchiveTreeNode[]) {
+  let files = 0;
+  let folders = 0;
+
+  const walk = (node: ArchiveTreeNode) => {
+    if (node.isDir) {
+      folders += 1;
+      node.children.forEach(walk);
+    } else {
+      files += 1;
+    }
+  };
+
+  nodes.forEach(walk);
+  return { files, folders };
+}
+
+function isZipArchive(path: string): boolean {
+  return path.toLowerCase().endsWith(".zip");
+}
+
+function getUnsupportedPreviewInfo(fileName: string): UnsupportedPreviewInfo | null {
+  const lower = fileName.toLowerCase();
+
+  if ([".7z", ".rar", ".tar", ".tar.gz", ".tgz", ".gz", ".bz2", ".xz"].some((ext) => lower.endsWith(ext))) {
+    return {
+      title: "Archive preview is not supported",
+      description: "Built-in archive browsing currently supports ZIP files only. Open this archive with the default app to inspect its contents.",
+    };
+  }
+
+  if ([".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".pages", ".numbers", ".key"].some((ext) => lower.endsWith(ext))) {
+    return {
+      title: "Document preview is not supported",
+      description: "This file format needs a dedicated document viewer. Open it with the default app, or reveal it in Finder.",
+    };
+  }
+
+  if ([".db", ".sqlite", ".sqlite3", ".wasm", ".bin", ".exe", ".dll", ".dylib", ".so", ".class", ".pyc", ".dmg", ".pkg", ".ttf", ".otf", ".woff", ".woff2", ".mp3", ".mp4", ".mov", ".wav", ".webm"].some((ext) => lower.endsWith(ext))) {
+    return {
+      title: "Binary preview is not supported",
+      description: "This file is not a text or image format that Lovcode can render inline. Open it with the default app, or reveal it in Finder.",
+    };
+  }
+
+  return null;
+}
+
+function isUnsupportedUtf8Error(error: string): boolean {
+  return /not valid utf-?8|valid utf-?8|stream did not contain valid utf-?8/i.test(error);
+}
+
+function UnsupportedPreview({
+  info,
+  fileName,
+  fileSize,
+  onOpenDefault,
+  onReveal,
+}: {
+  info: UnsupportedPreviewInfo;
+  fileName: string;
+  fileSize?: number;
+  onOpenDefault: () => void;
+  onReveal: () => void;
+}) {
+  return (
+    <div className="flex h-full items-center justify-center bg-background p-6">
+      <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-sm">
+        <div className="mb-4 flex items-start gap-3">
+          <div className="rounded-lg bg-card-alt p-2 text-muted-foreground">
+            <FileWarning className="h-5 w-5" />
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-serif text-base font-semibold text-foreground">{info.title}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{info.description}</p>
+          </div>
+        </div>
+        <dl className="mb-4 space-y-1.5 text-xs">
+          <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2">
+            <dt className="text-muted-foreground">File</dt>
+            <dd className="truncate font-mono text-foreground" title={fileName}>{fileName}</dd>
+          </div>
+          {fileSize !== undefined && (
+            <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2">
+              <dt className="text-muted-foreground">Size</dt>
+              <dd className="font-mono text-foreground">{formatFileSize(fileSize)}</dd>
+            </div>
+          )}
+        </dl>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={onOpenDefault}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <ExternalLinkIcon className="h-3.5 w-3.5" />
+            Open with default app
+          </button>
+          <button
+            type="button"
+            onClick={onReveal}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-card-alt"
+          >
+            <Folder className="h-3.5 w-3.5" />
+            Reveal in Finder
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ArchiveTreeRows({
+  nodes,
+  expandedPaths,
+  onToggle,
+  depth = 0,
+}: {
+  nodes: ArchiveTreeNode[];
+  expandedPaths: Set<string>;
+  onToggle: (path: string) => void;
+  depth?: number;
+}) {
+  return (
+    <>
+      {nodes.map((node) => {
+        const expanded = expandedPaths.has(node.path);
+
+        return (
+          <li key={node.path}>
+            <div
+              className="grid grid-cols-[minmax(0,1fr)_88px_88px] items-center gap-3 py-1.5 pr-4 text-sm transition-colors hover:bg-card-alt"
+              style={{ paddingLeft: 12 + depth * 16 }}
+            >
+              {node.isDir ? (
+                <button
+                  type="button"
+                  onClick={() => onToggle(node.path)}
+                  className="flex min-w-0 items-center gap-1.5 text-left"
+                  title={node.path}
+                >
+                  <ChevronRightIcon
+                    className={cn(
+                      "h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform",
+                      expanded && "rotate-90",
+                    )}
+                  />
+                  <Folder className="h-4 w-4 shrink-0 text-primary" />
+                  <span className="min-w-0 truncate text-foreground">{node.name}</span>
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                    {node.children.length}
+                  </span>
+                </button>
+              ) : (
+                <div className="flex min-w-0 items-center gap-1.5" title={node.path}>
+                  <span className="h-3.5 w-3.5 shrink-0" />
+                  <FileIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="min-w-0 truncate text-foreground">{node.name}</span>
+                </div>
+              )}
+              <span className="text-right font-mono text-xs text-muted-foreground">
+                {node.isDir ? "" : formatFileSize(node.size)}
+              </span>
+              <span className="text-right font-mono text-xs text-muted-foreground">
+                {node.isDir ? "" : formatFileSize(node.compressedSize)}
+              </span>
+            </div>
+            {node.isDir && expanded && node.children.length > 0 && (
+              <ul>
+                <ArchiveTreeRows
+                  nodes={node.children}
+                  expandedPaths={expandedPaths}
+                  onToggle={onToggle}
+                  depth={depth + 1}
+                />
+              </ul>
+            )}
+          </li>
+        );
+      })}
+    </>
+  );
+}
+
+function ArchivePreview({
+  listing,
+  fileName,
+  fileSize,
+  onOpenDefault,
+  onReveal,
+}: {
+  listing: ArchiveListing;
+  fileName: string;
+  fileSize?: number;
+  onOpenDefault: () => void;
+  onReveal: () => void;
+}) {
+  const tree = useMemo(() => buildArchiveTree(listing.entries), [listing.entries]);
+  const { files: fileCount, folders: folderCount } = useMemo(() => countArchiveTree(tree), [tree]);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const next = new Set<string>();
+    if (tree.length === 1 && tree[0]?.isDir) {
+      next.add(tree[0].path);
+    }
+    setExpandedPaths(next);
+  }, [tree]);
+
+  const togglePath = useCallback((path: string) => {
+    setExpandedPaths((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }, []);
+
+  return (
+    <div className="flex h-full flex-col bg-background">
+      <div className="shrink-0 border-b border-border bg-canvas-alt px-4 py-3">
+        <div className="flex items-start gap-3">
+          <div className="rounded-lg bg-card-alt p-2 text-muted-foreground">
+            <Archive className="h-5 w-5" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h3 className="truncate font-serif text-base font-semibold text-foreground" title={fileName}>
+              {fileName}
+            </h3>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {fileCount} files · {folderCount} folders
+              {fileSize !== undefined ? ` · ${formatFileSize(fileSize)}` : ""}
+              {listing.truncated ? ` · ${listing.entries.length}/${listing.total_entries} shown` : ""}
+            </p>
+          </div>
+          <div className="flex shrink-0 gap-1">
+            <button
+              type="button"
+              onClick={onOpenDefault}
+              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-card-alt hover:text-ink"
+              title="Open with default app"
+            >
+              <ExternalLinkIcon className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={onReveal}
+              className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-card-alt hover:text-ink"
+              title="Reveal in Finder"
+            >
+              <Folder className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+      <div className="min-h-0 flex-1 overflow-auto">
+        {tree.length === 0 ? (
+          <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
+            Empty archive
+          </div>
+        ) : (
+          <ul className="py-1">
+            <ArchiveTreeRows nodes={tree} expandedPaths={expandedPaths} onToggle={togglePath} />
+          </ul>
+        )}
+      </div>
+    </div>
+  );
 }
 
 function buildBreadcrumbs(path: string): BreadcrumbSegment[] | null {
@@ -259,7 +627,14 @@ function PathBreadcrumbs({
   );
 }
 
-export function FileViewer({ filePath, onClose, revealLine, revealColumn, revealNonce }: FileViewerProps) {
+export function FileViewer({
+  filePath,
+  onClose,
+  onOpenFilePath,
+  revealLine,
+  revealColumn,
+  revealNonce,
+}: FileViewerProps) {
   // Internal navigation: lets users drill into directories without losing the
   // original `filePath` prop. History stack supports the back button.
   const [currentPath, setCurrentPath] = useState(filePath);
@@ -269,6 +644,9 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
   const [content, setContent] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [unsupportedPreview, setUnsupportedPreview] = useState<UnsupportedPreviewInfo | null>(null);
+  const [archiveListing, setArchiveListing] = useState<ArchiveListing | null>(null);
+  const [fileSize, setFileSize] = useState<number | null>(null);
   const [viewMode, setViewMode] = useAtom(fileViewModeAtom);
   const [imageInfo, setImageInfo] = useState<ImageInfo | null>(null);
 
@@ -345,6 +723,20 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
     setCurrentPath(path);
   }, [currentPath]);
 
+  const openDirectoryEntry = useCallback((entry: DirEntry) => {
+    if (entry.is_dir) {
+      navigateTo(entry.path);
+      return;
+    }
+
+    if (onOpenFilePath) {
+      onOpenFilePath(entry.path);
+      return;
+    }
+
+    navigateTo(entry.path);
+  }, [navigateTo, onOpenFilePath]);
+
   const breadcrumbs = useMemo(() => buildBreadcrumbs(currentPath), [currentPath]);
 
   const goBack = useCallback(() => {
@@ -362,6 +754,12 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
     setLoading(true);
     setError(null);
     setIsDir(null);
+    setUnsupportedPreview(null);
+    setArchiveListing(null);
+    setContent("");
+    setDirEntries([]);
+    setImageInfo(null);
+    setFileSize(null);
 
     async function load() {
       try {
@@ -371,6 +769,7 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
         );
         if (cancelled) return;
         setIsDir(meta.is_dir);
+        setFileSize(meta.size);
 
         if (meta.is_dir) {
           const entries = await invoke<DirEntry[]>("list_directory", { path: currentPath });
@@ -396,6 +795,25 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
           return;
         }
 
+        if (isZipArchive(currentPath)) {
+          const listing = await invoke<ArchiveListing>("list_zip_entries", {
+            path: currentPath,
+            limit: 1000,
+          });
+          if (!cancelled) {
+            setArchiveListing(listing);
+            setLoading(false);
+          }
+          return;
+        }
+
+        const unsupportedInfo = getUnsupportedPreviewInfo(currentPath.split("/").pop() || "");
+        if (unsupportedInfo) {
+          setUnsupportedPreview(unsupportedInfo);
+          setLoading(false);
+          return;
+        }
+
         const result = await invoke<string>("read_file", { path: currentPath });
         if (!cancelled) {
           setContent(result);
@@ -403,7 +821,20 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
         }
       } catch (err) {
         if (!cancelled) {
-          setError(String(err));
+          const message = String(err);
+          if (isUnsupportedUtf8Error(message)) {
+            setUnsupportedPreview({
+              title: "Text preview is not supported",
+              description: "This file is not valid UTF-8 text. Lovcode can preview UTF-8 text, Markdown, images, folders, and ZIP archives inline.",
+            });
+          } else if (isZipArchive(currentPath)) {
+            setUnsupportedPreview({
+              title: "ZIP preview is unavailable",
+              description: "Lovcode could not read this ZIP archive. It may be encrypted, corrupted, or the app may need to restart before the archive preview command is available.",
+            });
+          } else {
+            setError(message);
+          }
           setLoading(false);
         }
       }
@@ -430,6 +861,14 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
       await invoke("open_in_editor", { path: currentPath });
     } catch (err) {
       console.error("Failed to open in editor:", err);
+    }
+  };
+
+  const handleOpenDefault = async () => {
+    try {
+      await invoke("open_path", { path: currentPath });
+    } catch (err) {
+      console.error("Failed to open with default app:", err);
     }
   };
 
@@ -526,6 +965,14 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
           <div className="flex items-center justify-center h-full">
             <div className="text-sm text-destructive">{error}</div>
           </div>
+        ) : unsupportedPreview ? (
+          <UnsupportedPreview
+            info={unsupportedPreview}
+            fileName={fileName}
+            fileSize={fileSize ?? undefined}
+            onOpenDefault={handleOpenDefault}
+            onReveal={revealInFinder}
+          />
         ) : isDir ? (
           <div className="h-full overflow-auto bg-background">
             {dirEntries.length === 0 ? (
@@ -544,7 +991,7 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
                 {dirEntries.map((entry) => (
                   <li key={entry.path}>
                     <button
-                      onClick={() => navigateTo(entry.path)}
+                      onClick={() => openDirectoryEntry(entry)}
                       onDoubleClick={() => {
                         if (!entry.is_dir) return;
                         invoke("open_path", { path: entry.path }).catch(console.error);
@@ -599,6 +1046,14 @@ export function FileViewer({ filePath, onClose, revealLine, revealColumn, reveal
               </div>
             </div>
           </div>
+        ) : archiveListing ? (
+          <ArchivePreview
+            listing={archiveListing}
+            fileName={fileName}
+            fileSize={fileSize ?? undefined}
+            onOpenDefault={handleOpenDefault}
+            onReveal={revealInFinder}
+          />
         ) : isMarkdown && viewMode === "preview" ? (
           <div className="h-full overflow-auto p-6 bg-background">
             <MarkdownRenderer content={content} cwd={markdownCwd} />

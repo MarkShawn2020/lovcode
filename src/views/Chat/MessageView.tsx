@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { DotsHorizontalIcon } from "@radix-ui/react-icons";
 import { FileCode, Copy } from "lucide-react";
@@ -25,7 +25,7 @@ import { ChatFilePreviewProvider } from "./FilePreviewContext";
 import { ExportDialog } from "./ExportDialog";
 import { useReadableText } from "./utils";
 import { useAppConfig } from "../../context";
-import type { Message } from "../../types";
+import type { Message, Session } from "../../types";
 
 interface MessageViewProps {
   projectId: string;
@@ -47,19 +47,31 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [sessionFilePath, setSessionFilePath] = useState("");
+  const sessionSource: Session["source"] | undefined = sessionFilePath.includes("/.codex/sessions/")
+    ? "codex"
+    : undefined;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomScrolledSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setMessages([]);
+    setFreshSummary(initialSummary);
+    bottomScrolledSessionRef.current = null;
     invoke<Message[]>("get_session_messages", { projectId, sessionId })
-      .then(setMessages)
-      .finally(() => setLoading(false));
+      .then((m) => { if (!cancelled) setMessages(m); })
+      .catch(() => { if (!cancelled) setMessages([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
     invoke<string>("get_session_file_path", { projectId, sessionId })
-      .then(setSessionFilePath)
+      .then((path) => { if (!cancelled) setSessionFilePath(path); })
       .catch(() => {});
     // Fetch fresh summary to avoid stale cache from navigation state
     invoke<string | null>("get_session_summary", { projectId, sessionId })
-      .then((s) => s && setFreshSummary(s))
+      .then((s) => { if (!cancelled && s) setFreshSummary(s); })
       .catch(() => {});
-  }, [projectId, sessionId]);
+    return () => { cancelled = true; };
+  }, [projectId, sessionId, initialSummary]);
 
   const processContent = (content: string) => toReadable(content);
 
@@ -78,6 +90,20 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
     [messages, originalChat]
   );
 
+  useEffect(() => {
+    if (loading || filteredMessages.length === 0) return;
+    const sessionKey = `${projectId}:${sessionId}`;
+    if (bottomScrolledSessionRef.current === sessionKey) return;
+
+    const raf = requestAnimationFrame(() => {
+      const scroller = scrollRef.current;
+      if (!scroller) return;
+      scroller.scrollTop = scroller.scrollHeight;
+      bottomScrolledSessionRef.current = sessionKey;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [loading, filteredMessages.length, projectId, sessionId]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -88,7 +114,7 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
 
   return (
     <ChatFilePreviewProvider>
-      <div className="h-full min-h-0 overflow-y-auto px-6 py-8">
+      <div ref={scrollRef} className="h-full min-h-0 overflow-y-auto px-6 py-8">
         <header className="mb-8">
         <nav className="flex items-center gap-1.5 text-sm mb-4">
           <button
@@ -116,6 +142,7 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
               <SessionContextMenuItems
                 projectId={projectId}
                 sessionId={sessionId}
+                source={sessionSource}
                 projectPath={projectPath}
                 originalChat={originalChat}
                 setOriginalChat={setOriginalChat}
@@ -135,6 +162,7 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
               <SessionDropdownMenuItems
                 projectId={projectId}
                 sessionId={sessionId}
+                source={sessionSource}
                 projectPath={projectPath}
                 originalChat={originalChat}
                 setOriginalChat={setOriginalChat}

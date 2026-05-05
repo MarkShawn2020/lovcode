@@ -16,10 +16,12 @@ import {
   ContextMenuSeparator,
 } from "@/components/ui/context-menu";
 import { archivedSessionIdsAtom, pinnedSessionIdsAtom } from "@/store";
+import type { Session } from "@/types";
 
 export interface SessionMenuConfig {
   projectId: string;
   sessionId: string;
+  source?: Session["source"];
   projectPath?: string;
   originalChat?: boolean;
   setOriginalChat?: (v: boolean) => void;
@@ -38,18 +40,22 @@ export interface SessionMenuConfig {
   onTogglePinOverride?: () => void;
 }
 
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
+}
+
 // Shared handlers
-export function useSessionMenuHandlers(projectId: string, sessionId: string) {
+export function useSessionMenuHandlers(projectId: string, sessionId: string, source?: Session["source"]) {
   const handleReveal = () => invoke("reveal_session_file", { projectId, sessionId });
   const handleOpenInEditor = () => invoke("open_session_in_editor", { projectId, sessionId });
   const handleCopyPath = async () => {
-    const homeDir = await invoke<string>("get_home_dir");
-    const path = `${homeDir}/.claude/projects/${projectId}/${sessionId}.jsonl`;
+    const path = await invoke<string>("get_session_file_path", { projectId, sessionId });
     await invoke("copy_to_clipboard", { text: path });
   };
   const handleCopySessionId = () => invoke("copy_to_clipboard", { text: sessionId });
   const handleCopyResumeCommand = (projectPath: string) => {
-    const cmd = `cd ${projectPath} && claude --resume ${sessionId}`;
+    const resume = source === "codex" ? `codex resume ${sessionId}` : `claude --resume ${sessionId}`;
+    const cmd = `cd ${shellQuote(projectPath)} && ${resume}`;
     return invoke("copy_to_clipboard", { text: cmd });
   };
 
@@ -86,6 +92,7 @@ export function useSessionPin(sessionId: string) {
 export function SessionDropdownMenuItems({
   projectId,
   sessionId,
+  source,
   projectPath,
   originalChat,
   setOriginalChat,
@@ -99,7 +106,7 @@ export function SessionDropdownMenuItems({
   onTogglePinOverride,
 }: SessionMenuConfig) {
   const { handleReveal, handleOpenInEditor, handleCopyPath, handleCopySessionId, handleCopyResumeCommand } =
-    useSessionMenuHandlers(projectId, sessionId);
+    useSessionMenuHandlers(projectId, sessionId, source);
   const { isArchived, toggleArchived } = useSessionArchive(sessionId);
   const { isPinned: localIsPinned, togglePinned: localTogglePinned } = useSessionPin(sessionId);
   const isPinned = isPinnedOverride ?? localIsPinned;
@@ -198,6 +205,7 @@ export function SessionDropdownMenuItems({
 export function SessionContextMenuItems({
   projectId,
   sessionId,
+  source,
   projectPath,
   originalChat,
   setOriginalChat,
@@ -211,7 +219,7 @@ export function SessionContextMenuItems({
   onTogglePinOverride,
 }: SessionMenuConfig) {
   const { handleReveal, handleOpenInEditor, handleCopyPath, handleCopySessionId, handleCopyResumeCommand } =
-    useSessionMenuHandlers(projectId, sessionId);
+    useSessionMenuHandlers(projectId, sessionId, source);
   const { isArchived, toggleArchived } = useSessionArchive(sessionId);
   const { isPinned: localIsPinned, togglePinned: localTogglePinned } = useSessionPin(sessionId);
   const isPinned = isPinnedOverride ?? localIsPinned;

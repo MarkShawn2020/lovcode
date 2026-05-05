@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.34.0
+
+### Minor Changes
+
+- Add the agent workbench with Claude Code, Codex, and terminal session launching, persistent agent workspace state, project/session environment scripts, and hook-based activity tracking.
+
+  Index local Codex rollout sessions alongside Claude history, including Codex filtering, usage extraction, resume support, and live session updates from the Codex sessions directory.
+
+  Improve file and document previews with multi-tab file previews, ZIP archive browsing, unsupported binary/document fallbacks, Markdown frontmatter display, remote/local image rendering, and expanded document navigation controls.
+
 ## 0.33.0
 
 ### Minor Changes

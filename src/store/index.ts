@@ -34,7 +34,7 @@ export {
 } from "./atoms/commands";
 
 // Knowledge atoms
-export { sourceCollapsedDirsAtom } from "./atoms/knowledge";
+export { sourceExpandedDirsAtom } from "./atoms/knowledge";
 
 // Component atoms
 export { collapsibleStatesAtom, docReaderCollapsedGroupsAtom } from "./atoms/components";

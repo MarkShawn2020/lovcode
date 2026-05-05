@@ -87,6 +87,7 @@ export function FeaturesLayout({ children, feature, currentFeature, onFeatureCli
       // Legacy mode
       const keyToFeature: Record<SidebarKey, FeatureType> = {
         introduction: "features",
+        // Workspace is top-level navigation, not part of this sidebar.
         "basic-env": "basic-env",
         "basic-maas": "basic-maas",
         "basic-version": "basic-version",

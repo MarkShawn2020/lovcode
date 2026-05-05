@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useAtom } from "jotai";
 import { docReaderCollapsedGroupsAtom } from "../store";
 import Markdown from "react-markdown";
@@ -7,7 +8,7 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { Group, Panel, Separator, useDefaultLayout, type PanelImperativeHandle } from "react-resizable-panels";
 import { warmAcademicTheme } from "../lib/codeTheme";
 // Lucide icons (no Radix equivalent)
-import { PanelLeftClose, PanelLeft, PanelRightClose, PanelRight, Maximize2, Minimize2 } from "lucide-react";
+import { FolderOpen, PanelLeftClose, PanelLeft, PanelRightClose, PanelRight, Maximize2, Minimize2 } from "lucide-react";
 // Radix icons
 import { ChevronLeftIcon, ChevronDownIcon, CopyIcon, CheckIcon } from "@radix-ui/react-icons";
 import { startCase } from "lodash-es";
@@ -19,6 +20,137 @@ function slugify(text: string): string {
     .replace(/\s+/g, "-")
     .replace(/-+/g, "-")
     .trim();
+}
+
+const REMOTE_IMAGE_DATA_URL_CACHE = new Map<string, Promise<string> | string>();
+
+function isRemoteImageSrc(src: string): boolean {
+  return /^https?:\/\//i.test(src);
+}
+
+function splitImageSrcSuffix(src: string): { path: string; suffix: string } {
+  const index = src.search(/[?#]/);
+  if (index === -1) return { path: src, suffix: "" };
+  return { path: src.slice(0, index), suffix: src.slice(index) };
+}
+
+function normalizeAbsolutePath(path: string): string {
+  const segments: string[] = [];
+  for (const segment of path.split("/")) {
+    if (!segment || segment === ".") continue;
+    if (segment === "..") {
+      segments.pop();
+    } else {
+      segments.push(segment);
+    }
+  }
+  return `/${segments.join("/")}`;
+}
+
+function resolveMarkdownImageSrc(src: string | undefined, documentPath: string): string {
+  if (!src) return "";
+  if (/^(data|blob):/i.test(src) || isRemoteImageSrc(src)) return src;
+
+  if (src.startsWith("file://")) {
+    const filePath = src.slice("file://".length);
+    try {
+      return convertFileSrc(decodeURIComponent(filePath));
+    } catch {
+      return convertFileSrc(filePath);
+    }
+  }
+
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src)) return src;
+
+  const { path, suffix } = splitImageSrcSuffix(src);
+  let imagePath = path;
+  try {
+    imagePath = decodeURIComponent(path);
+  } catch {
+    imagePath = path;
+  }
+
+  if (!imagePath.startsWith("/")) {
+    const dir = documentPath.slice(0, documentPath.lastIndexOf("/"));
+    imagePath = normalizeAbsolutePath(`${dir}/${imagePath}`);
+  }
+
+  return `${convertFileSrc(imagePath)}${suffix}`;
+}
+
+function decodeDataUrlPayload(src: string): string | null {
+  const commaIndex = src.indexOf(",");
+  if (commaIndex < 0) return null;
+
+  const meta = src.slice(0, commaIndex).toLowerCase();
+  const payload = src.slice(commaIndex + 1);
+
+  if (meta.includes(";base64")) {
+    try {
+      return atob(payload);
+    } catch {
+      return null;
+    }
+  }
+
+  try {
+    return decodeURIComponent(payload);
+  } catch {
+    return payload;
+  }
+}
+
+function hasMeaningfulImageAlt(alt: string | undefined): boolean {
+  const normalized = (alt ?? "").trim().toLowerCase();
+  return normalized.length > 0 && !["image", "图片", "图"].includes(normalized);
+}
+
+function isDecorativeSvgDataImage(src: string): boolean {
+  if (!src.toLowerCase().startsWith("data:image/svg+xml")) return false;
+
+  const svg = decodeDataUrlPayload(src);
+  if (!svg) return false;
+
+  const compactSvg = svg.replace(/\s+/g, " ");
+  const hasSvgTag = /<svg[\s>]/i.test(compactSvg);
+  const hasOnePixelSize =
+    /<svg[^>]*\bwidth=['"]?1(?:px)?['"]?[^>]*\bheight=['"]?1(?:px)?['"]?/i.test(compactSvg) ||
+    /<svg[^>]*\bheight=['"]?1(?:px)?['"]?[^>]*\bwidth=['"]?1(?:px)?['"]?/i.test(compactSvg) ||
+    /\bviewBox=['"]0\s+0\s+1\s+1['"]/i.test(compactSvg);
+  const appearsInvisible = /\b(fill-opacity|opacity)=['"]?0['"]?/i.test(compactSvg);
+
+  return hasSvgTag && hasOnePixelSize && appearsInvisible;
+}
+
+function stripDecorativeDataImageLines(content: string): string {
+  return content
+    .split("\n")
+    .filter((line) => {
+      const match = line.trim().match(/^!\[([^\]]*)\]\((data:image\/svg\+xml[^)]*)\)$/i);
+      if (!match) return true;
+      const [, alt, src] = match;
+      return hasMeaningfulImageAlt(alt) || !isDecorativeSvgDataImage(src);
+    })
+    .join("\n");
+}
+
+function fetchRemoteImageDataUrl(src: string): Promise<string> {
+  const cached = REMOTE_IMAGE_DATA_URL_CACHE.get(src);
+  if (typeof cached === "string") return Promise.resolve(cached);
+  if (cached) return cached;
+
+  const request = invoke<string>("fetch_remote_image_data_url", { url: src })
+    .then((dataUrl) => {
+      REMOTE_IMAGE_DATA_URL_CACHE.set(src, dataUrl);
+      return dataUrl;
+    })
+    .catch((error) => {
+      REMOTE_IMAGE_DATA_URL_CACHE.delete(src);
+      throw error;
+    });
+
+  REMOTE_IMAGE_DATA_URL_CACHE.set(src, request);
+  return request;
 }
 
 // ============================================================================
@@ -45,6 +177,19 @@ interface HeadingItem {
   id: string;
   text: string;
   level: number;
+}
+
+type FrontmatterValue = string | string[];
+
+interface FrontmatterEntry {
+  key: string;
+  label: string;
+  value: FrontmatterValue;
+}
+
+interface ParsedMarkdownContent {
+  frontmatter: FrontmatterEntry[];
+  body: string;
 }
 
 // ============================================================================
@@ -95,6 +240,119 @@ function extractHeadings(markdown: string): HeadingItem[] {
   });
 
   return headings;
+}
+
+// ============================================================================
+// Frontmatter Parsing
+// ============================================================================
+
+function stripWrappingQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
+}
+
+function splitInlineList(value: string): string[] {
+  const items: string[] = [];
+  let current = "";
+  let quote: "\"" | "'" | null = null;
+
+  for (const char of value) {
+    if ((char === "\"" || char === "'") && (quote === null || quote === char)) {
+      quote = quote === char ? null : char;
+      current += char;
+      continue;
+    }
+
+    if (char === "," && quote === null) {
+      const item = stripWrappingQuotes(current);
+      if (item) items.push(item);
+      current = "";
+      continue;
+    }
+
+    current += char;
+  }
+
+  const item = stripWrappingQuotes(current);
+  if (item) items.push(item);
+  return items;
+}
+
+function parseFrontmatterValue(value: string): FrontmatterValue {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    return splitInlineList(trimmed.slice(1, -1));
+  }
+
+  if (trimmed === "true") return "Yes";
+  if (trimmed === "false") return "No";
+  if (trimmed === "null") return "";
+
+  return stripWrappingQuotes(trimmed);
+}
+
+function readableFrontmatterKey(key: string): string {
+  return startCase(key.replace(/[_-]/g, " "));
+}
+
+function parseMarkdownFrontmatter(content: string): ParsedMarkdownContent {
+  const match = content.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/);
+  if (!match) return { frontmatter: [], body: content };
+
+  const entries: FrontmatterEntry[] = [];
+  let currentEntry: FrontmatterEntry | null = null;
+
+  for (const rawLine of match[1].split(/\r?\n/)) {
+    const line = rawLine.replace(/\s+$/, "");
+    if (!line.trim() || line.trim().startsWith("#")) continue;
+
+    const keyMatch = line.match(/^([A-Za-z0-9_.-]+)\s*:\s*(.*)$/);
+    if (keyMatch) {
+      currentEntry = {
+        key: keyMatch[1],
+        label: readableFrontmatterKey(keyMatch[1]),
+        value: parseFrontmatterValue(keyMatch[2]),
+      };
+      entries.push(currentEntry);
+      continue;
+    }
+
+    const listItemMatch = line.match(/^\s*-\s+(.+)$/);
+    if (currentEntry && listItemMatch) {
+      const value = stripWrappingQuotes(listItemMatch[1]);
+      currentEntry.value = Array.isArray(currentEntry.value)
+        ? [...currentEntry.value, value]
+        : currentEntry.value
+          ? [currentEntry.value, value]
+          : [value];
+      continue;
+    }
+
+    if (currentEntry && /^\s+/.test(line)) {
+      const value = line.trim();
+      currentEntry.value = Array.isArray(currentEntry.value)
+        ? [...currentEntry.value, value]
+        : currentEntry.value
+          ? `${currentEntry.value} ${value}`
+          : value;
+    }
+  }
+
+  return {
+    frontmatter: entries.filter((entry) => {
+      if (Array.isArray(entry.value)) return entry.value.length > 0;
+      return entry.value.length > 0;
+    }),
+    body: match[2].replace(/^\s+/, ""),
+  };
 }
 
 // ============================================================================
@@ -192,6 +450,19 @@ function ReadingProgressBar({ progress }: { progress: number }) {
   );
 }
 
+const PANEL_SEPARATOR_CLASS = [
+  "relative w-3 cursor-col-resize bg-transparent outline-none transition-colors",
+  "before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border before:transition-colors",
+  "hover:bg-primary/5 hover:before:bg-primary/50",
+  "focus-visible:bg-primary/10 focus-visible:before:bg-primary",
+  "data-[separator=hover]:bg-primary/5 data-[separator=hover]:before:bg-primary/50",
+  "data-[separator=active]:bg-primary/10 data-[separator=active]:before:bg-primary",
+].join(" ");
+
+function PanelResizeSeparator() {
+  return <Separator className={PANEL_SEPARATOR_CLASS} />;
+}
+
 
 // ============================================================================
 // Left Sidebar - Document List
@@ -265,6 +536,12 @@ function DocumentListSidebar({
     });
   };
 
+  const revealDocument = useCallback((path: string) => {
+    invoke("reveal_path", { path }).catch((err) => {
+      console.error("Failed to reveal document in Finder:", err);
+    });
+  }, []);
+
   return (
     <aside className="h-full border-r border-border bg-background flex flex-col overflow-hidden">
       {/* Header */}
@@ -312,18 +589,32 @@ function DocumentListSidebar({
                 {group.docs.map(({ doc, index }) => {
                   const isActive = index === currentIndex;
                   return (
-                    <button
+                    <div
                       key={doc.path}
-                      ref={isActive ? activeRef : null}
-                      onClick={() => onSelect(index)}
-                      className={`w-full flex items-center gap-2 px-4 py-1.5 text-left text-sm transition-colors ${
+                      className={`group flex items-center border-l-2 text-sm transition-colors ${
                         isActive
-                          ? "bg-primary/10 text-primary border-l-2 border-primary"
-                          : "hover:bg-card-alt text-ink"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-transparent text-ink hover:bg-card-alt"
                       }`}
                     >
-                      <span className="truncate">{startCase(doc.name.replace(/\.[^.]+$/, ""))}</span>
-                    </button>
+                      <button
+                        ref={isActive ? activeRef : null}
+                        onClick={() => onSelect(index)}
+                        className="min-w-0 flex-1 px-3 py-1.5 text-left"
+                      >
+                        <span className="block truncate">{startCase(doc.name.replace(/\.[^.]+$/, ""))}</span>
+                      </button>
+                      <button
+                        onClick={() => revealDocument(doc.path)}
+                        className={`mr-2 shrink-0 rounded-lg p-1 text-muted-foreground transition-colors hover:bg-background hover:text-primary focus-visible:bg-background focus-visible:text-primary ${
+                          isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                        }`}
+                        title="Reveal in Finder"
+                        aria-label={`Reveal ${doc.name} in Finder`}
+                      >
+                        <FolderOpen className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   );
                 })}
               </div>
@@ -460,6 +751,103 @@ function CodeBlock({
   );
 }
 
+function MarkdownImage({
+  src,
+  alt,
+  documentPath,
+  className,
+  ...props
+}: React.ImgHTMLAttributes<HTMLImageElement> & { documentPath: string }) {
+  const rawSrc = typeof src === "string" ? src : "";
+  const isDecorativePlaceholder = isDecorativeSvgDataImage(rawSrc);
+  const hasMeaningfulAlt = hasMeaningfulImageAlt(alt);
+  const [resolvedSrc, setResolvedSrc] = useState(() => {
+    if (!rawSrc) return "";
+    if (isDecorativePlaceholder) return rawSrc;
+    if (!isRemoteImageSrc(rawSrc)) return resolveMarkdownImageSrc(rawSrc, documentPath);
+    const cached = REMOTE_IMAGE_DATA_URL_CACHE.get(rawSrc);
+    return typeof cached === "string" ? cached : "";
+  });
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setFailed(false);
+
+    if (!rawSrc) {
+      setResolvedSrc("");
+      return;
+    }
+
+    if (isDecorativePlaceholder) {
+      setResolvedSrc(rawSrc);
+      return;
+    }
+
+    if (!isRemoteImageSrc(rawSrc)) {
+      setResolvedSrc(resolveMarkdownImageSrc(rawSrc, documentPath));
+      return;
+    }
+
+    const cached = REMOTE_IMAGE_DATA_URL_CACHE.get(rawSrc);
+    if (typeof cached === "string") {
+      setResolvedSrc(cached);
+      return;
+    }
+
+    setResolvedSrc("");
+    fetchRemoteImageDataUrl(rawSrc)
+      .then((dataUrl) => {
+        if (!cancelled) setResolvedSrc(dataUrl);
+      })
+      .catch((error) => {
+        console.error("Failed to load markdown image:", error);
+        if (!cancelled) setFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [documentPath, isDecorativePlaceholder, rawSrc]);
+
+  if (isDecorativePlaceholder) {
+    if (!hasMeaningfulAlt) return null;
+
+    return (
+      <span className="not-prose my-3 block rounded-lg border border-border bg-card-alt px-3 py-2 text-sm text-muted-foreground">
+        Image placeholder: {alt}
+      </span>
+    );
+  }
+
+  if (failed) {
+    return (
+      <span className="not-prose my-6 block rounded-xl border border-border bg-card-alt px-4 py-6 text-center text-sm text-muted-foreground">
+        Image unavailable
+      </span>
+    );
+  }
+
+  if (!resolvedSrc) {
+    return (
+      <span className="not-prose my-6 block rounded-xl border border-border bg-card-alt px-4 py-6 text-center text-sm text-muted-foreground">
+        Loading image...
+      </span>
+    );
+  }
+
+  return (
+    <img
+      {...props}
+      src={resolvedSrc}
+      alt={alt ?? ""}
+      loading="lazy"
+      decoding="async"
+      className={["mx-auto", className].filter(Boolean).join(" ")}
+    />
+  );
+}
+
 // ============================================================================
 // Book Cover Component
 // ============================================================================
@@ -512,17 +900,54 @@ function BookCover({
   );
 }
 
+function FrontmatterPanel({ entries }: { entries: FrontmatterEntry[] }) {
+  if (entries.length === 0) return null;
+
+  return (
+    <section className="not-prose mb-8 rounded-xl border border-border bg-card-alt/60 px-4 py-3">
+      <h2 className="font-serif text-sm font-semibold text-foreground">Document Details</h2>
+      <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-[minmax(120px,auto)_1fr]">
+        {entries.map((entry) => (
+          <div key={entry.key} className="contents">
+            <dt className="text-muted-foreground">{entry.label}</dt>
+            <dd className="min-w-0 text-foreground">
+              {Array.isArray(entry.value) ? (
+                <div className="flex flex-wrap gap-1.5">
+                  {entry.value.map((item, index) => (
+                    <span
+                      key={`${entry.key}-${index}-${item}`}
+                      className="rounded-lg border border-border bg-background px-2 py-0.5 text-xs text-foreground"
+                    >
+                      {item}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="break-words">{entry.value}</span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
 // ============================================================================
 // Document Content Component
 // ============================================================================
 
 function DocumentContent({
   content,
+  frontmatter,
+  documentPath,
   loading,
   headings,
   onHeadingRender,
 }: {
   content: string;
+  frontmatter: FrontmatterEntry[];
+  documentPath: string;
   loading: boolean;
   headings: HeadingItem[];
   onHeadingRender: (id: string, element: HTMLElement | null) => void;
@@ -599,10 +1024,13 @@ function DocumentContent({
       h5: createHeading("h5"),
       h6: createHeading("h6"),
       code: CodeBlock,
+      img: ({ node: _node, ...props }: React.ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }) => (
+        <MarkdownImage {...props} documentPath={documentPath} />
+      ),
       // Strip default pre styling - CodeBlock handles it
       pre: ({ children }: React.HTMLAttributes<HTMLPreElement>) => <>{children}</>,
     };
-  }, [getHeadingId, onHeadingRender]);
+  }, [documentPath, getHeadingId, onHeadingRender]);
 
   if (loading) {
     return (
@@ -617,6 +1045,7 @@ function DocumentContent({
 
   return (
     <article className="max-w-3xl mx-auto animate-fade-in">
+      <FrontmatterPanel entries={frontmatter} />
       {/* Content */}
       <div
         className="prose prose-lg max-w-none
@@ -668,12 +1097,14 @@ export function DocumentReader({
 
   // Persist panel layout to localStorage
   const { defaultLayout, onLayoutChange } = useDefaultLayout({
-    id: "doc-reader-layout",
+    id: "doc-reader-layout-v2",
     storage: typeof window !== "undefined" ? window.localStorage : undefined as unknown as Storage,
   });
 
   const progress = useReadingProgress(scrollContainerRef);
-  const headings = useMemo(() => extractHeadings(content), [content]);
+  const parsedContent = useMemo(() => parseMarkdownFrontmatter(content), [content]);
+  const displayBody = useMemo(() => stripDecorativeDataImageLines(parsedContent.body), [parsedContent.body]);
+  const headings = useMemo(() => extractHeadings(displayBody), [displayBody]);
   const hasPrev = currentIndex > 0;
   const hasNext = currentIndex < documents.length - 1;
 
@@ -906,9 +1337,9 @@ export function DocumentReader({
           <Panel
             panelRef={leftPanelRef}
             id="left"
-            defaultSize={18}
-            minSize={12}
-            maxSize={40}
+            defaultSize="18%"
+            minSize="12%"
+            maxSize="40%"
             collapsible
             collapsedSize={0}
             onResize={(s) => setLeftPanelOpen(s.asPercentage > 0)}
@@ -923,90 +1354,92 @@ export function DocumentReader({
               onToggle={toggleLeftPanel}
             />
           </Panel>
-          <Separator className="w-px bg-border hover:bg-primary/50 data-[separator-active=true]:bg-primary cursor-col-resize" />
+          <PanelResizeSeparator />
 
           {/* Main content area */}
-          <Panel id="main" minSize={30}>
-        <main
-          ref={scrollContainerRef}
-          data-ref-scroll
-          className="h-full overflow-y-auto px-8 py-8 md:px-16"
-        >
-          {/* Book cover - only show on first document */}
-          {currentIndex === 0 && !loading && (
-            <BookCover
-              title={startCase(sourceName)}
-              documentCount={documents.length}
-            />
-          )}
+          <Panel id="main" minSize="30%">
+            <main
+              ref={scrollContainerRef}
+              data-ref-scroll
+              className="h-full overflow-y-auto px-8 py-8 md:px-16"
+            >
+              {/* Book cover - only show on first document */}
+              {currentIndex === 0 && !loading && (
+                <BookCover
+                  title={startCase(sourceName)}
+                  documentCount={documents.length}
+                />
+              )}
 
-          <DocumentContent
-            content={content}
-            loading={loading}
-            headings={headings}
-            onHeadingRender={handleHeadingRender}
-          />
+              <DocumentContent
+                content={displayBody}
+                frontmatter={parsedContent.frontmatter}
+                documentPath={documents[currentIndex]?.path ?? ""}
+                loading={loading}
+                headings={headings}
+                onHeadingRender={handleHeadingRender}
+              />
 
-          {/* Bottom navigation */}
-          {!loading && (
-            <nav className="max-w-3xl mx-auto mt-12 pt-6 border-t border-border">
-              <div className="flex items-stretch gap-4">
-                {/* Previous */}
-                <button
-                  onClick={handlePrev}
-                  disabled={!hasPrev}
-                  className={`flex-1 flex flex-col items-start gap-1 p-4 rounded-xl border text-left ${
-                    hasPrev
-                      ? "border-border hover:border-primary hover:bg-card-alt cursor-pointer group"
-                      : "border-transparent opacity-0 pointer-events-none"
-                  }`}
-                >
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    <ChevronLeftIcon className="w-3 h-3" />
-                    Previous
-                  </span>
-                  <span className="text-sm font-medium text-ink group-hover:text-primary transition-colors line-clamp-1">
-                    {documents[currentIndex - 1]?.name}
-                  </span>
-                </button>
+              {/* Bottom navigation */}
+              {!loading && (
+                <nav className="max-w-3xl mx-auto mt-12 pt-6 border-t border-border">
+                  <div className="flex items-stretch gap-4">
+                    {/* Previous */}
+                    <button
+                      onClick={handlePrev}
+                      disabled={!hasPrev}
+                      className={`flex-1 flex flex-col items-start gap-1 p-4 rounded-xl border text-left ${
+                        hasPrev
+                          ? "border-border hover:border-primary hover:bg-card-alt cursor-pointer group"
+                          : "border-transparent opacity-0 pointer-events-none"
+                      }`}
+                    >
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <ChevronLeftIcon className="w-3 h-3" />
+                        Previous
+                      </span>
+                      <span className="text-sm font-medium text-ink group-hover:text-primary transition-colors line-clamp-1">
+                        {documents[currentIndex - 1]?.name}
+                      </span>
+                    </button>
 
-                {/* Next */}
-                <button
-                  onClick={handleNext}
-                  disabled={!hasNext}
-                  className={`flex-1 flex flex-col items-end gap-1 p-4 rounded-xl border text-right ${
-                    hasNext
-                      ? "border-border hover:border-primary hover:bg-card-alt cursor-pointer group"
-                      : "border-transparent opacity-0 pointer-events-none"
-                  }`}
-                >
-                  <span className="text-xs text-muted-foreground flex items-center gap-1">
-                    Next
-                    <ChevronLeftIcon className="w-3 h-3 rotate-180" />
-                  </span>
-                  <span className="text-sm font-medium text-ink group-hover:text-primary transition-colors line-clamp-1">
-                    {documents[currentIndex + 1]?.name}
-                  </span>
-                </button>
-              </div>
-            </nav>
-          )}
+                    {/* Next */}
+                    <button
+                      onClick={handleNext}
+                      disabled={!hasNext}
+                      className={`flex-1 flex flex-col items-end gap-1 p-4 rounded-xl border text-right ${
+                        hasNext
+                          ? "border-border hover:border-primary hover:bg-card-alt cursor-pointer group"
+                          : "border-transparent opacity-0 pointer-events-none"
+                      }`}
+                    >
+                      <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        Next
+                        <ChevronLeftIcon className="w-3 h-3 rotate-180" />
+                      </span>
+                      <span className="text-sm font-medium text-ink group-hover:text-primary transition-colors line-clamp-1">
+                        {documents[currentIndex + 1]?.name}
+                      </span>
+                    </button>
+                  </div>
+                </nav>
+              )}
 
-          {/* Bottom padding */}
-          <div className="h-16" />
-        </main>
+              {/* Bottom padding */}
+              <div className="h-16" />
+            </main>
           </Panel>
 
           {/* Right sidebar - Headings */}
           {headings.length > 0 && (
             <>
-              <Separator className="w-px bg-border hover:bg-primary/50 data-[separator-active=true]:bg-primary cursor-col-resize" />
+              <PanelResizeSeparator />
               <Panel
                 panelRef={rightPanelRef}
                 id="right"
-                defaultSize={16}
-                minSize={10}
-                maxSize={35}
+                defaultSize="16%"
+                minSize="10%"
+                maxSize="35%"
                 collapsible
                 collapsedSize={0}
                 onResize={(s) => setRightPanelOpen(s.asPercentage > 0)}

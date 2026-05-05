@@ -3,7 +3,7 @@ import { useAtom } from "jotai";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   PersonIcon, ChevronLeftIcon, ChevronRightIcon,
-  CounterClockwiseClockIcon, BookmarkIcon, LayersIcon, CalendarIcon,
+  BookmarkIcon, LayersIcon, CalendarIcon, RocketIcon, DashboardIcon,
 } from "@radix-ui/react-icons";
 import { Avatar, AvatarImage, AvatarFallback } from "../ui/avatar";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
@@ -25,10 +25,16 @@ interface GlobalHeaderProps {
 // highlight syncs with the URL (back/forward, sidebar links, deep links).
 const MAIN_NAV: { feature: FeatureType; label: string; icon: ReactNode; matches: (f: FeatureType | null) => boolean }[] = [
   {
-    feature: "chat",
-    label: "History",
-    icon: <CounterClockwiseClockIcon className="w-4 h-4" />,
-    matches: (f) => f === "chat",
+    feature: "dashboard",
+    label: "Dashboard",
+    icon: <DashboardIcon className="w-4 h-4" />,
+    matches: (f) => f === "dashboard",
+  },
+  {
+    feature: "workbench",
+    label: "Workbench",
+    icon: <RocketIcon className="w-4 h-4" />,
+    matches: (f) => f === "workbench" || f === "workspace" || f === "chat",
   },
   {
     feature: "features",

@@ -1,6 +1,6 @@
 [package]
 name = "lovcode"
-version = "0.33.0"
+version = "0.34.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -23,6 +23,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml_edit = "0.23"
 dirs = "6"
 regex = "1"
 lazy_static = "1"
@@ -38,6 +39,7 @@ base64 = "0.22"
 arboard = "3"
 shell-escape = "0.1.5"
 zip = "2"
+encoding_rs = "0.8"
 filetime = "0.2"
 libc = "0.2.179"
 tauri-plugin-updater = { version = "2", features = ["rustls-tls"] }

@@ -35,6 +35,10 @@
 
 ## Release Highlights
 
+### v0.34.0 — Agent Workbench and Codex History
+
+Lovcode now has an agent workbench for launching Claude Code, Codex, and terminal sessions from a selected project, with persistent workspace state, project/session environment scripts, and hook-based activity tracking. Codex rollout sessions are indexed alongside Claude history with a dedicated Codex filter, usage extraction, resume support, and live updates from `~/.codex/sessions`. File and document previews now support multi-tab file previews, ZIP archive browsing, unsupported binary/document fallbacks, Markdown frontmatter, and remote/local image rendering.
+
 ### v0.33.0 — Skills Table and Smart Path Routing
 
 Skills management now uses a dense sortable table with vendor/source filters, install metadata, token estimates, and marketplace previews. Markdown content across marketplace and file previews shares the same renderer with GFM tables and smart local-path links, including candidate-prefix routing for agent output paths. File previews now use a compact Finder-style breadcrumb for faster navigation, and structured tool results can preview generated images inline.
@@ -45,6 +49,7 @@ Local paths in prompts and chat messages now open inside Lovcode with a resizabl
 
 | Version | Highlights |
 |---------|------------|
+| **0.34.0** | Agent Workbench launches Claude Code, Codex, and terminal sessions with persistent state; project/session environment scripts can be saved and run from Lovcode; Claude and Codex hooks track activity; Codex rollout sessions are indexed with filtering, usage extraction, resume support, and live updates; file previews now support tabs, ZIP browsing, unsupported-format fallbacks, and richer Markdown/image rendering |
 | **0.33.0** | Skills management table with vendor/source filtering, ranking, install metadata, token estimates, and marketplace previews; shared MarkdownRenderer table/path support across marketplace and file previews; smart path routing offers candidate prefix paths for agent output files; FileViewer path navigation uses a compact Finder-style breadcrumb; tool-result images can open in the preview pane |
 | **0.32.0** | Inline file preview for local path links with line/column reveal, directory browsing, and resizable preview pane; prompt path detection handles `@src/file.tsx:line:column(selector)` style references; global search gains All / Full text / Session ID / Details modes; document reader sidebars are now resizable and persisted |
 | **0.31.0** | Architecture refactor: removed Workspace dashboard (PanelGrid, FeatureTabs, KanbanBoard, GitHistory, LogoManager, ProjectDashboard) in favor of page-centric routing; `/chat/*` → `/history/*`; `/knowledge/reference` (static) → `/knowledge/source/[id]` (dynamic) with `[...docPath]` sub-routes; new `useStreamedSessions` hook for streamed session list rendering; splash now waits for `/history` `ProjectList` `app:ready` signal before dismissing; LLM provider settings page removed |
@@ -69,12 +74,16 @@ Local paths in prompts and chat messages now open inside Lovcode with a resizabl
 
 ## Features
 
-- **Chat History Viewer** — Browse and search conversation history across all projects with scoped full-text, session ID, and metadata search modes
-- **Granular Data Sources** — Switch between `cli` (Claude Code) / `app-code` / `app-web` / `app-cowork` with two-level tabs
+- **Dashboard** — Start from a cross-module overview of history, active agents, reusable commands, distilled knowledge, and recent project activity
+- **Agent Workbench** — Launch Claude Code, Codex, or a terminal in a selected project; track active/archived sessions, unread/review states, and session activity
+- **Environment Scripts** — Save project/session setup, cleanup, and custom runtime actions, then run them in an embedded terminal dock
+- **Chat History Viewer** — Browse and search Claude and Codex conversation history across all projects with scoped full-text, session ID, and metadata search modes
+- **Granular Data Sources** — Switch between `cli` (Claude Code), `codex`, `app-code`, `app-web`, and `app-cowork` with source filters
 - **Live claude.ai Sync** — Pull web conversations directly via decrypted cookies (no manual export needed); also supports `.zip` / directory import
 - **Continue From the Bottom** — Reply to a session inline without leaving the detail view
 - **Rich Markdown Rendering** — GFM tables and syntax-highlighted code blocks (Warm Academic theme) inside chat messages
-- **Smart Path Links** — Bare paths, prompt mentions, and markdown `[text](path)` links are existence-checked against the relevant `cwd`; unresolved agent-output paths surface candidate prefix routes and existing files open in a Lovcode preview pane
+- **Smart Path Links** — Bare paths, prompt mentions, and markdown `[text](path)` links are existence-checked against the relevant `cwd`; unresolved agent-output paths surface candidate prefix routes and existing files open in a tabbed Lovcode preview pane
+- **File and Document Preview** — Preview UTF-8 text, Markdown, images, directories, and ZIP archives inline; unsupported binary/document formats fall back to clear open/reveal actions
 - **Live Context-Window Readout** — Session detail footer shows the active model, provider, and peak context-window occupancy (input + cache_read + cache_creation) per round
 - **Structured Content Blocks** — Tool calls, thinking, grouped tool results, and generated images render as first-class blocks with preview support
 - **Sidebar with Pinned / Recent / Import** — Tri-state Pinned toggle mirrored to Claude desktop `starredIds`; Algolia-style ⌘K search
@@ -121,11 +130,11 @@ pnpm tauri build
 ## Usage
 
 1. Launch Lovcode
-2. Select **History** — sidebar shows Pinned / Recent / Import; ⌘K to search (or open Global Chat Search via the configured hotkey)
-3. Use the two-level tabs to switch data source: `cli` / `app-code` / `app-web` / `app-cowork`
-4. Open a session: tool calls / thinking / GFM tables / code blocks render inline; reply at the bottom to continue
+2. Start on **Dashboard** for a cross-module overview, or open **Workbench** to launch a Claude Code, Codex, or terminal session in a project
+3. Use **History** to browse sessions; source filters include `cli`, `codex`, `app-code`, `app-web`, and `app-cowork`
+4. Open a session: tool calls, thinking, GFM tables, code blocks, and linked file previews render inline; reply at the bottom to continue
 5. Live-sync claude.ai web chats from your logged-in browser, or import a `.zip` / folder export
-6. Manage commands, MCP servers, skills, hooks, sub-agents, output styles, and MaaS providers under **Configuration**
+6. Manage commands, MCP servers, skills, hooks, sub-agents, output styles, runtime environments, and MaaS providers under **Configuration**
 7. Visit **Marketplace** to discover community templates
 
 ## Tech Stack

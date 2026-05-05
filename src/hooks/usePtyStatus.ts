@@ -6,6 +6,11 @@ interface PtyExitEvent {
   id: string;
 }
 
+interface PtyDataEvent {
+  id: string;
+  data: number[];
+}
+
 /**
  * Hook to track PTY running status for multiple sessions.
  * Returns a Map of ptyId -> isRunning status.
@@ -34,9 +39,19 @@ export function usePtyStatus(ptyIds: string[]): Map<string, boolean> {
     checkStatus();
   }, [checkStatus]);
 
-  // Listen for PTY exit events
+  // Listen for PTY data/exit events so a create-time false check does not stay stale.
   useEffect(() => {
-    const unlisten = listen<PtyExitEvent>("pty-exit", (event) => {
+    const unlistenData = listen<PtyDataEvent>("pty-data", (event) => {
+      const activeId = event.payload.id;
+      setStatusMap((prev) => {
+        if (!prev.has(activeId) || prev.get(activeId)) return prev;
+        const next = new Map(prev);
+        next.set(activeId, true);
+        return next;
+      });
+    });
+
+    const unlistenExit = listen<PtyExitEvent>("pty-exit", (event) => {
       const exitedId = event.payload.id;
       setStatusMap((prev) => {
         if (prev.has(exitedId)) {
@@ -49,7 +64,8 @@ export function usePtyStatus(ptyIds: string[]): Map<string, boolean> {
     });
 
     return () => {
-      unlisten.then((fn) => fn());
+      unlistenData.then((fn) => fn());
+      unlistenExit.then((fn) => fn());
     };
   }, []);
 

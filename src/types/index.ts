@@ -1,11 +1,15 @@
 export * from "./maas";
+export * from "./agent";
 
 // ============================================================================
 // Feature Types
 // ============================================================================
 
 export type FeatureType =
+  | "dashboard"
+  | "workbench"
   | "chat"
+  | "workspace"
   | "features"
   | "basic-env"
   | "basic-maas"
@@ -93,7 +97,7 @@ export interface Session {
   created_at: number;
   last_modified: number;
   usage?: SessionUsage;
-  source: "cli" | "app-code" | "app-web" | "app-cowork";
+  source: "cli" | "app-code" | "app-web" | "app-cowork" | "codex";
 }
 
 export interface SessionUsageEntry {
@@ -298,6 +302,9 @@ export type TemplateCategory =
 
 export type View =
   | { type: "home" }
+  | { type: "dashboard" }
+  | { type: "workbench" }
+  | { type: "workspace" }
   | { type: "features" }
   | { type: "chat-projects" }
   | { type: "chat-sessions"; projectId: string; projectPath: string }

@@ -23,6 +23,8 @@ interface NavigationState {
 /** Route pattern to feature type mapping */
 function routeToFeature(route: string): FeatureType | null {
   const map: Record<string, FeatureType> = {
+    dashboard: "dashboard",
+    workbench: "workbench",
     mcp: "mcp", skills: "skills", hooks: "hooks", agents: "sub-agents",
     "output-styles": "output-styles", statusline: "statusline",
     commands: "commands", settings: "settings",
@@ -43,7 +45,10 @@ function parseUrlToView(hash: string): View {
   const [first, second] = segments;
 
   switch (first) {
+    case "dashboard": return { type: "dashboard" };
+    case "workbench": return { type: "workbench" };
     case "features": return { type: "features" };
+    case "workspace": return { type: "workspace" };
     case "annual-report-2025": return { type: "annual-report-2025" };
     case "mcp": return { type: "mcp" };
     case "skills": return { type: "skills" }; // Detail handled async later

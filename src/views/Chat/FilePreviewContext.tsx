@@ -19,6 +19,13 @@ interface FilePreviewOpenOptions {
   column?: number;
 }
 
+interface FilePreviewTab {
+  path: string;
+  line?: number;
+  column?: number;
+  nonce: number;
+}
+
 export interface ImagePreviewItem {
   src: string;
   title: string;
@@ -54,6 +61,10 @@ function formatPreviewByteSize(size?: number | null) {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function getPreviewFileName(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
 }
 
 function greatestCommonDivisor(a: number, b: number): number {
@@ -200,6 +211,107 @@ function ImagePreviewPanel({
   );
 }
 
+function FilePreviewTabs({
+  tabs,
+  activePath,
+  onSelectPath,
+  onCloseTab,
+  onCloseAll,
+  onOpenFilePath,
+}: {
+  tabs: FilePreviewTab[];
+  activePath: string | null;
+  onSelectPath: (path: string) => void;
+  onCloseTab: (path: string) => void;
+  onCloseAll: () => void;
+  onOpenFilePath: (path: string) => void;
+}) {
+  const activeTab = tabs.find((tab) => tab.path === activePath) ?? tabs[0];
+  if (!activeTab) return null;
+  const hasMultipleTabs = tabs.length > 1;
+
+  return (
+    <div className="flex h-full flex-col bg-terminal">
+      <div className="flex h-10 shrink-0 items-center gap-1 border-b border-border bg-canvas-alt px-2">
+        <div
+          role="tablist"
+          aria-label="Open file previews"
+          className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
+        >
+          {tabs.map((tab) => {
+            const isActive = tab.path === activeTab.path;
+            const fileName = getPreviewFileName(tab.path);
+
+            return (
+              <div
+                key={tab.path}
+                className={cn(
+                  "group relative flex h-8 min-w-28 max-w-56 shrink-0 items-center gap-1 rounded-lg border px-1 transition-colors",
+                  isActive
+                    ? "border-border bg-background text-foreground shadow-sm"
+                    : "border-transparent bg-transparent text-muted-foreground hover:bg-card-alt hover:text-foreground",
+                )}
+              >
+                {isActive && (
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-primary" aria-hidden="true" />
+                )}
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={isActive}
+                  onClick={() => onSelectPath(tab.path)}
+                  className="min-w-0 flex-1 truncate px-1.5 py-1 text-left text-xs font-medium"
+                  title={tab.path}
+                >
+                  {fileName}
+                </button>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onCloseTab(tab.path);
+                  }}
+                  className={cn(
+                    "rounded-md p-1 text-muted-foreground transition-colors hover:bg-card hover:text-ink",
+                    isActive ? "opacity-100" : "opacity-0 group-hover:opacity-100",
+                  )}
+                  title={`Close ${fileName}`}
+                  aria-label={`Close ${fileName}`}
+                >
+                  <Cross2Icon className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+        {hasMultipleTabs && (
+          <button
+            type="button"
+            onClick={onCloseAll}
+            className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-card-alt hover:text-ink"
+            title="Close all previews"
+            aria-label="Close all previews"
+          >
+            <Cross2Icon className="h-4 w-4" />
+          </button>
+        )}
+      </div>
+
+      <div className="min-h-0 flex-1">
+        <FileViewer
+          key={activeTab.path}
+          filePath={activeTab.path}
+          onClose={() => onCloseTab(activeTab.path)}
+          onOpenFilePath={onOpenFilePath}
+          revealLine={activeTab.line}
+          revealColumn={activeTab.column}
+          revealNonce={activeTab.nonce}
+        />
+      </div>
+    </div>
+  );
+}
+
 export function useFilePreview() {
   return useContext(FilePreviewContext);
 }
@@ -216,17 +328,15 @@ export function ChatFilePreviewProvider({
   const rootRef = useRef<HTMLDivElement>(null);
   const lastAnchorRef = useRef<HTMLElement | null>(null);
   const stabilizeFrameRef = useRef<number | null>(null);
+  const openNonceRef = useRef(0);
   const [containerWidth, setContainerWidth] = useState(0);
-  const [filePath, setFilePath] = useState<string | null>(null);
-  const [openLine, setOpenLine] = useState<number | undefined>(undefined);
-  const [openColumn, setOpenColumn] = useState<number | undefined>(undefined);
+  const [fileTabs, setFileTabs] = useState<FilePreviewTab[]>([]);
+  const [activeFilePath, setActiveFilePath] = useState<string | null>(null);
   const [imagePreview, setImagePreview] = useState<{
     images: ImagePreviewItem[];
     index: number;
     title?: string;
   } | null>(null);
-  // Bumped on every open call so FileViewer can re-trigger reveal even if path unchanged.
-  const [openNonce, setOpenNonce] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState<number | null>(() => {
     if (typeof window === "undefined") return null;
     const saved = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
@@ -287,11 +397,29 @@ export function ChatFilePreviewProvider({
   const openFilePreview = useCallback(
     (path: string, anchor?: HTMLElement | null, opts?: FilePreviewOpenOptions) => {
       if (anchor) lastAnchorRef.current = anchor;
-      setFilePath(path);
+      const nonce = ++openNonceRef.current;
+      setFileTabs((prev) => {
+        const existingIndex = prev.findIndex((tab) => tab.path === path);
+        if (existingIndex >= 0) {
+          return prev.map((tab, index) =>
+            index === existingIndex
+              ? { ...tab, line: opts?.line, column: opts?.column, nonce }
+              : tab,
+          );
+        }
+
+        return [
+          ...prev,
+          {
+            path,
+            line: opts?.line,
+            column: opts?.column,
+            nonce,
+          },
+        ];
+      });
+      setActiveFilePath(path);
       setImagePreview(null);
-      setOpenLine(opts?.line);
-      setOpenColumn(opts?.column);
-      setOpenNonce((n) => n + 1);
       stabilizeAnchor(anchor ?? lastAnchorRef.current);
     },
     [stabilizeAnchor],
@@ -301,26 +429,45 @@ export function ChatFilePreviewProvider({
     (images: ImagePreviewItem[], anchor?: HTMLElement | null, opts?: ImagePreviewOpenOptions) => {
       if (images.length === 0) return;
       if (anchor) lastAnchorRef.current = anchor;
-      setFilePath(null);
-      setOpenLine(undefined);
-      setOpenColumn(undefined);
+      setFileTabs([]);
+      setActiveFilePath(null);
       setImagePreview({
         images,
         index: clampIndex(opts?.index ?? 0, images.length),
         title: opts?.title,
       });
-      setOpenNonce((n) => n + 1);
       stabilizeAnchor(anchor ?? lastAnchorRef.current);
     },
     [stabilizeAnchor],
   );
 
-  const closeFilePreview = useCallback(() => {
+  const closePreview = useCallback(() => {
     const anchor = lastAnchorRef.current;
-    setFilePath(null);
+    setFileTabs([]);
+    setActiveFilePath(null);
     setImagePreview(null);
     stabilizeAnchor(anchor);
   }, [stabilizeAnchor]);
+
+  const closeFileTab = useCallback(
+    (path: string) => {
+      const index = fileTabs.findIndex((tab) => tab.path === path);
+      if (index < 0) return;
+
+      const nextTabs = fileTabs.filter((tab) => tab.path !== path);
+      setFileTabs(nextTabs);
+
+      if (activeFilePath === path) {
+        const nextActive = nextTabs[Math.min(index, nextTabs.length - 1)]?.path ?? null;
+        setActiveFilePath(nextActive);
+      }
+
+      if (nextTabs.length === 0) {
+        stabilizeAnchor(lastAnchorRef.current);
+      }
+    },
+    [activeFilePath, fileTabs, stabilizeAnchor],
+  );
 
   const setImagePreviewIndex = useCallback((index: number) => {
     setImagePreview((prev) =>
@@ -346,13 +493,13 @@ export function ChatFilePreviewProvider({
   }, []);
 
   useEffect(() => {
-    if (!filePath && !imagePreview) return;
+    if (fileTabs.length === 0 && !imagePreview) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeFilePreview();
+      if (event.key === "Escape") closePreview();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [closeFilePreview, filePath, imagePreview]);
+  }, [closePreview, fileTabs.length, imagePreview]);
 
   useEffect(() => {
     return () => {
@@ -397,22 +544,23 @@ export function ChatFilePreviewProvider({
     openImagePreview,
   }), [openFilePreview, openImagePreview]);
 
-  const hasPreview = !!filePath || !!imagePreview;
+  const hasPreview = fileTabs.length > 0 || !!imagePreview;
   const showSidebar = hasPreview && containerWidth >= SIDEBAR_MIN_WIDTH;
-  const previewContent = filePath ? (
-    <FileViewer
-      filePath={filePath}
-      onClose={closeFilePreview}
-      revealLine={openLine}
-      revealColumn={openColumn}
-      revealNonce={openNonce}
+  const previewContent = fileTabs.length > 0 ? (
+    <FilePreviewTabs
+      tabs={fileTabs}
+      activePath={activeFilePath}
+      onSelectPath={setActiveFilePath}
+      onCloseTab={closeFileTab}
+      onCloseAll={closePreview}
+      onOpenFilePath={(path) => openFilePreview(path)}
     />
   ) : imagePreview ? (
     <ImagePreviewPanel
       images={imagePreview.images}
       index={imagePreview.index}
       title={imagePreview.title}
-      onClose={closeFilePreview}
+      onClose={closePreview}
       onSelectIndex={setImagePreviewIndex}
     />
   ) : null;
@@ -461,7 +609,7 @@ export function ChatFilePreviewProvider({
         {hasPreview && !showSidebar && (
           <div
             className="absolute inset-0 z-40 flex min-h-0 min-w-0 bg-background/80 backdrop-blur-sm"
-            onClick={closeFilePreview}
+            onClick={closePreview}
           >
             <div
               className="m-3 min-h-0 min-w-0 flex-1 overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"

@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useInvokeQuery } from "../../hooks";
 import { ChevronRightIcon, FileTextIcon } from "@radix-ui/react-icons";
 import { useAtom } from "jotai";
-import { sourceCollapsedDirsAtom } from "../../store";
+import { sourceExpandedDirsAtom } from "../../store";
 import { LoadingState, EmptyState, ConfigPage } from "../../components/config";
 import { DocumentReader, type DocumentItem } from "../../components/DocumentReader";
 import type { DocNode, DocSource } from "../../types";
@@ -57,28 +57,28 @@ function FolderTree({
   depth?: number;
   onFileClick: (path: string) => void;
 }) {
-  const [allCollapsed, setAllCollapsed] = useAtom(sourceCollapsedDirsAtom);
-  const collapsed = useMemo(
-    () => new Set(allCollapsed[sourceId] ?? []),
-    [allCollapsed, sourceId]
+  const [allExpanded, setAllExpanded] = useAtom(sourceExpandedDirsAtom);
+  const expanded = useMemo(
+    () => new Set(allExpanded[sourceId] ?? []),
+    [allExpanded, sourceId]
   );
   const toggle = useCallback(
     (dirPath: string) => {
-      setAllCollapsed((prev) => {
+      setAllExpanded((prev) => {
         const cur = new Set(prev[sourceId] ?? []);
         if (cur.has(dirPath)) cur.delete(dirPath);
         else cur.add(dirPath);
         return { ...prev, [sourceId]: Array.from(cur) };
       });
     },
-    [sourceId, setAllCollapsed]
+    [sourceId, setAllExpanded]
   );
 
   return (
     <div>
       {nodes.map((node) => {
         if (node.type === "dir") {
-          const isCollapsed = collapsed.has(node.path);
+          const isExpanded = expanded.has(node.path);
           return (
             <div key={node.path}>
               <button
@@ -87,12 +87,12 @@ function FolderTree({
                 style={{ paddingLeft: `${depth * 14 + 8}px` }}
               >
                 <ChevronRightIcon
-                  className={`w-3.5 h-3.5 shrink-0 transition-transform ${isCollapsed ? "" : "rotate-90"}`}
+                  className={`w-3.5 h-3.5 shrink-0 transition-transform ${isExpanded ? "rotate-90" : ""}`}
                 />
                 <span className="font-medium truncate">{node.name}</span>
                 <span className="text-xs text-muted-foreground/60 ml-auto">{node.children.length}</span>
               </button>
-              {!isCollapsed && (
+              {isExpanded && (
                 <FolderTree
                   nodes={node.children}
                   sourceId={sourceId}

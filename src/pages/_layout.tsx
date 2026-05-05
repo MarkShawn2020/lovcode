@@ -36,6 +36,9 @@ function getFeatureFromPath(pathname: string): FeatureType | null {
 
   const featureMap: Record<string, FeatureType> = {
     "": null as unknown as FeatureType,
+    "dashboard": "dashboard",
+    "workbench": "workbench",
+    "workspace": "workspace",
     "features": "features",
     "history": "chat",
     "skills": "skills",
@@ -95,7 +98,7 @@ export default function RootLayout() {
   }, []);
 
   // Splash dismissal:
-  //   - On /history (and "/" which redirects to /history via HomePage),
+  //   - On /history or /workbench (and "/" which redirects via HomePage),
   //     ProjectList controls the splash — wait until the session list is
   //     actually ready, no jarring "empty shell" gap.
   //   - On every other route, RootLayout dismisses immediately — those
@@ -104,17 +107,26 @@ export default function RootLayout() {
   // on "/" because HomePage will redirect within a microtask.
   useEffect(() => {
     const p = location.pathname;
-    if (p === "/" || p.startsWith("/history")) return;
+    if (p === "/" || p.startsWith("/history") || p.startsWith("/workbench")) return;
     window.dispatchEvent(new Event("app:ready"));
   }, [location.pathname]);
 
-  useEffect(() => {
+  const persistLastPath = useCallback(() => {
     const path = location.pathname + location.search;
-    // Skip transient overlay routes — they shouldn't be the "resume" target
+    // Skip transient routes — they shouldn't be the "resume" target.
     if (path && path !== "/" && location.pathname !== "/annual-report-2025") {
       try { localStorage.setItem("lovcode:lastPath", path); } catch {}
     }
   }, [location.pathname, location.search]);
+
+  useEffect(() => {
+    persistLastPath();
+  }, [persistLastPath]);
+
+  useEffect(() => {
+    window.addEventListener("beforeunload", persistLastPath);
+    return () => window.removeEventListener("beforeunload", persistLastPath);
+  }, [persistLastPath]);
 
   useEffect(() => {
     const unlisten = listen("menu-settings", () => setShowSettings(true));
@@ -157,7 +169,10 @@ export default function RootLayout() {
   // URL-based navigation
   const handleFeatureClick = (feature: FeatureType) => {
     const routes: Record<FeatureType, string> = {
+      "dashboard": "/dashboard",
+      "workbench": "/workbench",
       "chat": "/history",
+      "workspace": "/workspace",
       "basic-env": "/settings/env",
       "basic-maas": "/settings/maas",
       "basic-version": "/settings/version",

@@ -7,7 +7,7 @@ import { ContextFileItem } from "../../components/ContextFileItem";
 import { useAtom } from "jotai";
 import { sessionContextTabAtom, sessionSelectModeAtom, hideEmptySessionsAtom, userPromptsOnlyAtom } from "../../store";
 import { useAppConfig } from "../../context";
-import { formatDate, useReadableText } from "./utils";
+import { formatDate, resolveSessionLabel, useReadableText } from "./utils";
 import { useInvokeQuery } from "../../hooks";
 import type { Session, ContextFile, Message, SearchResult, SessionUsageEntry, SessionUsage } from "../../types";
 
@@ -359,6 +359,7 @@ generator: "Lovcode"
             {filteredSessions.map((session) => {
               const isSelected = selectedIds.has(session.id);
               const usage = usageMap.get(session.id);
+              const label = resolveSessionLabel(session, toReadable);
               return (
                 <div
                   key={session.id}
@@ -369,7 +370,7 @@ generator: "Lovcode"
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <p className="font-medium text-ink line-clamp-2">{toReadable(session.summary) || "Untitled session"}</p>
+                      <p className="font-medium text-ink line-clamp-2">{label.text}</p>
                       <div className="flex items-center gap-3 mt-2 text-sm text-muted-foreground">
                         <span title={`${session.message_count} messages total`}>{session.rounds} rounds</span>
                         <span>·</span>
