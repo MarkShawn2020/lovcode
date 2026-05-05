@@ -199,19 +199,25 @@ export function FeedbackButton() {
 
           {submittedTicket ? (
             <div className="space-y-4">
-              <div className="rounded-xl border border-primary/30 bg-primary/5 p-4">
-                <div className="flex items-start gap-3">
-                  <CheckCircle2 className="mt-0.5 h-5 w-5 text-primary" />
+              <div className="max-w-full overflow-hidden rounded-xl border border-primary/30 bg-primary/5 p-4">
+                <div className="flex min-w-0 items-start gap-3">
+                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
                   <div className="min-w-0 flex-1 space-y-2">
                     <p className="font-medium text-foreground">反馈已提交</p>
                     <p className="text-sm text-muted-foreground">
                       复制工单 ID，后续可以在用户中心查看处理状态。
                     </p>
-                    <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
-                      <code className="min-w-0 flex-1 truncate font-mono text-sm text-foreground">
+                    <div className="flex min-w-0 flex-col items-stretch gap-2 rounded-lg border border-border bg-background px-3 py-2 sm:flex-row sm:items-center">
+                      <code className="min-w-0 break-all rounded bg-muted/50 px-2 py-1 font-mono text-xs text-foreground sm:flex-1 sm:truncate sm:bg-transparent sm:px-0 sm:py-0 sm:text-sm">
                         {submittedTicket.feedbackId}
                       </code>
-                      <Button type="button" size="sm" variant="outline" onClick={handleCopyTicketId}>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="w-full shrink-0 sm:w-auto"
+                        onClick={handleCopyTicketId}
+                      >
                         <Copy className="mr-2 h-4 w-4" />
                         复制
                       </Button>
