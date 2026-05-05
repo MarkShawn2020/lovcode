@@ -19,6 +19,7 @@ import {
 import { useInvokeQuery } from "../hooks";
 import type { Project } from "../types";
 import { version as VERSION } from "../../package.json";
+import { AppVersionManager } from "./AppVersionManager";
 import { updateStateAtom, type UpdateStage } from "./UpdateChecker";
 
 interface NetworkInfo {
@@ -110,32 +111,45 @@ function parseAnsi(text: string): AnsiSpan[] {
   return spans.filter(s => s.text.length > 0);
 }
 
-function VersionWithUpdateStatus() {
+function VersionWithUpdateStatus({ onOpen }: { onOpen: () => void }) {
   const { stage, update, error } = useAtomValue(updateStateAtom);
 
   const titles: Record<UpdateStage, string> = {
     checking: "Checking for updates...",
     latest: "You're on the latest version",
-    available: `v${update?.version} available — click to update`,
+    available: `v${update?.version} available`,
     downloading: "Downloading update...",
-    done: "Update installed — restart to apply",
+    done: "Update installed - restart to apply",
     error: error || "Update check failed",
+    disabled: "Auto update disabled",
   };
 
-  if (stage === "available") {
-    return (
-      <span className="text-primary cursor-pointer" title={titles[stage]}>
-        v{VERSION} → v{update?.version}
-      </span>
-    );
-  }
-  if (stage === "downloading") {
-    return <span className="text-primary animate-pulse" title={titles[stage]}>v{VERSION} ↓</span>;
-  }
-  if (stage === "done") {
-    return <span className="text-green-600 cursor-pointer" title={titles[stage]}>v{VERSION} ✓</span>;
-  }
-  return <span className="text-muted-foreground" title={titles[stage]}>v{VERSION}</span>;
+  const className =
+    stage === "available" || stage === "downloading" || stage === "done"
+      ? "text-primary"
+      : stage === "error"
+        ? "text-destructive"
+        : "text-muted-foreground";
+
+  const label =
+    stage === "available"
+      ? `v${VERSION} -> v${update?.version}`
+      : stage === "downloading"
+        ? `v${VERSION} ↓`
+        : stage === "done"
+          ? `v${VERSION} ✓`
+          : `v${VERSION}`;
+
+  return (
+    <button
+      type="button"
+      className={`bg-transparent p-0 cursor-pointer hover:text-foreground ${className}`}
+      title={`${titles[stage]} - open version management`}
+      onClick={onOpen}
+    >
+      {label}
+    </button>
+  );
 }
 
 interface StatusBarProps {
@@ -152,6 +166,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
   const [settings, setSettings] = useState<StatusBarSettings | null>(null);
   const [scriptOutput, setScriptOutput] = useState<string | null>(null);
   const [homeDir, setHomeDir] = useState("");
+  const [versionManagerOpen, setVersionManagerOpen] = useState(false);
 
   // Load statusbar settings
   useEffect(() => {
@@ -320,62 +335,65 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
 
   // Default mode: built-in status bar
   return (
-    <div className="h-6 bg-card border-t border-border flex items-center justify-between px-3 text-xs text-muted-foreground select-none">
-      {/* Left: Product name & version */}
-      <div className="flex items-center gap-4">
-        <span className="flex items-center gap-1.5 font-medium text-ink">
-          <img src="/logo.svg" alt="Lovcode" className="w-3.5 h-3.5" />
-          Lovcode
-        </span>
-        <VersionWithUpdateStatus />
+    <>
+      <div className="h-6 bg-card border-t border-border flex items-center justify-between px-3 text-xs text-muted-foreground select-none">
+        {/* Left: Product name & version */}
+        <div className="flex items-center gap-4">
+          <span className="flex items-center gap-1.5 font-medium text-ink">
+            <img src="/logo.svg" alt="Lovcode" className="w-3.5 h-3.5" />
+            Lovcode
+          </span>
+          <VersionWithUpdateStatus onOpen={() => setVersionManagerOpen(true)} />
 
-        {/* Stats */}
-        <div className="flex items-center gap-3 ml-2 border-l border-border/50 pl-4">
-          <div className="flex items-center gap-1" title="Projects">
-            <FolderIcon className="w-3 h-3" />
-            <span>{projectCount}</span>
-          </div>
-          {(todayStats.lines_added > 0 || todayStats.lines_deleted > 0) && (
-            <div className="flex items-center gap-1" title="Today's changes">
-              <CodeIcon className="w-3 h-3" />
-              <span className="text-green-600">+{todayStats.lines_added}</span>
-              <span className="text-red-500">-{todayStats.lines_deleted}</span>
+          {/* Stats */}
+          <div className="flex items-center gap-3 ml-2 border-l border-border/50 pl-4">
+            <div className="flex items-center gap-1" title="Projects">
+              <FolderIcon className="w-3 h-3" />
+              <span>{projectCount}</span>
             </div>
+            {(todayStats.lines_added > 0 || todayStats.lines_deleted > 0) && (
+              <div className="flex items-center gap-1" title="Today's changes">
+                <CodeIcon className="w-3 h-3" />
+                <span className="text-green-600">+{todayStats.lines_added}</span>
+                <span className="text-red-500">-{todayStats.lines_deleted}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right: Time, Network, Account, Settings */}
+        <div className="flex items-center gap-4">
+          {/* Network region */}
+          {networkInfo && (
+            <div className="flex items-center gap-1" title={`IP: ${networkInfo.ip}`}>
+              <GlobeIcon className="w-3 h-3" />
+              <span>{networkInfo.region}</span>
+              {networkInfo.isProxy && (
+                <span className="text-amber-600 ml-1">({networkInfo.proxyType || "Proxy"})</span>
+              )}
+            </div>
+          )}
+
+          {/* Date & Time */}
+          <div className="flex items-center gap-1 border-l border-border/50 pl-4">
+            <ClockIcon className="w-3 h-3" />
+            <span>{formatDate(time)}</span>
+            <span className="font-mono">{formatTime(time)}</span>
+          </div>
+
+          {/* Settings gear */}
+          {onOpenSettings && (
+            <button
+              onClick={onOpenSettings}
+              className="ml-1 p-0.5 rounded hover:bg-muted transition-colors"
+              title="StatusBar Settings"
+            >
+              <SettingsIcon className="w-3 h-3" />
+            </button>
           )}
         </div>
       </div>
-
-      {/* Right: Time, Network, Account, Settings */}
-      <div className="flex items-center gap-4">
-        {/* Network region */}
-        {networkInfo && (
-          <div className="flex items-center gap-1" title={`IP: ${networkInfo.ip}`}>
-            <GlobeIcon className="w-3 h-3" />
-            <span>{networkInfo.region}</span>
-            {networkInfo.isProxy && (
-              <span className="text-amber-600 ml-1">({networkInfo.proxyType || "Proxy"})</span>
-            )}
-          </div>
-        )}
-
-        {/* Date & Time */}
-        <div className="flex items-center gap-1 border-l border-border/50 pl-4">
-          <ClockIcon className="w-3 h-3" />
-          <span>{formatDate(time)}</span>
-          <span className="font-mono">{formatTime(time)}</span>
-        </div>
-
-        {/* Settings gear */}
-        {onOpenSettings && (
-          <button
-            onClick={onOpenSettings}
-            className="ml-1 p-0.5 rounded hover:bg-muted transition-colors"
-            title="StatusBar Settings"
-          >
-            <SettingsIcon className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-    </div>
+      <AppVersionManager open={versionManagerOpen} onOpenChange={setVersionManagerOpen} />
+    </>
   );
 }

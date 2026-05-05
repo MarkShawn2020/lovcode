@@ -422,6 +422,24 @@ export interface ClaudeCodeVersionInfo {
   autoupdater_disabled: boolean;
 }
 
+export interface LovcodeRelease {
+  version: string;
+  tag_name: string;
+  name: string | null;
+  published_at: string | null;
+  html_url: string;
+  body: string | null;
+  prerelease: boolean;
+  draft: boolean;
+}
+
+export interface LovcodeVersionInfo {
+  current_version: string;
+  latest_version: string | null;
+  releases: LovcodeRelease[];
+  auto_update_enabled: boolean;
+}
+
 // ============================================================================
 // Extensions Types
 // ============================================================================

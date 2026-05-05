@@ -1,12 +1,13 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { atom, useAtom } from "jotai";
+import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
-import { X } from "lucide-react";
+import { RefreshCw, X } from "lucide-react";
 
-export type UpdateStage = "checking" | "latest" | "available" | "downloading" | "done" | "error";
+export type UpdateStage = "checking" | "latest" | "available" | "downloading" | "done" | "error" | "disabled";
 
 interface UpdateState {
   stage: UpdateStage;
@@ -20,23 +21,53 @@ export const updateStateAtom = atom<UpdateState>({
   error: "",
 });
 
+type UpdateAction = "check" | "disable" | "install" | "relaunch" | "show";
+
+const UPDATE_ACTION_EVENT = "lovcode:update-action";
+const CHECK_TIMEOUT_MS = 15_000;
+
+export function requestUpdateAction(action: UpdateAction) {
+  window.dispatchEvent(new CustomEvent<UpdateAction>(UPDATE_ACTION_EVENT, { detail: action }));
+}
+
 export function UpdateChecker() {
   const [state, setState] = useAtom(updateStateAtom);
   const [progress, setProgress] = useState(0);
   const [dismissed, setDismissed] = useState(false);
 
-  const checked = useRef(false);
-  useEffect(() => {
-    if (checked.current) return;
-    checked.current = true;
+  const checkId = useRef(0);
 
-    const timeout = setTimeout(() => {
-      setState((s) => s.stage === "checking" ? { stage: "latest", update: null, error: "" } : s);
-    }, 10_000);
+  const runCheck = useCallback(async (manual = true) => {
+    const currentCheckId = checkId.current + 1;
+    checkId.current = currentCheckId;
 
-    check()
+    setDismissed(false);
+    setProgress(0);
+    setState({ stage: "checking", update: null, error: "" });
+
+    if (!manual) {
+      const autoUpdateEnabled = await invoke<boolean>("get_lovcode_autoupdater_enabled").catch(() => true);
+      if (!autoUpdateEnabled) {
+        if (checkId.current !== currentCheckId) return;
+        setState({ stage: "disabled", update: null, error: "" });
+        return;
+      }
+    }
+
+    const timeout = window.setTimeout(() => {
+      if (checkId.current !== currentCheckId) return;
+      checkId.current = currentCheckId + 1;
+      setState({
+        stage: "error",
+        update: null,
+        error: "Update check timed out. Check your network and try again.",
+      });
+    }, CHECK_TIMEOUT_MS);
+
+    check({ timeout: CHECK_TIMEOUT_MS })
       .then((u) => {
-        clearTimeout(timeout);
+        window.clearTimeout(timeout);
+        if (checkId.current !== currentCheckId) return;
         if (u?.available) {
           setState({ stage: "available", update: u, error: "" });
         } else {
@@ -44,7 +75,8 @@ export function UpdateChecker() {
         }
       })
       .catch((e) => {
-        clearTimeout(timeout);
+        window.clearTimeout(timeout);
+        if (checkId.current !== currentCheckId) return;
         const msg = e instanceof Error ? e.message : String(e);
         console.error("[UpdateChecker]", e);
         setState({ stage: "error", update: null, error: msg });
@@ -53,10 +85,13 @@ export function UpdateChecker() {
 
   const { stage, update, error } = state;
 
-  if (!update || dismissed || (stage !== "available" && stage !== "downloading" && stage !== "done" && stage !== "error")) return null;
+  useEffect(() => {
+    runCheck(false);
+  }, [runCheck]);
 
-  const handleUpdate = async () => {
+  const handleUpdate = useCallback(async () => {
     if (!update) return;
+    setDismissed(false);
     setState((s) => ({ ...s, stage: "downloading" }));
     setProgress(0);
     try {
@@ -76,29 +111,70 @@ export function UpdateChecker() {
       });
       setState((s) => ({ ...s, stage: "done" }));
     } catch (e) {
+      console.error("[UpdateChecker]", e);
       setState((s) => ({
         ...s,
         stage: "error",
         error: e instanceof Error ? e.message : String(e),
       }));
     }
-  };
+  }, [setState, update]);
+
+  useEffect(() => {
+    const handleAction = (event: Event) => {
+      const action = (event as CustomEvent<UpdateAction>).detail;
+      if (action === "check") {
+        runCheck();
+      } else if (action === "disable") {
+        checkId.current += 1;
+        setDismissed(true);
+        setProgress(0);
+        setState({ stage: "disabled", update: null, error: "" });
+      } else if (action === "install") {
+        void handleUpdate();
+      } else if (action === "relaunch") {
+        void handleRelaunch();
+      } else if (action === "show") {
+        setDismissed(false);
+      }
+    };
+
+    window.addEventListener(UPDATE_ACTION_EVENT, handleAction);
+    return () => window.removeEventListener(UPDATE_ACTION_EVENT, handleAction);
+  }, [handleUpdate, runCheck]);
+
+  const canShow =
+    stage === "available" ||
+    stage === "downloading" ||
+    stage === "done" ||
+    stage === "error";
+
+  if (!canShow || dismissed) return null;
+
+  const title = stage === "error"
+    ? "Update Check Failed"
+    : stage === "done"
+      ? "Update Installed"
+      : "Update Available";
 
   return (
     <div className="fixed bottom-4 right-4 z-50 w-80 bg-card border border-border rounded-xl shadow-lg p-4 space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-foreground">
-            Update Available
+            {title}
           </p>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            v{update.version} is ready
-          </p>
+          {update && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              v{update.version} is ready
+            </p>
+          )}
         </div>
         {stage === "available" && (
           <button
             onClick={() => setDismissed(true)}
             className="text-muted-foreground hover:text-foreground shrink-0"
+            aria-label="Dismiss update notification"
           >
             <X className="w-4 h-4" />
           </button>
@@ -130,7 +206,8 @@ export function UpdateChecker() {
           </Button>
         )}
         {stage === "error" && (
-          <Button size="sm" variant="outline" onClick={handleUpdate}>
+          <Button size="sm" variant="outline" onClick={() => runCheck()}>
+            <RefreshCw className="w-3.5 h-3.5" />
             Retry
           </Button>
         )}

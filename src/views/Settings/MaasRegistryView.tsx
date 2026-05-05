@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
@@ -28,6 +28,7 @@ import {
   DialogFooter,
 } from "../../components/ui/dialog";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 import { LoadingState, PageHeader, ConfigPage } from "../../components/config";
 import type { MaasProvider, MaasModel, Vendor, ClaudeSettings } from "../../types";
 
@@ -36,6 +37,95 @@ interface FetchParseResult {
   vendors: Vendor[];
   rawPreview: string;
   notes?: string | null;
+}
+
+type MaasRuntimeId = "claude-code" | "codex";
+
+const MAAS_RUNTIME_OPTIONS: { id: MaasRuntimeId; label: string }[] = [
+  { id: "claude-code", label: "Claude Code" },
+  { id: "codex", label: "Codex" },
+];
+
+const DEFAULT_MAAS_RUNTIME_IDS = MAAS_RUNTIME_OPTIONS.map((option) => option.id);
+
+function getLovcodeSettings(raw: ClaudeSettings["raw"] | undefined): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const lovcode = (raw as Record<string, unknown>).lovcode;
+  return lovcode && typeof lovcode === "object" && !Array.isArray(lovcode)
+    ? (lovcode as Record<string, unknown>)
+    : {};
+}
+
+function getLegacyActiveProvider(raw: ClaudeSettings["raw"] | undefined): string | null {
+  const v = getLovcodeSettings(raw).activeProvider;
+  return typeof v === "string" && v ? v : null;
+}
+
+function getSavedMaasRuntimeIds(raw: ClaudeSettings["raw"] | undefined): MaasRuntimeId[] {
+  const saved = getLovcodeSettings(raw).maasEnableRuntimes;
+  if (!Array.isArray(saved)) return DEFAULT_MAAS_RUNTIME_IDS;
+  return saved.filter((id): id is MaasRuntimeId =>
+    MAAS_RUNTIME_OPTIONS.some((option) => option.id === id),
+  );
+}
+
+function getActiveProviderKeysByRuntime(
+  raw: ClaudeSettings["raw"] | undefined,
+): Partial<Record<MaasRuntimeId, string>> {
+  const lovcode = getLovcodeSettings(raw);
+  const activeProviders =
+    lovcode.activeProviders && typeof lovcode.activeProviders === "object" && !Array.isArray(lovcode.activeProviders)
+      ? (lovcode.activeProviders as Record<string, unknown>)
+      : {};
+  const result: Partial<Record<MaasRuntimeId, string>> = {};
+  for (const option of MAAS_RUNTIME_OPTIONS) {
+    const v = activeProviders[option.id];
+    if (typeof v === "string" && v) result[option.id] = v;
+  }
+  const legacy = getLegacyActiveProvider(raw);
+  if (legacy && !result["claude-code"]) result["claude-code"] = legacy;
+  return result;
+}
+
+function formatRuntimeLabels(runtimeIds: MaasRuntimeId[]): string {
+  return runtimeIds
+    .map((id) => MAAS_RUNTIME_OPTIONS.find((option) => option.id === id)?.label ?? id)
+    .join(", ");
+}
+
+function isProviderRuntimeAvailable(provider: MaasProvider, runtimeId: MaasRuntimeId): boolean {
+  if (runtimeId === "claude-code") return true;
+  return provider.key !== "anthropic-subscription";
+}
+
+function getRuntimeUnavailableReason(provider: MaasProvider, runtimeId: MaasRuntimeId): string | null {
+  if (isProviderRuntimeAvailable(provider, runtimeId)) return null;
+  if (provider.key === "anthropic-subscription" && runtimeId === "codex") {
+    return "Codex cannot use Claude Code OAuth. Choose an API-key provider for Codex.";
+  }
+  return "This provider does not support this runtime yet.";
+}
+
+function HoverHint({
+  content,
+  children,
+  className = "inline-flex",
+}: {
+  content?: ReactNode;
+  children: ReactNode;
+  className?: string;
+}) {
+  if (!content) return <>{children}</>;
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={className}>{children}</span>
+      </TooltipTrigger>
+      <TooltipContent sideOffset={6} className="max-w-xs whitespace-pre-line text-left">
+        {content}
+      </TooltipContent>
+    </Tooltip>
+  );
 }
 
 /** Provider keys that are integrated but not yet open for use. Shown in the
@@ -86,6 +176,18 @@ function pickVerifyModel(p: MaasProvider): string {
   return p.baseUrl.includes("zenmux") || p.models.some((m) => m.modelName.includes("/"))
     ? "anthropic/claude-sonnet-4.6"
     : "claude-sonnet-4-5";
+}
+
+function pickCodexModel(p: MaasProvider): string {
+  const models = p.models.filter((m) => m.modelName.trim());
+  const openaiLike = models.find((m) => {
+    const modelName = m.modelName.trim();
+    return (
+      m.vendor === "openai" ||
+      /(?:^|\/)(?:gpt-|o[1345](?:-|$)|codex)/i.test(modelName)
+    );
+  });
+  return openaiLike?.modelName.trim() ?? pickVerifyModel(p);
 }
 
 /** Classify a /v1/messages probe response into a verify outcome.
@@ -182,14 +284,7 @@ export function MaasRegistryView() {
   );
   const { data: settings } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
 
-  const activeProviderKey: string | null = (() => {
-    const raw = settings?.raw;
-    if (!raw || typeof raw !== "object") return null;
-    const lovcode = (raw as Record<string, unknown>).lovcode;
-    if (!lovcode || typeof lovcode !== "object") return null;
-    const v = (lovcode as Record<string, unknown>).activeProvider;
-    return typeof v === "string" ? v : null;
-  })();
+  const activeProviderKeys = getActiveProviderKeysByRuntime(settings?.raw);
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<MaasProvider | null>(null);
@@ -208,6 +303,9 @@ export function MaasRegistryView() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [manualModel, setManualModel] = useState<MaasModel>({ id: "", displayName: "", modelName: "" });
   const [selectedFetchedIds, setSelectedFetchedIds] = useState<Set<string>>(new Set());
+  const [selectedRuntimeIds, setSelectedRuntimeIds] = useState<MaasRuntimeId[]>(
+    DEFAULT_MAAS_RUNTIME_IDS,
+  );
 
   const maskToken = (token: string): string => {
     if (!token) return "";
@@ -235,9 +333,24 @@ export function MaasRegistryView() {
     setVerifyMessage("");
   }, [selectedKey, registry, isNew]);
 
+  useEffect(() => {
+    setSelectedRuntimeIds(getSavedMaasRuntimeIds(settings?.raw));
+  }, [settings?.raw]);
+
   if (isLoading) return <LoadingState message="Loading MaaS registry..." />;
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["maas_registry"] });
+  const refreshSettings = () => queryClient.invalidateQueries({ queryKey: ["settings"] });
+
+  const persistLovcodeSettings = async (patch: Record<string, unknown>) => {
+    const latestSettings = await invoke<ClaudeSettings>("get_settings").catch(() => settings);
+    const current = getLovcodeSettings(latestSettings?.raw ?? settings?.raw);
+    await invoke("update_settings_field", {
+      field: "lovcode",
+      value: { ...current, ...patch },
+    });
+    refreshSettings();
+  };
 
   const handleSelectProvider = (key: string) => {
     setIsNew(false);
@@ -310,6 +423,21 @@ export function MaasRegistryView() {
   const updateDraft = (patch: Partial<MaasProvider>) => {
     setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
   };
+
+  const handleRuntimeSelectionChange = (runtimeId: MaasRuntimeId, checked: boolean) => {
+    setSelectedRuntimeIds((prev) => {
+      const next = checked
+        ? DEFAULT_MAAS_RUNTIME_IDS.filter((id) => id === runtimeId || prev.includes(id))
+        : prev.filter((id) => id !== runtimeId);
+      void persistLovcodeSettings({ maasEnableRuntimes: next });
+      return next;
+    });
+  };
+
+  const getProviderActiveRuntimeIds = (providerKey: string): MaasRuntimeId[] =>
+    MAAS_RUNTIME_OPTIONS.map((option) => option.id).filter(
+      (runtimeId) => activeProviderKeys[runtimeId] === providerKey,
+    );
 
   const updateModel = (idx: number, patch: Partial<MaasModel>) => {
     setDraft((prev) =>
@@ -511,10 +639,28 @@ export function MaasRegistryView() {
       setError("Verify the token before enabling this provider");
       return;
     }
+    const effectiveRuntimeIds = selectedRuntimeIds.filter((runtimeId) =>
+      isProviderRuntimeAvailable(draft, runtimeId),
+    );
+    if (effectiveRuntimeIds.length === 0) {
+      setError("Select at least one runtime");
+      return;
+    }
     try {
-      // Snapshot the current active provider's env so a future re-enable can restore it
-      const prevActive = activeProviderKey;
-      if (prevActive && prevActive !== draft.key) {
+      const selectedRuntimeSet = new Set(effectiveRuntimeIds);
+      const shouldApplyClaudeCode = selectedRuntimeSet.has("claude-code");
+      const shouldApplyCodex = selectedRuntimeSet.has("codex");
+
+      if (shouldApplyCodex) {
+        await invoke("update_codex_maas_provider", {
+          provider: draft,
+          model: pickCodexModel(draft),
+        });
+      }
+
+      // Snapshot the current active Claude Code provider's env so a future re-enable can restore it.
+      const prevActive = activeProviderKeys["claude-code"];
+      if (shouldApplyClaudeCode && prevActive && prevActive !== draft.key) {
         await invoke("snapshot_provider_context", {
           providerKey: prevActive,
           envKeys: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
@@ -523,33 +669,41 @@ export function MaasRegistryView() {
         });
       }
 
-      if (draft.key === "anthropic-subscription") {
-        // OAuth flow: clear token + base url, set the OAuth flag
-        await invoke("update_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" });
-        await invoke("delete_settings_env", { envKey: "ANTHROPIC_AUTH_TOKEN" }).catch(() => {});
-        await invoke("delete_settings_env", { envKey: "ANTHROPIC_BASE_URL" }).catch(() => {});
-        await invoke("delete_settings_env", { envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL" }).catch(() => {});
-      } else {
-        await invoke("update_settings_env", {
-          envKey: "ANTHROPIC_BASE_URL",
-          envValue: draft.baseUrl.trim(),
-        });
-        await invoke("update_settings_env", {
-          envKey: "ANTHROPIC_AUTH_TOKEN",
-          envValue: draft.authToken.trim(),
-        });
-        await invoke("update_settings_env", {
-          envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
-          envValue: pickVerifyModel(draft),
-        });
-        await invoke("delete_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH" }).catch(() => {});
+      if (shouldApplyClaudeCode) {
+        if (draft.key === "anthropic-subscription") {
+          // OAuth flow: clear token + base url, set the OAuth flag.
+          await invoke("update_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" });
+          await invoke("delete_settings_env", { envKey: "ANTHROPIC_AUTH_TOKEN" }).catch(() => {});
+          await invoke("delete_settings_env", { envKey: "ANTHROPIC_BASE_URL" }).catch(() => {});
+          await invoke("delete_settings_env", { envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL" }).catch(() => {});
+        } else {
+          await invoke("update_settings_env", {
+            envKey: "ANTHROPIC_BASE_URL",
+            envValue: draft.baseUrl.trim(),
+          });
+          await invoke("update_settings_env", {
+            envKey: "ANTHROPIC_AUTH_TOKEN",
+            envValue: draft.authToken.trim(),
+          });
+          await invoke("update_settings_env", {
+            envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            envValue: pickVerifyModel(draft),
+          });
+          await invoke("delete_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH" }).catch(() => {});
+        }
       }
 
-      await invoke("update_settings_field", {
-        field: "lovcode",
-        value: { activeProvider: draft.key },
+      const nextActiveProviders: Partial<Record<MaasRuntimeId, string>> = {
+        ...activeProviderKeys,
+      };
+      for (const runtimeId of effectiveRuntimeIds) {
+        nextActiveProviders[runtimeId] = draft.key;
+      }
+      await persistLovcodeSettings({
+        activeProvider: nextActiveProviders["claude-code"] ?? getLegacyActiveProvider(settings?.raw),
+        activeProviders: nextActiveProviders,
+        maasEnableRuntimes: selectedRuntimeIds,
       });
-      queryClient.invalidateQueries({ queryKey: ["settings"] });
       setError(null);
     } catch (e) {
       setError(`Failed to enable: ${e}`);
@@ -609,14 +763,16 @@ export function MaasRegistryView() {
               const custom = registry.filter((p) => !BUILTIN_PROVIDER_KEYS.has(p.key));
               const renderItem = (p: MaasProvider) => {
                 const isSelected = !isNew && selectedKey === p.key;
-                const isActive = activeProviderKey === p.key;
+                const activeRuntimeIds = getProviderActiveRuntimeIds(p.key);
+                const isActive = activeRuntimeIds.length > 0;
+                const activeRuntimeLabel = formatRuntimeLabels(activeRuntimeIds);
                 const isComingSoon = COMING_SOON_PROVIDERS.has(p.key);
                 const verifyStatus = getProviderVerifyStatus(p);
                 const isOAuth = p.key === "anthropic-subscription";
                 const hasToken = p.authToken.trim().length > 0 || isOAuth;
                 const tooltipParts: string[] = [];
                 if (isComingSoon) tooltipParts.push("Integration coming soon");
-                if (isActive) tooltipParts.push("Active — currently used by Claude Code");
+                if (isActive) tooltipParts.push(`Active for ${activeRuntimeLabel}`);
                 if (verifyStatus.verified) {
                   tooltipParts.push(
                     `Verified at ${new Date(verifyStatus.at).toLocaleString()}`,
@@ -626,47 +782,49 @@ export function MaasRegistryView() {
                 }
                 const tooltip = tooltipParts.join("\n") || undefined;
                 return (
-                  <button
-                    key={p.key}
-                    onClick={() => handleSelectProvider(p.key)}
-                    className={`text-left px-3 py-2 rounded-lg border transition-colors ${
-                      isSelected
-                        ? "border-primary bg-primary/10"
-                        : "border-border bg-card hover:bg-card-alt"
-                    } ${isComingSoon ? "opacity-60" : ""}`}
-                    title={tooltip}
-                  >
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <div className="text-sm font-medium text-foreground truncate flex-1">
-                        {p.label || p.key}
-                      </div>
-                      {isComingSoon ? (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 flex-shrink-0">
-                          Soon
-                        </span>
-                      ) : (
-                        <div className="flex items-center gap-1.5 flex-shrink-0">
-                          {/* Active is the dominant signal — full pill in primary terracotta */}
-                          {isActive && (
-                            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-primary text-primary-foreground">
-                              Active
-                            </span>
-                          )}
-                          {/* Subtle verify status: small icon only, no badge */}
-                          {verifyStatus.verified ? (
-                            <CheckIcon className="w-3.5 h-3.5 text-muted-foreground" />
-                          ) : hasToken ? (
-                            <ExclamationTriangleIcon className="w-3.5 h-3.5 text-amber-600" />
-                          ) : null}
+                  <HoverHint key={p.key} content={tooltip} className="block">
+                    <button
+                      onClick={() => handleSelectProvider(p.key)}
+                      className={`w-full text-left px-3 py-2 rounded-lg border transition-colors ${
+                        isSelected
+                          ? "border-primary bg-primary/10"
+                          : "border-border bg-card hover:bg-card-alt"
+                      } ${isComingSoon ? "opacity-60" : ""}`}
+                    >
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <div className="text-sm font-medium text-foreground truncate flex-1">
+                          {p.label || p.key}
                         </div>
-                      )}
-                    </div>
-                    <div className="text-xs text-muted-foreground truncate mt-0.5">
-                      {isComingSoon
-                        ? "Coming soon"
-                        : `${p.models.length} model${p.models.length === 1 ? "" : "s"}`}
-                    </div>
-                  </button>
+                        {isComingSoon ? (
+                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200 flex-shrink-0">
+                            Soon
+                          </span>
+                        ) : (
+                          <div className="flex items-center gap-1.5 flex-shrink-0">
+                            {/* Active is the dominant signal — full pill in primary terracotta */}
+                            {isActive && (
+                              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-primary text-primary-foreground">
+                                Active
+                              </span>
+                            )}
+                            {/* Subtle verify status: small icon only, no badge */}
+                            {verifyStatus.verified ? (
+                              <CheckIcon className="w-3.5 h-3.5 text-muted-foreground" />
+                            ) : hasToken ? (
+                              <ExclamationTriangleIcon className="w-3.5 h-3.5 text-amber-600" />
+                            ) : null}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-xs text-muted-foreground truncate mt-0.5">
+                        {isComingSoon
+                          ? "Coming soon"
+                          : isActive
+                            ? `Active for ${activeRuntimeLabel}`
+                          : `${p.models.length} model${p.models.length === 1 ? "" : "s"}`}
+                      </div>
+                    </button>
+                  </HoverHint>
                 );
               };
               const sectionHeader = (text: string) => (
@@ -812,26 +970,21 @@ export function MaasRegistryView() {
                       }}
                     />
                     <div className="absolute right-1.5 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                      <button
-                        type="button"
-                        onClick={() => setShowToken((v) => !v)}
-                        className="p-1.5 text-muted-foreground hover:text-foreground"
-                        title={showToken ? "Hide" : "Show full token"}
-                      >
-                        {showToken ? (
-                          <EyeClosedIcon className="w-4 h-4" />
-                        ) : (
-                          <EyeOpenIcon className="w-4 h-4" />
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={
-                          verifyState === "testing" ||
-                          (draft.key !== "anthropic-subscription" && !draft.authToken.trim())
-                        }
-                        onClick={handleVerifyToken}
-                        title={
+                      <HoverHint content={showToken ? "Hide" : "Show full token"}>
+                        <button
+                          type="button"
+                          onClick={() => setShowToken((v) => !v)}
+                          className="p-1.5 text-muted-foreground hover:text-foreground"
+                        >
+                          {showToken ? (
+                            <EyeClosedIcon className="w-4 h-4" />
+                          ) : (
+                            <EyeOpenIcon className="w-4 h-4" />
+                          )}
+                        </button>
+                      </HoverHint>
+                      <HoverHint
+                        content={
                           verifyState === "success"
                             ? `Verified — ${verifyMessage}`
                             : verifyState === "warning"
@@ -842,50 +995,80 @@ export function MaasRegistryView() {
                                   ? "Verifying..."
                                   : "Verify token by calling the provider's API"
                         }
-                        className={`p-1.5 rounded-md disabled:opacity-50 disabled:pointer-events-none ${
-                          verifyState === "success"
-                            ? "text-primary hover:bg-primary/10"
-                            : verifyState === "warning"
-                              ? "text-amber-600 hover:bg-amber-50"
-                              : verifyState === "error"
-                                ? "text-red-600 hover:bg-red-50"
-                                : "text-muted-foreground hover:text-foreground hover:bg-card-alt"
-                        }`}
                       >
-                        {verifyState === "testing" ? (
-                          <ReloadIcon className="w-4 h-4 animate-spin" />
-                        ) : verifyState === "success" ? (
-                          <CheckIcon className="w-4 h-4" />
-                        ) : verifyState === "warning" ? (
-                          <ExclamationTriangleIcon className="w-4 h-4" />
-                        ) : verifyState === "error" ? (
-                          <Cross2Icon className="w-4 h-4" />
-                        ) : (
-                          <LightningBoltIcon className="w-4 h-4" />
-                        )}
-                      </button>
+                        <button
+                          type="button"
+                          disabled={
+                            verifyState === "testing" ||
+                            (draft.key !== "anthropic-subscription" && !draft.authToken.trim())
+                          }
+                          onClick={handleVerifyToken}
+                          className={`p-1.5 rounded-md disabled:opacity-50 disabled:pointer-events-none ${
+                            verifyState === "success"
+                              ? "text-primary hover:bg-primary/10"
+                              : verifyState === "warning"
+                                ? "text-amber-600 hover:bg-amber-50"
+                                : verifyState === "error"
+                                  ? "text-red-600 hover:bg-red-50"
+                                  : "text-muted-foreground hover:text-foreground hover:bg-card-alt"
+                          }`}
+                        >
+                          {verifyState === "testing" ? (
+                            <ReloadIcon className="w-4 h-4 animate-spin" />
+                          ) : verifyState === "success" ? (
+                            <CheckIcon className="w-4 h-4" />
+                          ) : verifyState === "warning" ? (
+                            <ExclamationTriangleIcon className="w-4 h-4" />
+                          ) : verifyState === "error" ? (
+                            <Cross2Icon className="w-4 h-4" />
+                          ) : (
+                            <LightningBoltIcon className="w-4 h-4" />
+                          )}
+                        </button>
+                      </HoverHint>
                     </div>
                   </div>
                   {(verifyState === "error" || verifyState === "warning") && verifyMessage && (
-                    <p
-                      className={`text-xs break-all ${
-                        verifyState === "warning" ? "text-amber-700" : "text-red-600"
-                      }`}
-                      title={verifyMessage}
-                    >
-                      {verifyMessage}
-                    </p>
+                    <HoverHint content={verifyMessage} className="block">
+                      <p
+                        className={`text-xs break-all ${
+                          verifyState === "warning" ? "text-amber-700" : "text-red-600"
+                        }`}
+                      >
+                        {verifyMessage}
+                      </p>
+                    </HoverHint>
                   )}
                 </div>
               </div>
 
               {(() => {
-                const isActive = activeProviderKey === draft.key;
+                const activeRuntimeIds = getProviderActiveRuntimeIds(draft.key);
+                const availableRuntimeIds = MAAS_RUNTIME_OPTIONS.map((option) => option.id).filter((runtimeId) =>
+                  isProviderRuntimeAvailable(draft, runtimeId),
+                );
+                const effectiveSelectedRuntimeIds = selectedRuntimeIds.filter((runtimeId) =>
+                  availableRuntimeIds.includes(runtimeId),
+                );
+                const isActive = activeRuntimeIds.length > 0;
+                const isActiveForSelection =
+                  effectiveSelectedRuntimeIds.length > 0 &&
+                  effectiveSelectedRuntimeIds.every(
+                    (runtimeId) => activeProviderKeys[runtimeId] === draft.key,
+                  );
+                const activeRuntimeLabel = formatRuntimeLabels(activeRuntimeIds);
+                const selectedRuntimeLabel = formatRuntimeLabels(effectiveSelectedRuntimeIds);
+                const unavailableRuntimeMessages = MAAS_RUNTIME_OPTIONS.map((option) => {
+                  const reason = getRuntimeUnavailableReason(draft, option.id);
+                  return reason ? `${option.label}: ${reason}` : null;
+                }).filter((message): message is string => Boolean(message));
                 const verifyOk = getProviderVerifyStatus(draft).verified;
-                const reason = !verifyOk
+                const reason = effectiveSelectedRuntimeIds.length === 0
+                  ? "Select at least one runtime"
+                  : !verifyOk
                   ? "Verify the token first"
-                  : isActive
-                    ? "This provider is currently active"
+                  : isActiveForSelection
+                    ? "This provider is currently active for the selected runtime scope"
                     : "";
                 return (
                   <div
@@ -910,30 +1093,77 @@ export function MaasRegistryView() {
                       </div>
                       <span className="text-xs text-muted-foreground">
                         {isActive
-                          ? "Claude Code is using this provider for all requests."
+                          ? `${activeRuntimeLabel} ${activeRuntimeIds.length === 1 ? "is" : "are"} using this provider.`
                           : verifyOk
-                            ? "Set as Claude Code's active LLM provider."
+                            ? `Set as the active LLM provider for ${selectedRuntimeLabel || "selected runtimes"}.`
                             : "Verify the token first to unlock activation."}
                       </span>
                     </div>
-                    <Button
-                      className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
-                      disabled={isActive || !verifyOk}
-                      onClick={handleEnableProvider}
-                      title={reason || undefined}
-                    >
-                      {isActive ? (
-                        <>
-                          <CheckIcon className="w-4 h-4 mr-1.5" />
-                          Active
-                        </>
-                      ) : (
-                        <>
-                          <RocketIcon className="w-4 h-4 mr-1.5" />
-                          Enable
-                        </>
-                      )}
-                    </Button>
+                    <div className="grid grid-cols-2 gap-2">
+                      {MAAS_RUNTIME_OPTIONS.map((option) => {
+                        const unavailableReason = getRuntimeUnavailableReason(draft, option.id);
+                        const available = !unavailableReason;
+                        const checked = available && selectedRuntimeIds.includes(option.id);
+                        const runtimeActive = activeProviderKeys[option.id] === draft.key;
+                        return (
+                          <label
+                            key={option.id}
+                            className={`flex min-w-0 items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors ${
+                              checked
+                                ? "border-primary/50 bg-primary/5 text-foreground"
+                                : "border-border bg-card text-muted-foreground hover:bg-card-alt hover:text-foreground"
+                            } ${available ? "cursor-pointer" : "cursor-not-allowed opacity-50"}`}
+                          >
+                            <input
+                              type="checkbox"
+                              className="h-4 w-4 rounded border-border accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              checked={checked}
+                              disabled={!available}
+                              onChange={(e) =>
+                                handleRuntimeSelectionChange(option.id, e.currentTarget.checked)
+                              }
+                            />
+                            <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                            {!available && (
+                              <HoverHint content={unavailableReason}>
+                                <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                  Unavailable
+                                </span>
+                              </HoverHint>
+                            )}
+                            {runtimeActive && (
+                              <span className="shrink-0 rounded bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground">
+                                Active
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {unavailableRuntimeMessages.length > 0 && (
+                      <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                        {unavailableRuntimeMessages.join(" ")}
+                      </div>
+                    )}
+                    <HoverHint content={reason || undefined} className="block w-full">
+                      <Button
+                        className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground"
+                        disabled={isActiveForSelection || !verifyOk || effectiveSelectedRuntimeIds.length === 0}
+                        onClick={handleEnableProvider}
+                      >
+                        {isActiveForSelection ? (
+                          <>
+                            <CheckIcon className="w-4 h-4 mr-1.5" />
+                            Active
+                          </>
+                        ) : (
+                          <>
+                            <RocketIcon className="w-4 h-4 mr-1.5" />
+                            Enable
+                          </>
+                        )}
+                      </Button>
+                    </HoverHint>
                   </div>
                 );
               })()}
@@ -955,24 +1185,22 @@ export function MaasRegistryView() {
                   <Label className="text-xs text-muted-foreground">Vendors</Label>
                   <div className="flex flex-wrap gap-1.5">
                     {draft.vendors!.map((v) => (
-                      <span
-                        key={v.id}
-                        className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-card-alt text-xs"
-                        title={v.description ?? v.name}
-                      >
-                        {v.iconUrl && (
-                          <img
-                            src={v.iconUrl}
-                            alt=""
-                            className="w-3.5 h-3.5 rounded-sm flex-shrink-0"
-                            onError={(e) => {
-                              (e.currentTarget as HTMLImageElement).style.display = "none";
-                            }}
-                          />
-                        )}
-                        <span className="font-mono">{v.id}</span>
-                        {v.name !== v.id && <span className="text-muted-foreground">— {v.name}</span>}
-                      </span>
+                      <HoverHint key={v.id} content={v.description ?? v.name}>
+                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-card-alt text-xs">
+                          {v.iconUrl && (
+                            <img
+                              src={v.iconUrl}
+                              alt=""
+                              className="w-3.5 h-3.5 rounded-sm flex-shrink-0"
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).style.display = "none";
+                              }}
+                            />
+                          )}
+                          <span className="font-mono">{v.id}</span>
+                          {v.name !== v.id && <span className="text-muted-foreground">— {v.name}</span>}
+                        </span>
+                      </HoverHint>
                     ))}
                   </div>
                 </div>
@@ -1055,15 +1283,16 @@ export function MaasRegistryView() {
                           onChange={(e) => updateModel(idx, { modelName: e.target.value })}
                           onBlur={handleFieldBlur}
                         />
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-muted-foreground hover:text-red-600 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-                          onClick={() => removeModel(idx)}
-                          title="Remove model"
-                        >
-                          <TrashIcon className="w-3.5 h-3.5" />
-                        </Button>
+                        <HoverHint content="Remove model">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7 text-muted-foreground hover:text-red-600 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+                            onClick={() => removeModel(idx)}
+                          >
+                            <TrashIcon className="w-3.5 h-3.5" />
+                          </Button>
+                        </HoverHint>
                       </div>
                     ))}
                   </div>
@@ -1282,13 +1511,12 @@ export function MaasRegistryView() {
                               {fetchResult.models.map((m) => {
                                 const isExisting = existingIds.has(m.id);
                                 const isSelected = selectedFetchedIds.has(m.id);
-                                return (
+                                const row = (
                                   <label
                                     key={m.id}
                                     className={`grid grid-cols-[auto_8rem_6rem_1fr_1.5fr] gap-2 items-center text-xs px-2 py-1 border-t border-border first:border-t-0 cursor-pointer ${
                                       isExisting ? "opacity-50" : "hover:bg-card-alt"
                                     }`}
-                                    title={isExisting ? "Already in this provider" : ""}
                                   >
                                     <input
                                       type="checkbox"
@@ -1303,22 +1531,34 @@ export function MaasRegistryView() {
                                         });
                                       }}
                                     />
-                                    <span className="font-mono truncate" title={m.id}>
-                                      {m.id}
-                                    </span>
-                                    <span className="truncate text-muted-foreground" title={m.vendor ?? ""}>
-                                      {m.vendor ?? "—"}
-                                    </span>
-                                    <span className="truncate" title={m.displayName}>
-                                      {m.displayName}
-                                    </span>
-                                    <span
-                                      className="font-mono truncate text-muted-foreground"
-                                      title={m.modelName}
-                                    >
-                                      {m.modelName}
-                                    </span>
+                                    <HoverHint content={m.id} className="min-w-0">
+                                      <span className="block font-mono truncate">
+                                        {m.id}
+                                      </span>
+                                    </HoverHint>
+                                    <HoverHint content={m.vendor ?? undefined} className="min-w-0">
+                                      <span className="block truncate text-muted-foreground">
+                                        {m.vendor ?? "—"}
+                                      </span>
+                                    </HoverHint>
+                                    <HoverHint content={m.displayName} className="min-w-0">
+                                      <span className="block truncate">
+                                        {m.displayName}
+                                      </span>
+                                    </HoverHint>
+                                    <HoverHint content={m.modelName} className="min-w-0">
+                                      <span className="block font-mono truncate text-muted-foreground">
+                                        {m.modelName}
+                                      </span>
+                                    </HoverHint>
                                   </label>
+                                );
+                                return isExisting ? (
+                                  <HoverHint key={m.id} content="Already in this provider" className="block">
+                                    {row}
+                                  </HoverHint>
+                                ) : (
+                                  row
                                 );
                               })}
                             </div>

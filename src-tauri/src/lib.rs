@@ -642,6 +642,10 @@ fn get_lovstudio_dir() -> PathBuf {
         .join("lovcode")
 }
 
+fn get_lovcode_updater_settings_path() -> PathBuf {
+    get_lovstudio_dir().join("updater-settings.json")
+}
+
 fn get_disabled_env_path() -> PathBuf {
     get_lovstudio_dir().join("disabled_env.json")
 }
@@ -673,6 +677,10 @@ fn get_provider_contexts_path() -> PathBuf {
 
 fn get_agent_workspace_path() -> PathBuf {
     get_lovstudio_dir().join("agent-workspace.json")
+}
+
+fn get_agent_plain_chat_workspace_dir() -> PathBuf {
+    get_lovstudio_dir().join("general-chat")
 }
 
 fn get_agent_hook_dir() -> PathBuf {
@@ -9811,6 +9819,87 @@ fn delete_maas_provider(key: String) -> Result<Vec<MaasProvider>, String> {
     Ok(registry)
 }
 
+fn codex_maas_provider_id(provider_key: &str) -> String {
+    let mut normalized = String::new();
+    for ch in provider_key.chars() {
+        let ch = ch.to_ascii_lowercase();
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            normalized.push(ch);
+        } else {
+            normalized.push('-');
+        }
+    }
+    let normalized = normalized.trim_matches('-');
+    let suffix = if normalized.is_empty() {
+        "custom"
+    } else {
+        normalized
+    };
+    format!("lovcode-{}", suffix)
+}
+
+#[tauri::command]
+fn update_codex_maas_provider(provider: MaasProvider, model: String) -> Result<(), String> {
+    if provider.key == "anthropic-subscription" {
+        return Err("Anthropic Subscription OAuth is only available for Claude Code".to_string());
+    }
+
+    let base_url = provider.base_url.trim().trim_end_matches('/').to_string();
+    if base_url.is_empty() {
+        return Err("Codex requires a provider Base URL".to_string());
+    }
+
+    let auth_token = provider.auth_token.trim().to_string();
+    if auth_token.is_empty() {
+        return Err("Codex requires a provider token".to_string());
+    }
+
+    let config_path = get_codex_config_path();
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let content = if config_path.exists() {
+        fs::read_to_string(&config_path).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+    let mut doc = if content.trim().is_empty() {
+        toml_edit::DocumentMut::new()
+    } else {
+        content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("parse Codex config.toml: {}", e))?
+    };
+
+    let provider_id = codex_maas_provider_id(&provider.key);
+    doc["model_provider"] = toml_edit::value(provider_id.clone());
+
+    let model = model.trim();
+    if !model.is_empty() {
+        doc["model"] = toml_edit::value(model.to_string());
+    }
+
+    if !doc.as_table().contains_key("model_providers") || !doc["model_providers"].is_table() {
+        doc["model_providers"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    let mut provider_table = toml_edit::Table::new();
+    provider_table["name"] = toml_edit::value(if provider.label.trim().is_empty() {
+        provider.key.clone()
+    } else {
+        provider.label.trim().to_string()
+    });
+    provider_table["base_url"] = toml_edit::value(base_url);
+    provider_table["wire_api"] = toml_edit::value("chat");
+    provider_table["experimental_bearer_token"] = toml_edit::value(auth_token);
+    provider_table["requires_openai_auth"] = toml_edit::value(false);
+    doc["model_providers"][provider_id.as_str()] = toml_edit::Item::Table(provider_table);
+
+    fs::write(&config_path, doc.to_string()).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FetchParseResult {
@@ -11456,6 +11545,219 @@ fn set_claude_code_autoupdater(disabled: bool) -> Result<(), String> {
 }
 
 // ============================================================================
+// Lovcode Version Management
+// ============================================================================
+
+#[derive(Debug, Serialize)]
+struct LovcodeRelease {
+    version: String,
+    tag_name: String,
+    name: Option<String>,
+    published_at: Option<String>,
+    html_url: String,
+    body: Option<String>,
+    prerelease: bool,
+    draft: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct LovcodeVersionInfo {
+    current_version: String,
+    latest_version: Option<String>,
+    releases: Vec<LovcodeRelease>,
+    auto_update_enabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubRelease {
+    tag_name: String,
+    name: Option<String>,
+    published_at: Option<String>,
+    html_url: String,
+    body: Option<String>,
+    prerelease: bool,
+    draft: bool,
+}
+
+fn decode_xml_entities(input: &str) -> String {
+    input
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+}
+
+fn capture_first(input: &str, pattern: &str) -> Option<String> {
+    regex::Regex::new(pattern)
+        .ok()?
+        .captures(input)?
+        .get(1)
+        .map(|m| decode_xml_entities(m.as_str().trim()))
+}
+
+async fn fetch_lovcode_releases_from_api(
+    client: &reqwest::Client,
+) -> Result<Vec<LovcodeRelease>, String> {
+    let mut releases: Vec<LovcodeRelease> = Vec::new();
+
+    for page in 1..=10 {
+        let url = format!(
+            "https://api.github.com/repos/lovstudio/lovcode/releases?per_page=100&page={}",
+            page
+        );
+        let response = client
+            .get(&url)
+            .header("User-Agent", format!("lovcode/{}", env!("CARGO_PKG_VERSION")))
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .await
+            .map_err(|e| format!("Failed to fetch Lovcode releases: {}", e))?;
+
+        if !response.status().is_success() {
+            return Err(format!("GitHub API returned {}", response.status()));
+        }
+
+        let page_releases = response
+            .json::<Vec<GithubRelease>>()
+            .await
+            .map_err(|e| format!("Failed to parse Lovcode releases: {}", e))?;
+
+        if page_releases.is_empty() {
+            break;
+        }
+
+        let page_len = page_releases.len();
+        releases.extend(page_releases.into_iter().map(|release| LovcodeRelease {
+            version: release.tag_name.trim_start_matches('v').to_string(),
+            tag_name: release.tag_name,
+            name: release.name,
+            published_at: release.published_at,
+            html_url: release.html_url,
+            body: release.body,
+            prerelease: release.prerelease,
+            draft: release.draft,
+        }));
+
+        if page_len < 100 {
+            break;
+        }
+    }
+
+    Ok(releases)
+}
+
+async fn fetch_lovcode_releases_from_atom(
+    client: &reqwest::Client,
+) -> Result<Vec<LovcodeRelease>, String> {
+    let text = client
+        .get("https://github.com/lovstudio/lovcode/releases.atom")
+        .header("User-Agent", format!("lovcode/{}", env!("CARGO_PKG_VERSION")))
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch Lovcode releases feed: {}", e))?
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read Lovcode releases feed: {}", e))?;
+
+    let entry_re = regex::Regex::new(r"(?s)<entry>(.*?)</entry>").map_err(|e| e.to_string())?;
+    let mut releases = Vec::new();
+
+    for entry in entry_re.captures_iter(&text) {
+        let Some(entry) = entry.get(1).map(|m| m.as_str()) else {
+            continue;
+        };
+        let Some(tag_name) = capture_first(entry, r"(?s)<title>(.*?)</title>") else {
+            continue;
+        };
+        let html_url = capture_first(entry, r#"<link[^>]+href="([^"]+)""#)
+            .unwrap_or_else(|| format!("https://github.com/lovstudio/lovcode/releases/tag/{}", tag_name));
+        let published_at = capture_first(entry, r"(?s)<updated>(.*?)</updated>");
+        let body = capture_first(entry, r"(?s)<content(?:\s[^>]*)?>(.*?)</content>");
+        let prerelease = tag_name.contains('-');
+
+        releases.push(LovcodeRelease {
+            version: tag_name.trim_start_matches('v').to_string(),
+            tag_name: tag_name.clone(),
+            name: Some(tag_name),
+            published_at,
+            html_url,
+            body,
+            prerelease,
+            draft: false,
+        });
+    }
+
+    Ok(releases)
+}
+
+#[tauri::command]
+fn get_lovcode_autoupdater_enabled() -> Result<bool, String> {
+    let settings_path = get_lovcode_updater_settings_path();
+    if !settings_path.exists() {
+        return Ok(true);
+    }
+
+    let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+    let settings: Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    Ok(settings
+        .get("autoUpdateEnabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true))
+}
+
+#[tauri::command]
+fn set_lovcode_autoupdater(enabled: bool) -> Result<(), String> {
+    let settings_path = get_lovcode_updater_settings_path();
+    if let Some(parent) = settings_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    let mut settings: Value = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).map_err(|e| e.to_string())?;
+        serde_json::from_str(&content).unwrap_or_else(|_| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+
+    settings["autoUpdateEnabled"] = Value::Bool(enabled);
+    let content = serde_json::to_string_pretty(&settings).map_err(|e| e.to_string())?;
+    fs::write(&settings_path, content).map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_lovcode_version_info() -> Result<LovcodeVersionInfo, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(12))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let releases = match fetch_lovcode_releases_from_api(&client).await {
+        Ok(releases) => releases,
+        Err(api_error) => fetch_lovcode_releases_from_atom(&client)
+            .await
+            .map_err(|fallback_error| format!("{}; fallback failed: {}", api_error, fallback_error))?,
+    };
+
+    let latest_version = releases
+        .iter()
+        .find(|release| !release.draft && !release.prerelease)
+        .or_else(|| releases.iter().find(|release| !release.draft))
+        .map(|release| release.version.clone());
+
+    let auto_update_enabled = get_lovcode_autoupdater_enabled()?;
+
+    Ok(LovcodeVersionInfo {
+        current_version: env!("CARGO_PKG_VERSION").to_string(),
+        latest_version,
+        releases,
+        auto_update_enabled,
+    })
+}
+
+// ============================================================================
 // PTY Terminal Commands
 // ============================================================================
 
@@ -11524,6 +11826,13 @@ fn pty_flush_scrollback() {
 #[tauri::command]
 fn get_agent_workspace_file_path() -> String {
     get_agent_workspace_path().to_string_lossy().to_string()
+}
+
+#[tauri::command]
+fn get_agent_plain_chat_workspace_path() -> Result<String, String> {
+    let path = get_agent_plain_chat_workspace_dir();
+    fs::create_dir_all(&path).map_err(|e| e.to_string())?;
+    Ok(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -14020,6 +14329,7 @@ pub fn run() {
             save_maas_registry,
             upsert_maas_provider,
             delete_maas_provider,
+            update_codex_maas_provider,
             fetch_and_parse_maas_models,
             update_settings_field,
             update_settings_permission_field,
@@ -14063,6 +14373,9 @@ pub fn run() {
             install_claude_code_version,
             cancel_claude_code_install,
             set_claude_code_autoupdater,
+            get_lovcode_version_info,
+            get_lovcode_autoupdater_enabled,
+            set_lovcode_autoupdater,
             // PTY commands
             pty_create,
             pty_write,
@@ -14076,6 +14389,7 @@ pub fn run() {
             pty_flush_scrollback,
             // Agent workspace commands
             get_agent_workspace_file_path,
+            get_agent_plain_chat_workspace_path,
             get_agent_workspace_state,
             save_agent_workspace_state,
             ensure_agent_workspace_hooks,

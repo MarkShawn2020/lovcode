@@ -35,6 +35,10 @@
 
 ## Release Highlights
 
+### v0.35.0 — General Chat, Version Manager, and Codex MaaS
+
+The agent workbench can now start general chat sessions without first selecting a project, while the composer exposes recent project paths and a clearer CLI picker for faster session setup. Lovcode also adds a status-bar version manager with release history, manual update checks, auto-update controls, and direct release links. MaaS providers can now be activated separately for Claude Code and Codex, including Codex `config.toml` provider updates for API-key providers.
+
 ### v0.34.0 — Agent Workbench and Codex History
 
 Lovcode now has an agent workbench for launching Claude Code, Codex, and terminal sessions from a selected project, with persistent workspace state, project/session environment scripts, and hook-based activity tracking. Codex rollout sessions are indexed alongside Claude history with a dedicated Codex filter, usage extraction, resume support, and live updates from `~/.codex/sessions`. File and document previews now support multi-tab file previews, ZIP archive browsing, unsupported binary/document fallbacks, Markdown frontmatter, and remote/local image rendering.
@@ -49,6 +53,7 @@ Local paths in prompts and chat messages now open inside Lovcode with a resizabl
 
 | Version | Highlights |
 |---------|------------|
+| **0.35.0** | General chat sessions can start without a selected project; the agent composer now offers recent project paths and a compact CLI picker; the status bar opens a Lovcode version manager with release history, manual update checks, auto-update controls, and release links; MaaS provider activation can target Claude Code and Codex separately, writing Codex provider settings into `config.toml` |
 | **0.34.0** | Agent Workbench launches Claude Code, Codex, and terminal sessions with persistent state; project/session environment scripts can be saved and run from Lovcode; Claude and Codex hooks track activity; Codex rollout sessions are indexed with filtering, usage extraction, resume support, and live updates; file previews now support tabs, ZIP browsing, unsupported-format fallbacks, and richer Markdown/image rendering |
 | **0.33.0** | Skills management table with vendor/source filtering, ranking, install metadata, token estimates, and marketplace previews; shared MarkdownRenderer table/path support across marketplace and file previews; smart path routing offers candidate prefix paths for agent output files; FileViewer path navigation uses a compact Finder-style breadcrumb; tool-result images can open in the preview pane |
 | **0.32.0** | Inline file preview for local path links with line/column reveal, directory browsing, and resizable preview pane; prompt path detection handles `@src/file.tsx:line:column(selector)` style references; global search gains All / Full text / Session ID / Details modes; document reader sidebars are now resizable and persisted |
@@ -75,7 +80,7 @@ Local paths in prompts and chat messages now open inside Lovcode with a resizabl
 ## Features
 
 - **Dashboard** — Start from a cross-module overview of history, active agents, reusable commands, distilled knowledge, and recent project activity
-- **Agent Workbench** — Launch Claude Code, Codex, or a terminal in a selected project; track active/archived sessions, unread/review states, and session activity
+- **Agent Workbench** — Launch Claude Code, Codex, or a terminal in a selected project or general chat workspace; track active/archived sessions, unread/review states, and session activity
 - **Environment Scripts** — Save project/session setup, cleanup, and custom runtime actions, then run them in an embedded terminal dock
 - **Chat History Viewer** — Browse and search Claude and Codex conversation history across all projects with scoped full-text, session ID, and metadata search modes
 - **Granular Data Sources** — Switch between `cli` (Claude Code), `codex`, `app-code`, `app-web`, and `app-cowork` with source filters
@@ -87,12 +92,12 @@ Local paths in prompts and chat messages now open inside Lovcode with a resizabl
 - **Live Context-Window Readout** — Session detail footer shows the active model, provider, and peak context-window occupancy (input + cache_read + cache_creation) per round
 - **Structured Content Blocks** — Tool calls, thinking, grouped tool results, and generated images render as first-class blocks with preview support
 - **Sidebar with Pinned / Recent / Import** — Tri-state Pinned toggle mirrored to Claude desktop `starredIds`; Algolia-style ⌘K search
-- **MaaS Registry** — Manage custom Model-as-a-Service providers with vendor/model hierarchy, inline tokens, Verify fingerprinting, and remote model-list pull (`/settings/maas`)
+- **MaaS Registry** — Manage custom Model-as-a-Service providers with vendor/model hierarchy, inline tokens, Verify fingerprinting, remote model-list pull, and separate Claude Code / Codex activation scopes (`/settings/maas`)
 - **Inline Model Picker** — Switch active provider · vendor · model from the chat input footer; MRU remembers your last 5 picks across sessions
 - **Commands / MCP / Skills / Hooks / Sub-Agents / Output Styles** — Full configuration surface for the Claude Code ecosystem
 - **Skills Manager** — Sort, rank, filter, preview, and inspect installed skills with vendor/source metadata, install timestamps, and token estimates
 - **Marketplace** — Browse and install community templates with shared Markdown table rendering and smart local-path links
-- **Customizable Statusbar** — Personalize your statusbar display with scripts
+- **Customizable Statusbar** — Personalize your statusbar display with scripts and open Lovcode version management from the app version indicator
 
 ## oh-my-lovcode
 
@@ -130,11 +135,11 @@ pnpm tauri build
 ## Usage
 
 1. Launch Lovcode
-2. Start on **Dashboard** for a cross-module overview, or open **Workbench** to launch a Claude Code, Codex, or terminal session in a project
+2. Start on **Dashboard** for a cross-module overview, or open **Workbench** to launch a Claude Code, Codex, terminal, or general chat session
 3. Use **History** to browse sessions; source filters include `cli`, `codex`, `app-code`, `app-web`, and `app-cowork`
 4. Open a session: tool calls, thinking, GFM tables, code blocks, and linked file previews render inline; reply at the bottom to continue
 5. Live-sync claude.ai web chats from your logged-in browser, or import a `.zip` / folder export
-6. Manage commands, MCP servers, skills, hooks, sub-agents, output styles, runtime environments, and MaaS providers under **Configuration**
+6. Manage commands, MCP servers, skills, hooks, sub-agents, output styles, runtime environments, and MaaS providers under **Configuration**; MaaS activation can target Claude Code and Codex independently
 7. Visit **Marketplace** to discover community templates
 
 ## Tech Stack

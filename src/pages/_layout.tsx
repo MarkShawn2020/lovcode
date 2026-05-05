@@ -10,6 +10,7 @@ import { PersonIcon } from "@radix-ui/react-icons";
 import { GlobalHeader } from "../components/GlobalHeader";
 import { GlobalChatSearch } from "../components/GlobalChatSearch";
 import { StatusBar } from "../components/StatusBar";
+import { UpdateChecker } from "../components/UpdateChecker";
 import { ChatFilePreviewProvider } from "../views/Chat/FilePreviewContext";
 import { setAutoCopyOnSelect, getAutoCopyOnSelect } from "../components/Terminal";
 import { Switch } from "../components/ui/switch";
@@ -222,6 +223,7 @@ export default function RootLayout() {
       <AppSettingsDialog open={showSettings} onClose={() => setShowSettings(false)} />
       <ProfileDialog open={showProfileDialog} onClose={() => setShowProfileDialog(false)} profile={profile} onSave={setProfile} />
       <GlobalChatSearch />
+      <UpdateChecker />
     </AppConfigContext.Provider>
   );
 }

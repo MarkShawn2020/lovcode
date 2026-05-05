@@ -55,7 +55,7 @@ export function DialogContent({ children, className = "" }: DialogContentProps) 
   if (!context.open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
+    <div className="fixed inset-0 z-50 flex items-start justify-center p-4 sm:items-center">
       {/* Overlay */}
       <div
         className="fixed inset-0 bg-black/50 animate-in fade-in-0"
@@ -65,8 +65,8 @@ export function DialogContent({ children, className = "" }: DialogContentProps) 
       {/* Content */}
       <div
         className={`
-          relative z-50 grid w-full max-w-lg gap-4 border border-border
-          bg-background p-6 shadow-lg duration-200
+          relative z-50 grid max-h-[calc(100vh-2rem)] w-full max-w-lg gap-4
+          overflow-y-auto border border-border bg-background p-6 shadow-lg duration-200
           animate-in fade-in-0 zoom-in-95 sm:rounded-lg
           ${className}
         `}

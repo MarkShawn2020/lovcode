@@ -2103,6 +2103,37 @@ function buildAgentCommand(
   return prompt ? `${head} "${escape(prompt)}"` : head;
 }
 
+type MaasRuntimeId = "claude-code" | "codex";
+const MAAS_RUNTIME_IDS: MaasRuntimeId[] = ["claude-code", "codex"];
+
+function getLovcodeSettings(raw: Record<string, unknown> | null | undefined): Record<string, unknown> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const lovcode = raw.lovcode;
+  return lovcode && typeof lovcode === "object" && !Array.isArray(lovcode)
+    ? (lovcode as Record<string, unknown>)
+    : {};
+}
+
+function getActiveProviderKeysByRuntime(
+  raw: Record<string, unknown> | null | undefined,
+): Partial<Record<MaasRuntimeId, string>> {
+  const lovcode = getLovcodeSettings(raw);
+  const activeProviders =
+    lovcode.activeProviders && typeof lovcode.activeProviders === "object" && !Array.isArray(lovcode.activeProviders)
+      ? (lovcode.activeProviders as Record<string, unknown>)
+      : {};
+  const result: Partial<Record<MaasRuntimeId, string>> = {};
+  for (const runtimeId of MAAS_RUNTIME_IDS) {
+    const value = activeProviders[runtimeId];
+    if (typeof value === "string" && value) result[runtimeId] = value;
+  }
+  const legacy = lovcode.activeProvider;
+  if (typeof legacy === "string" && legacy && !result["claude-code"]) {
+    result["claude-code"] = legacy;
+  }
+  return result;
+}
+
 /** Owns the global Platform/Model selection. Reads from MaaS Registry +
  *  ~/.claude/settings.json; writes flow back through Tauri. Hook so both
  *  composers can drop in the picker without duplicating state. */
@@ -2118,14 +2149,8 @@ function useMaasActiveSelection() {
     "get_settings",
   );
 
-  const activeProviderKey: string | null = (() => {
-    const raw = claudeSettings?.raw;
-    if (!raw || typeof raw !== "object") return null;
-    const lovcode = (raw as Record<string, unknown>).lovcode;
-    if (!lovcode || typeof lovcode !== "object") return null;
-    const v = (lovcode as Record<string, unknown>).activeProvider;
-    return typeof v === "string" ? v : null;
-  })();
+  const activeProviderKeys = getActiveProviderKeysByRuntime(claudeSettings?.raw);
+  const activeProviderKey = activeProviderKeys["claude-code"] ?? null;
   const activeModelName: string | null = (() => {
     const raw = claudeSettings?.raw;
     if (!raw || typeof raw !== "object") return null;
@@ -2174,9 +2199,21 @@ function useMaasActiveSelection() {
         });
         await invoke("delete_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH" }).catch(() => {});
       }
+      const latestSettings = await invoke<import("../../types").ClaudeSettings>("get_settings").catch(
+        () => claudeSettings,
+      );
+      const latestRaw = latestSettings?.raw ?? claudeSettings?.raw;
+      const latestActiveProviderKeys = getActiveProviderKeysByRuntime(latestRaw);
       await invoke("update_settings_field", {
         field: "lovcode",
-        value: { activeProvider: provider.key },
+        value: {
+          ...getLovcodeSettings(latestRaw),
+          activeProvider: provider.key,
+          activeProviders: {
+            ...latestActiveProviderKeys,
+            "claude-code": provider.key,
+          },
+        },
       });
       queryClient.invalidateQueries({ queryKey: ["settings"] });
 

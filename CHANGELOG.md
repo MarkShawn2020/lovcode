@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.35.0
+
+### Minor Changes
+
+- Add general chat sessions in the agent workbench, a Lovcode version manager with release history and update controls, and Codex MaaS provider activation.
+
 ## 0.34.0
 
 ### Minor Changes
