@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.36.0
+
+### Minor Changes
+
+- Add localized workspace controls, session handoff utilities, Lab/Wish Room entry points, Lovstudio-authenticated feedback tickets, and cached release refresh support.
+
 ## 0.35.1
 
 ### Patch Changes
