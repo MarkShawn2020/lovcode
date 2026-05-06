@@ -1,5 +1,6 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { Cross2Icon } from "@radix-ui/react-icons";
+import { useI18n } from "@/i18n";
 
 interface DialogContextValue {
   open: boolean;
@@ -50,6 +51,7 @@ interface DialogContentProps {
 
 export function DialogContent({ children, className = "" }: DialogContentProps) {
   const context = useContext(DialogContext);
+  const { t } = useI18n();
   if (!context) throw new Error("DialogContent must be used within Dialog");
 
   if (!context.open) return null;
@@ -79,7 +81,7 @@ export function DialogContent({ children, className = "" }: DialogContentProps) 
             focus:ring-ring focus:ring-offset-2"
         >
           <Cross2Icon className="h-4 w-4" />
-          <span className="sr-only">Close</span>
+          <span className="sr-only">{t("common.close")}</span>
         </button>
       </div>
     </div>

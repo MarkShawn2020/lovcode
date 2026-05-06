@@ -11,6 +11,7 @@ import { globalChatSearchHotkeyAtom } from "../store";
 import type { Session } from "../types";
 import { useReadableText, formatDate } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
+import { useI18n } from "@/i18n";
 
 export const chatSearchOpenAtom = atom(false);
 
@@ -205,6 +206,7 @@ function SearchModal({
   onClose: () => void;
 }) {
   const [activeIdx, setActiveIdx] = useState(0);
+  const { t } = useI18n();
 
   useEffect(() => { setActiveIdx(0); }, [query, results.length]);
 
@@ -240,7 +242,7 @@ function SearchModal({
             type="text"
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
-            placeholder={indexReady ? "Search conversations..." : "Building search index..."}
+            placeholder={indexReady ? t("chat.searchConversations") : t("chat.buildingSearchIndex")}
             className="flex-1 bg-transparent text-sm text-ink placeholder:text-muted-foreground focus:outline-none"
           />
           {searching && <span className="text-xs text-muted-foreground">...</span>}
@@ -250,14 +252,14 @@ function SearchModal({
         <div className="max-h-[60vh] overflow-y-auto">
           {!query.trim() ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
-              Type to search across all conversations
+              {t("chat.typeToSearch")}
             </div>
           ) : results.length === 0 && !searching ? (
-            <div className="px-4 py-8 text-center text-sm text-muted-foreground">No results</div>
+            <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t("common.noResults")}</div>
           ) : (
             <div className="py-1">
               {results.map((s, i) => {
-                const title = s.title || toReadable(s.summary) || "Untitled";
+                const title = s.title || toReadable(s.summary) || t("common.untitled");
                 const projectName = s.project_path?.split("/").pop() ?? "";
                 const isActive = i === activeIdx;
                 return (
@@ -282,7 +284,7 @@ function SearchModal({
                     </div>
                     <div className="shrink-0 flex flex-col items-end gap-0.5 text-[10px] text-muted-foreground tabular-nums">
                       <span>{formatDate(s.last_modified)}</span>
-                      <span title={`${s.message_count} messages total`}>{s.rounds} rounds</span>
+                      <span title={t("chat.messagesTotal", { count: s.message_count })}>{t("chat.rounds", { count: s.rounds })}</span>
                     </div>
                   </button>
                 );
@@ -295,15 +297,15 @@ function SearchModal({
           <span className="flex items-center gap-1">
             <kbd className="font-mono px-1 rounded border border-border bg-card-alt">↑</kbd>
             <kbd className="font-mono px-1 rounded border border-border bg-card-alt">↓</kbd>
-            navigate
+            {t("chat.navigate")}
           </span>
           <span className="flex items-center gap-1">
             <kbd className="font-mono px-1 rounded border border-border bg-card-alt">↵</kbd>
-            open
+            {t("chat.open")}
           </span>
           <span className="flex items-center gap-1">
             <kbd className="font-mono px-1 rounded border border-border bg-card-alt">esc</kbd>
-            close
+            {t("common.close").toLowerCase()}
           </span>
         </div>
       </div>

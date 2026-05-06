@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { PanelBottomClose, Square, Terminal, X } from "lucide-react";
 import { TerminalPane } from "@/components/Terminal";
+import { useI18n } from "@/i18n";
 
 export interface EnvironmentTerminalSession {
   ptyId: string;
@@ -36,6 +37,7 @@ export function EnvironmentTerminalDock({
   onExit,
   onClose,
 }: EnvironmentTerminalDockProps) {
+  const { t } = useI18n();
   const [height, setHeight] = useState(TERMINAL_HEIGHT_DEFAULT);
   const dragStateRef = useRef<{ startY: number; startHeight: number } | null>(null);
 
@@ -89,10 +91,10 @@ export function EnvironmentTerminalDock({
         type="button"
         onClick={onShow}
         className="absolute bottom-4 right-5 z-30 inline-flex h-10 items-center gap-2 rounded-xl border border-border bg-card px-3 text-sm font-medium text-foreground shadow-lg transition-colors hover:bg-card-alt"
-        title="Show environment terminal"
+        title={t("environment.showTerminal")}
       >
         <Terminal className="h-4 w-4 text-primary" />
-        {session.running ? "Environment running" : "Environment terminal"}
+        {session.running ? t("environment.running") : t("environment.terminal")}
       </button>
     );
   }
@@ -105,7 +107,7 @@ export function EnvironmentTerminalDock({
         onPointerUp={onResizeEnd}
         onPointerCancel={onResizeEnd}
         className="absolute inset-x-0 top-0 z-10 h-1.5 cursor-ns-resize transition-colors hover:bg-primary/40 active:bg-primary/60"
-        title="Drag to resize"
+        title={t("environment.dragToResize")}
       />
       <div className="flex items-center justify-between gap-3 border-b border-border bg-card px-3 py-2">
         <div className="flex min-w-0 items-center gap-2">
@@ -123,8 +125,8 @@ export function EnvironmentTerminalDock({
               type="button"
               onClick={stop}
               className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
-              title="Stop"
-              aria-label="Stop"
+              title={t("environment.stop")}
+              aria-label={t("environment.stop")}
             >
               <Square className="h-4 w-4" />
             </button>
@@ -133,8 +135,8 @@ export function EnvironmentTerminalDock({
             type="button"
             onClick={onHide}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
-            title="Hide terminal"
-            aria-label="Hide terminal"
+            title={t("environment.hideTerminal")}
+            aria-label={t("environment.hideTerminal")}
           >
             <PanelBottomClose className="h-4 w-4" />
           </button>
@@ -142,8 +144,8 @@ export function EnvironmentTerminalDock({
             type="button"
             onClick={onClose}
             className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
-            title="Close terminal"
-            aria-label="Close terminal"
+            title={t("environment.closeTerminal")}
+            aria-label={t("environment.closeTerminal")}
           >
             <X className="h-4 w-4" />
           </button>

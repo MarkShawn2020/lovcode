@@ -1,26 +1,28 @@
 /**
  * MCP Detail Page (marketplace only for now)
  */
+import { useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
-import { useQuery } from "@tanstack/react-query";
 import type { TemplatesCatalog } from "../../types";
 import { TemplateDetailView } from "../../views/Marketplace";
 import { FeaturesLayout } from "../../views/Features";
 import { LoadingState } from "../../components/config";
+import { queryKeys, useInvokeQuery } from "../../hooks";
 
 export default function McpDetailPage() {
   const { name } = useParams<{ name: string }>();
   const navigate = useNavigate();
 
-  const { data: template, isLoading } = useQuery({
-    queryKey: ["marketplaceMcp", name],
-    queryFn: async () => {
-      const catalog = await invoke<TemplatesCatalog>("get_templates_catalog");
-      return catalog.mcps?.find(t => t.name === name) ?? null;
-    },
-    enabled: !!name,
-  });
+  const { data: catalog, isLoading } = useInvokeQuery<TemplatesCatalog>(
+    queryKeys.templatesCatalog,
+    "get_templates_catalog",
+    undefined,
+    { enabled: !!name },
+  );
+  const template = useMemo(
+    () => catalog?.mcps?.find((item) => item.name === name) ?? null,
+    [catalog, name],
+  );
 
   if (isLoading) {
     return (

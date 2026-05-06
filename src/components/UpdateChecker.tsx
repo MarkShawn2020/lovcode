@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { atom, useAtom } from "jotai";
-import { invoke } from "@tauri-apps/api/core";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
 import { RefreshCw, X } from "lucide-react";
+import { queryKeys, useInvokeQuery } from "../hooks";
+import { useI18n } from "@/i18n";
 
 export type UpdateStage = "checking" | "latest" | "available" | "downloading" | "done" | "error" | "disabled";
 
@@ -32,10 +33,16 @@ export function requestUpdateAction(action: UpdateAction) {
 
 export function UpdateChecker() {
   const [state, setState] = useAtom(updateStateAtom);
+  const { t } = useI18n();
   const [progress, setProgress] = useState(0);
   const [dismissed, setDismissed] = useState(false);
+  const { data: autoUpdateEnabled = true, isLoading: loadingAutoUpdate } = useInvokeQuery<boolean>(
+    queryKeys.lovcodeAutoupdaterEnabled,
+    "get_lovcode_autoupdater_enabled",
+  );
 
   const checkId = useRef(0);
+  const initialCheckStartedRef = useRef(false);
 
   const runCheck = useCallback(async (manual = true) => {
     const currentCheckId = checkId.current + 1;
@@ -46,7 +53,6 @@ export function UpdateChecker() {
     setState({ stage: "checking", update: null, error: "" });
 
     if (!manual) {
-      const autoUpdateEnabled = await invoke<boolean>("get_lovcode_autoupdater_enabled").catch(() => true);
       if (!autoUpdateEnabled) {
         if (checkId.current !== currentCheckId) return;
         setState({ stage: "disabled", update: null, error: "" });
@@ -81,13 +87,16 @@ export function UpdateChecker() {
         console.error("[UpdateChecker]", e);
         setState({ stage: "error", update: null, error: msg });
       });
-  }, [setState]);
+  }, [autoUpdateEnabled, setState]);
 
   const { stage, update, error } = state;
 
   useEffect(() => {
-    runCheck(false);
-  }, [runCheck]);
+    if (!loadingAutoUpdate && !initialCheckStartedRef.current) {
+      initialCheckStartedRef.current = true;
+      runCheck(false);
+    }
+  }, [loadingAutoUpdate, runCheck]);
 
   const handleUpdate = useCallback(async () => {
     if (!update) return;
@@ -152,10 +161,10 @@ export function UpdateChecker() {
   if (!canShow || dismissed) return null;
 
   const title = stage === "error"
-    ? "Update Check Failed"
+    ? t("updates.notificationFailed")
     : stage === "done"
-      ? "Update Installed"
-      : "Update Available";
+      ? t("updates.notificationInstalled")
+      : t("updates.notificationAvailable");
 
   return (
     <div className="fixed bottom-4 right-4 z-50 w-80 bg-card border border-border rounded-xl shadow-lg p-4 space-y-3">
@@ -174,7 +183,7 @@ export function UpdateChecker() {
           <button
             onClick={() => setDismissed(true)}
             className="text-muted-foreground hover:text-foreground shrink-0"
-            aria-label="Dismiss update notification"
+            aria-label={t("updates.dismissNotification")}
           >
             <X className="w-4 h-4" />
           </button>
@@ -197,18 +206,18 @@ export function UpdateChecker() {
       <div className="flex justify-end gap-2">
         {stage === "available" && (
           <Button size="sm" onClick={handleUpdate}>
-            Update Now
+            {t("updates.updateNow")}
           </Button>
         )}
         {stage === "done" && (
           <Button size="sm" onClick={handleRelaunch}>
-            Relaunch
+            {t("updates.relaunch")}
           </Button>
         )}
         {stage === "error" && (
           <Button size="sm" variant="outline" onClick={() => runCheck()}>
             <RefreshCw className="w-3.5 h-3.5" />
-            Retry
+            {t("common.retry")}
           </Button>
         )}
       </div>

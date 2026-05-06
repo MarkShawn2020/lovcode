@@ -55,6 +55,7 @@ import { DraggableCommandItem } from "./DraggableCommandItem";
 import { DroppableFolder } from "./DroppableFolder";
 import { RootDropZone } from "./RootDropZone";
 import { CommandItemCard } from "./CommandItemCard";
+import { useI18n } from "@/i18n";
 
 interface CommandsViewProps {
   onSelect: (cmd: LocalCommand, scrollToChangelog?: boolean) => void;
@@ -65,6 +66,7 @@ export function CommandsView({
   onSelect,
   onMarketplaceSelect,
 }: CommandsViewProps) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const { data: commands = [], isLoading } = useInvokeQuery<LocalCommand[]>(["commands"], "list_local_commands");
   const { data: commandStats = {} } = useInvokeQuery<Record<string, number>>(["commandStats"], "get_command_stats");
@@ -382,19 +384,19 @@ export function CommandsView({
   return (
     <ConfigPage>
       <PageHeader
-        title="Commands"
-        subtitle={`${activeCount} active, ${deprecatedCount} deprecated`}
+        title={t("commands.title")}
+        subtitle={t("commands.subtitle", { active: activeCount, deprecated: deprecatedCount })}
       />
 
       <Tabs defaultValue="installed" className="flex-1 flex flex-col">
         <TabsList className="bg-card-alt border border-border">
-          <TabsTrigger value="installed">已安装</TabsTrigger>
-          <TabsTrigger value="marketplace">市场</TabsTrigger>
+          <TabsTrigger value="installed">{t("common.installed")}</TabsTrigger>
+          <TabsTrigger value="marketplace">{t("common.marketplace")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="installed" className="mt-4 space-y-4">
           {isLoading ? (
-            <LoadingState message="Loading commands..." />
+            <LoadingState message={t("commands.loading")} />
           ) : (
             <>
               {/* Command Trend Chart */}
@@ -406,7 +408,7 @@ export function CommandsView({
 
               <div className="flex items-center gap-3">
                 <SearchInput
-                  placeholder="Search installed commands..."
+                  placeholder={t("commands.searchInstalled")}
                   value={search}
                   onChange={setSearch}
                   className="flex-1 px-4 py-2 bg-card border border-border rounded-lg text-ink placeholder:text-muted-foreground focus:outline-none focus:border-primary"
@@ -418,33 +420,33 @@ export function CommandsView({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="w-44">
-                    <DropdownMenuLabel className="text-xs">View</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-xs">{t("commands.view")}</DropdownMenuLabel>
                     <DropdownMenuRadioGroup
                       value={viewMode}
                       onValueChange={(v) => setViewMode(v as "flat" | "tree")}
                     >
                       <DropdownMenuRadioItem value="tree">
-                        <FolderTree className="w-4 h-4 mr-2" /> Tree
+                        <FolderTree className="w-4 h-4 mr-2" /> {t("commands.tree")}
                       </DropdownMenuRadioItem>
                       <DropdownMenuRadioItem value="flat">
-                        <List className="w-4 h-4 mr-2" /> Flat
+                        <List className="w-4 h-4 mr-2" /> {t("commands.flat")}
                       </DropdownMenuRadioItem>
                     </DropdownMenuRadioGroup>
                     <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-xs">Sort</DropdownMenuLabel>
+                    <DropdownMenuLabel className="text-xs">{t("commands.sort")}</DropdownMenuLabel>
                     <DropdownMenuItem onClick={() => toggleSort("usage")}>
                       {sortKey === "usage" && <CheckIcon className="w-4 h-4 mr-2" />}
                       {sortKey !== "usage" && <span className="w-4 mr-2" />}
-                      Usage {sortKey === "usage" && (sortDir === "desc" ? "↓" : "↑")}
+                      {t("commands.usage")} {sortKey === "usage" && (sortDir === "desc" ? "↓" : "↑")}
                     </DropdownMenuItem>
                     <DropdownMenuItem onClick={() => toggleSort("name")}>
                       {sortKey === "name" && <CheckIcon className="w-4 h-4 mr-2" />}
                       {sortKey !== "name" && <span className="w-4 mr-2" />}
-                      Name {sortKey === "name" && (sortDir === "desc" ? "↓" : "↑")}
+                      {t("common.name")} {sortKey === "name" && (sortDir === "desc" ? "↓" : "↑")}
                     </DropdownMenuItem>
                     <DropdownMenuSeparator />
                     <DropdownMenuCheckboxItem checked={showDeprecated} onCheckedChange={setShowDeprecated}>
-                      Show deprecated
+                      {t("commands.showDeprecated")}
                     </DropdownMenuCheckboxItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -485,13 +487,13 @@ export function CommandsView({
               {statusFiltered.length === 0 && !search && (
                 <EmptyState
                   icon={LightningBoltIcon}
-                  message="No commands installed"
-                  hint="Browse marketplace to install commands"
+                  message={t("commands.noInstalled")}
+                  hint={t("commands.installHint")}
                 />
               )}
 
               {statusFiltered.length === 0 && search && (
-                <p className="text-muted-foreground text-sm">No commands match "{search}"</p>
+                <p className="text-muted-foreground text-sm">{t("commands.noMatch", { search })}</p>
               )}
             </>
           )}
@@ -505,15 +507,14 @@ export function CommandsView({
       <Dialog open={deprecateDialogOpen} onOpenChange={setDeprecateDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Deprecate {selectedCommand?.name}</DialogTitle>
+            <DialogTitle>{t("commands.deprecateTitle", { name: selectedCommand?.name ?? "" })}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <p className="text-sm text-muted-foreground">
-              This will move the file to <code>~/.claude/.commands/archived/</code>, outside the
-              commands directory so Claude Code won't load it.
+              {t("commands.deprecateDescription")}
             </p>
             <div>
-              <Label htmlFor="replacement">Replacement command (optional)</Label>
+              <Label htmlFor="replacement">{t("commands.replacementCommand")}</Label>
               <Input
                 id="replacement"
                 placeholder="/new-command"
@@ -523,10 +524,10 @@ export function CommandsView({
               />
             </div>
             <div>
-              <Label htmlFor="deprecation-note">Note (optional)</Label>
+              <Label htmlFor="deprecation-note">{t("commands.noteOptional")}</Label>
               <Input
                 id="deprecation-note"
-                placeholder="Reason for deprecation..."
+                placeholder={t("commands.deprecationReasonPlaceholder")}
                 value={deprecationNote}
                 onChange={(e) => setDeprecationNote(e.target.value)}
                 className="mt-1"
@@ -535,10 +536,10 @@ export function CommandsView({
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setDeprecateDialogOpen(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button onClick={handleDeprecate} className="bg-amber-600 hover:bg-amber-700">
-              Deprecate
+              {t("commands.deprecate")}
             </Button>
           </div>
         </DialogContent>
@@ -547,7 +548,7 @@ export function CommandsView({
       <Dialog open={moveDialogOpen} onOpenChange={setMoveDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Move {selectedCommand?.name}</DialogTitle>
+            <DialogTitle>{t("commands.moveTitle", { name: selectedCommand?.name ?? "" })}</DialogTitle>
           </DialogHeader>
           {(() => {
             const getCurrentFolder = () => {
@@ -563,9 +564,9 @@ export function CommandsView({
             return (
               <div className="space-y-4 py-4">
                 <p className="text-sm text-muted-foreground">
-                  Current:{" "}
+                  {t("commands.currentFolder")}{" "}
                   <code className="bg-muted px-1 rounded font-mono">
-                    /{currentFolder || "(root)"}
+                    /{currentFolder || `(${t("commands.root")})`}
                   </code>
                 </p>
                 <div className="space-y-1 max-h-48 overflow-y-auto">
@@ -581,9 +582,9 @@ export function CommandsView({
                     }`}
                   >
                     <Folder className="w-4 h-4" />
-                    <span className="font-mono">/ (root)</span>
+                    <span className="font-mono">/ ({t("commands.root")})</span>
                     {currentFolder === "" && (
-                      <span className="text-xs text-muted-foreground ml-auto">(current)</span>
+                      <span className="text-xs text-muted-foreground ml-auto">({t("commands.currentBadge")})</span>
                     )}
                   </button>
                   {getFolders().map((folder) => {
@@ -604,14 +605,14 @@ export function CommandsView({
                         <Folder className="w-4 h-4" />
                         <span className="font-mono">/{folder}</span>
                         {isCurrent && (
-                          <span className="text-xs text-muted-foreground ml-auto">(current)</span>
+                          <span className="text-xs text-muted-foreground ml-auto">({t("commands.currentBadge")})</span>
                         )}
                       </button>
                     );
                   })}
                 </div>
                 <div>
-                  <Label htmlFor="move-new-folder">Or enter a new folder path:</Label>
+                  <Label htmlFor="move-new-folder">{t("commands.newFolderPath")}</Label>
                   <Input
                     id="move-new-folder"
                     placeholder="/new/folder/path"
@@ -625,7 +626,7 @@ export function CommandsView({
           })()}
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setMoveDialogOpen(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               onClick={() => selectedCommand && handleMove(selectedCommand, moveTargetFolder)}
@@ -640,7 +641,7 @@ export function CommandsView({
                 return moveTargetFolder === cur;
               })()}
             >
-              Move
+              {t("commands.move")}
             </Button>
           </div>
         </DialogContent>
@@ -655,11 +656,10 @@ export function CommandsView({
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create Directory?</DialogTitle>
+            <DialogTitle>{t("commands.createDirectoryTitle")}</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground py-4">
-            The directory <code className="bg-card-alt px-1 rounded">{pendingMove?.dirPath}</code>{" "}
-            does not exist. Create it?
+            {t("commands.createDirectoryQuestion", { path: pendingMove?.dirPath ?? "" })}
           </p>
           <div className="flex justify-end gap-2">
             <Button
@@ -669,9 +669,9 @@ export function CommandsView({
                 setPendingMove(null);
               }}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
-            <Button onClick={handleConfirmMoveCreateDir}>Create</Button>
+            <Button onClick={handleConfirmMoveCreateDir}>{t("common.create")}</Button>
           </div>
         </DialogContent>
       </Dialog>

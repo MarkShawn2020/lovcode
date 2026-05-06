@@ -34,6 +34,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { MarketplaceContent } from "../Marketplace";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
+import { useI18n } from "@/i18n";
 import {
   getSkillMarketplaceMeta,
   isMarketplaceLinkedSkill,
@@ -317,6 +318,7 @@ function getBestTemplateForSkill(
 }
 
 export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsViewProps) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const { data: skills = [], isLoading } = useInvokeQuery<LocalSkill[]>(["skills"], "list_local_skills");
   const { data: catalog, isLoading: catalogLoading } = useInvokeQuery<TemplatesCatalog>(
@@ -391,15 +393,15 @@ export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsView
     }
 
     const baseFilters: SourceFilter[] = [
-      { id: ALL_FILTER, label: "All", count: skills.length },
-      { id: MARKETPLACE_FILTER, label: "Marketplace", count: marketplaceLinkedCount },
-      { id: LOCAL_FILTER, label: "Local", count: localCount },
+      { id: ALL_FILTER, label: t("common.all"), count: skills.length },
+      { id: MARKETPLACE_FILTER, label: t("common.marketplace"), count: marketplaceLinkedCount },
+      { id: LOCAL_FILTER, label: t("common.local"), count: localCount },
     ];
 
     if (missingDescriptionCount > 0) {
       baseFilters.push({
         id: NEEDS_DESCRIPTION_FILTER,
-        label: "Needs description",
+        label: t("skills.needsDescription"),
         count: missingDescriptionCount,
       });
     }
@@ -412,7 +414,7 @@ export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsView
         return a.label.localeCompare(b.label);
       }),
     ];
-  }, [localCount, marketplaceLinkedCount, missingDescriptionCount, skills]);
+  }, [localCount, marketplaceLinkedCount, missingDescriptionCount, skills, t]);
 
   const vendorOptions = useMemo<VendorFilter[]>(() => {
     const vendorCounts = new Map<string, VendorFilter>();
@@ -429,14 +431,14 @@ export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsView
     }
 
     return [
-      { id: ALL_VENDOR_FILTER, label: "All vendors", count: skills.length },
+      { id: ALL_VENDOR_FILTER, label: t("skills.allVendors"), count: skills.length },
       ...Array.from(vendorCounts.values()).sort((a, b) => {
         const countDiff = b.count - a.count;
         if (countDiff !== 0) return countDiff;
         return a.label.localeCompare(b.label);
       }),
     ];
-  }, [skills]);
+  }, [skills, t]);
 
   const filteredSkills = useMemo(() => {
     return skills
@@ -544,7 +546,7 @@ export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsView
   };
 
   const handleUninstallSkill = async (skill: LocalSkill) => {
-    if (!window.confirm(`Uninstall ${skill.name}?`)) return;
+    if (!window.confirm(t("skills.confirmUninstall", { name: skill.name }))) return;
 
     setUninstallingName(skill.name);
     setActionError(null);
@@ -577,35 +579,38 @@ export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsView
       <header className="mb-6 space-y-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h1 className="font-serif text-3xl font-semibold text-foreground">Skills</h1>
+            <h1 className="font-serif text-3xl font-semibold text-foreground">{t("skills.title")}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {skills.length} installed across {skillHomeLabels.length > 0 ? skillHomeLabels.join(", ") : "agent skill homes"}
+              {t("skills.installedAcross", {
+                count: skills.length,
+                homes: skillHomeLabels.length > 0 ? skillHomeLabels.join(", ") : t("skills.agentSkillHomes"),
+              })}
             </p>
           </div>
           <Button onClick={() => setActiveTab("marketplace")} className="gap-2 rounded-lg">
             <Compass className="size-4" />
-            Browse Marketplace
+            {t("skills.browseMarketplace")}
           </Button>
         </div>
 
         <div className="grid gap-3 sm:grid-cols-3">
           <MetricCard
             icon={PackageCheck}
-            label="Installed"
+            label={t("common.installed")}
             value={skills.length}
-            detail={`${skillHomeLabels.length || 0} skill homes`}
+            detail={t("skills.skillHomes", { count: skillHomeLabels.length || 0 })}
           />
           <MetricCard
             icon={Compass}
-            label="Marketplace"
+            label={t("common.marketplace")}
             value={marketplaceTemplates.length}
-            detail={`${localCount} local skills`}
+            detail={t("skills.localSkills", { count: localCount })}
           />
           <MetricCard
             icon={Gauge}
-            label="Token Budget"
+            label={t("skills.tokenBudget")}
             value={tokenStats.overBudgetCount}
-            detail={`${formatTokenCount(tokenStats.discoveryTokens)} discovery tokens`}
+            detail={t("skills.discoveryTokens", { count: formatTokenCount(tokenStats.discoveryTokens) })}
           />
         </div>
       </header>
@@ -613,20 +618,20 @@ export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsView
       <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
         <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <TabsList className="bg-card-alt border border-border">
-            <TabsTrigger value="installed">已安装</TabsTrigger>
-            <TabsTrigger value="marketplace">市场</TabsTrigger>
+            <TabsTrigger value="installed">{t("common.installed")}</TabsTrigger>
+            <TabsTrigger value="marketplace">{t("common.marketplace")}</TabsTrigger>
           </TabsList>
           {activeTab === "installed" && (
             <p className="text-xs text-muted-foreground">
-              {sortedSkills.length} visible
-              {vendorFilter !== ALL_VENDOR_FILTER && ` · ${vendorOptions.find((filter) => filter.id === vendorFilter)?.label ?? "Vendor"}`}
+              {t("skills.visible", { count: sortedSkills.length })}
+              {vendorFilter !== ALL_VENDOR_FILTER && ` · ${vendorOptions.find((filter) => filter.id === vendorFilter)?.label ?? t("skills.vendor")}`}
             </p>
           )}
         </div>
 
         <TabsContent value="installed" className="mt-0">
           {isLoading ? (
-            <LoadingState message="Loading skills..." />
+            <LoadingState message={t("skills.loading")} />
           ) : (
             <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
               <main className="min-w-0 space-y-4">
@@ -637,34 +642,37 @@ export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsView
                       <Input
                         value={search}
                         onChange={(event) => setSearch(event.target.value)}
-                        placeholder="Search by name, source, description, or path..."
+                        placeholder={t("skills.searchPlaceholder")}
                         className="h-10 rounded-lg bg-background pl-9"
                       />
                     </div>
                     <div className="flex items-center gap-2 text-xs text-muted-foreground">
                       <Filter className="size-4" />
                       <span>
-                        {filterOptions.find((filter) => filter.id === sourceFilter)?.label ?? "Filtered"}
-                        {vendorFilter !== ALL_VENDOR_FILTER && ` · ${vendorOptions.find((filter) => filter.id === vendorFilter)?.label ?? "Vendor"}`}
+                        {filterOptions.find((filter) => filter.id === sourceFilter)?.label ?? t("skills.filtered")}
+                        {vendorFilter !== ALL_VENDOR_FILTER && ` · ${vendorOptions.find((filter) => filter.id === vendorFilter)?.label ?? t("skills.vendor")}`}
                       </span>
                     </div>
                   </div>
 
                   <div className="mt-3 rounded-lg bg-muted px-3 py-2 text-xs text-muted-foreground">
-                    Token estimates are approximate. Discovery is about {DISCOVERY_TOKEN_ESTIMATE} tokens per skill; triggered instructions should stay under {formatTokenCount(SKILL_INSTRUCTION_TOKEN_BUDGET)} tokens for compaction safety.
-                    {missingDescriptionCount > 0 && ` ${missingDescriptionCount} skills are missing descriptions.`}
-                    {tokenStats.nearBudgetCount > 0 && ` ${tokenStats.nearBudgetCount} skills are near the 5k budget.`}
+                    {t("skills.tokenEstimateHelp", {
+                      discovery: DISCOVERY_TOKEN_ESTIMATE,
+                      budget: formatTokenCount(SKILL_INSTRUCTION_TOKEN_BUDGET),
+                    })}
+                    {missingDescriptionCount > 0 && ` ${t("skills.missingDescriptions", { count: missingDescriptionCount })}`}
+                    {tokenStats.nearBudgetCount > 0 && ` ${t("skills.nearBudget", { count: tokenStats.nearBudgetCount })}`}
                   </div>
 
                   <div className="mt-3 space-y-3 border-t border-border pt-3">
                     <FilterChipGroup
-                      label="Sources"
+                      label={t("skills.sources")}
                       options={filterOptions}
                       activeId={sourceFilter}
                       onSelect={setSourceFilter}
                     />
                     <FilterChipGroup
-                      label="Vendors"
+                      label={t("skills.vendors")}
                       options={vendorOptions}
                       activeId={vendorFilter}
                       onSelect={setVendorFilter}
@@ -698,16 +706,16 @@ export function SkillsView({ onSelectTemplate, onMarketplaceSelect }: SkillsView
                 {sortedSkills.length === 0 && !search && (
                   <EmptyState
                     icon={BookOpen}
-                    message="No skills installed"
-                    hint="Browse marketplace to install skills"
+                    message={t("skills.noInstalled")}
+                    hint={t("skills.installHint")}
                   />
                 )}
 
                 {sortedSkills.length === 0 && search && (
                   <EmptyState
                     icon={Search}
-                    message={`No installed skills match "${search}"`}
-                    hint="Try another keyword or clear filters"
+                    message={t("skills.noMatch", { search })}
+                    hint={t("skills.tryAnotherKeyword")}
                   />
                 )}
               </main>
@@ -836,18 +844,20 @@ function SkillTable({
   onCopyPath: (path: string) => void;
   onUninstall: (skill: LocalSkill) => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <section className="overflow-hidden rounded-xl border border-border bg-card">
       <div className="hidden grid-cols-[56px_minmax(240px,1fr)_140px_118px_92px_110px_72px_92px_80px] gap-3 border-b border-border bg-muted/50 px-3 py-2 text-xs uppercase tracking-wide text-muted-foreground lg:grid">
-        <span>Rank</span>
-        <SortHeader label="Skill" sortKey="name" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
-        <SortHeader label="Vendor" sortKey="vendor" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
-        <SortHeader label="Installed" sortKey="installed" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
-        <SortHeader label="Discovery" sortKey="discovery" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
-        <SortHeader label="Triggered" sortKey="triggered" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
-        <SortHeader label="Lines" sortKey="lines" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
-        <SortHeader label="Status" sortKey="status" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
-        <span className="text-right">Actions</span>
+        <span>{t("skills.rank")}</span>
+        <SortHeader label={t("skills.title")} sortKey="name" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
+        <SortHeader label={t("skills.vendor")} sortKey="vendor" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
+        <SortHeader label={t("common.installed")} sortKey="installed" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
+        <SortHeader label={t("skills.discovery")} sortKey="discovery" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
+        <SortHeader label={t("skills.triggered")} sortKey="triggered" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
+        <SortHeader label={t("skills.lines")} sortKey="lines" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
+        <SortHeader label={t("common.status")} sortKey="status" activeKey={sortKey} sortDir={sortDir} onSort={onSort} />
+        <span className="text-right">{t("skills.actions")}</span>
       </div>
 
       {skills.map((skill, index) => (
@@ -923,6 +933,7 @@ function SkillRow({
   onCopyPath: (path: string) => void;
   onUninstall: (skill: LocalSkill) => void;
 }) {
+  const { t, translate } = useI18n();
   const meta = getSkillMarketplaceMeta(skill);
   const sourceLabel = getSkillSourceLabel(skill);
   const vendor = getSkillVendor(skill);
@@ -954,7 +965,7 @@ function SkillRow({
           )}
           {meta?.downloads != null && (
             <span className="text-xs text-muted-foreground">
-              {meta.downloads} downloads
+              {t("skills.downloads", { count: meta.downloads })}
             </span>
           )}
         </div>
@@ -962,7 +973,7 @@ function SkillRow({
         {skill.description ? (
           <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{skill.description}</p>
         ) : (
-          <p className="mt-1 text-sm text-muted-foreground">No description</p>
+          <p className="mt-1 text-sm text-muted-foreground">{t("skills.noDescription")}</p>
         )}
 
         <p className="mt-2 truncate font-mono text-xs text-muted-foreground">
@@ -971,7 +982,7 @@ function SkillRow({
       </button>
 
       <div>
-        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground lg:hidden">Vendor</p>
+        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground lg:hidden">{t("skills.vendor")}</p>
         <p className="truncate text-sm text-foreground" title={vendor}>{vendor}</p>
         {author && author !== vendor && (
           <p className="truncate text-xs text-muted-foreground" title={author}>{author}</p>
@@ -982,27 +993,27 @@ function SkillRow({
       </div>
 
       <div>
-        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground lg:hidden">Installed</p>
+        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground lg:hidden">{t("common.installed")}</p>
         <p className="font-mono text-sm text-foreground" title={installedAt ? new Date(installedAt).toLocaleString() : undefined}>
           {formatInstallTime(installedAt)}
         </p>
       </div>
 
       <TokenCell
-        label="Discovery"
+        label={t("skills.discovery")}
         value={`~${formatTokenCount(tokenMetrics.discoveryTokens)}`}
-        title="Approximate startup metadata budget from name and description"
+        title={t("skills.metadataBudgetTitle")}
       />
       <TokenCell
-        label="Triggered"
+        label={t("skills.triggered")}
         value={`~${formatTokenCount(tokenMetrics.instructionTokens)}`}
-        title="Approximate SKILL.md body tokens loaded when the skill is invoked"
+        title={t("skills.bodyTokensTitle")}
       />
-      <TokenCell label="Lines" value={String(tokenMetrics.lineCount)} />
+      <TokenCell label={t("skills.lines")} value={String(tokenMetrics.lineCount)} />
       <div>
-        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground lg:hidden">Status</p>
+        <p className="mb-1 text-xs uppercase tracking-wide text-muted-foreground lg:hidden">{t("common.status")}</p>
         <span className={`inline-flex rounded-lg border px-2 py-1 text-xs ${statusClass}`}>
-          {tokenMetrics.statusLabel}
+          {translate(tokenMetrics.statusLabel)}
         </span>
       </div>
 
@@ -1013,8 +1024,8 @@ function SkillRow({
             variant="ghost"
             size="icon"
             className="h-8 w-8 rounded-lg"
-            title="Open marketplace version"
-            aria-label="Open marketplace version"
+            title={t("skills.openMarketplaceVersion")}
+            aria-label={t("skills.openMarketplaceVersion")}
             onClick={() => onMarketplaceSelect(marketplaceTemplate)}
           >
             <ArrowUpRight className="size-4" />
@@ -1028,8 +1039,8 @@ function SkillRow({
               variant="ghost"
               size="icon"
               className="h-8 w-8 rounded-lg"
-              title="Skill actions"
-              aria-label="Skill actions"
+              title={t("skills.skillActions")}
+              aria-label={t("skills.skillActions")}
             >
               <MoreHorizontal className="size-4" />
             </Button>
@@ -1037,20 +1048,20 @@ function SkillRow({
           <DropdownMenuContent align="end" className="w-48">
             <DropdownMenuItem onClick={() => onOpenInEditor(skill.path)}>
               <FileText className="size-4" />
-              Open in Editor
+              {t("common.openInEditor")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onRevealPath(skill.path)}>
               <ExternalLink className="size-4" />
-              Reveal in Finder
+              {t("fileViewer.revealInFinder")}
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onCopyPath(skill.path)}>
               <Copy className="size-4" />
-              Copy Path
+              {t("common.copyPath")}
             </DropdownMenuItem>
             {marketplaceTemplate && (
               <DropdownMenuItem onClick={() => onMarketplaceSelect(marketplaceTemplate)}>
                 <Compass className="size-4" />
-                Marketplace Version
+                {t("skills.marketplaceVersion")}
               </DropdownMenuItem>
             )}
             <DropdownMenuSeparator />
@@ -1060,7 +1071,7 @@ function SkillRow({
               className="text-destructive focus:text-destructive"
             >
               <Trash2 className="size-4" />
-              {uninstalling ? "Uninstalling..." : "Uninstall"}
+              {uninstalling ? t("skills.uninstalling") : t("skills.uninstall")}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1103,15 +1114,17 @@ function MarketplaceAssistPanel({
   onQuickInstall: (template: TemplateComponent) => void;
   onBrowseAll: () => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
           <h2 className="font-serif text-lg font-semibold text-foreground">
-            {search ? "Marketplace matches" : "Suggested skills"}
+            {search ? t("skills.marketplaceMatches") : t("skills.suggestedSkills")}
           </h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            {search ? "Not installed yet" : "Available to install"}
+            {search ? t("skills.notInstalledYet") : t("skills.availableToInstall")}
           </p>
         </div>
         <Button
@@ -1122,18 +1135,18 @@ function MarketplaceAssistPanel({
           onClick={onBrowseAll}
         >
           <Compass className="size-4" />
-          Browse
+          {t("skills.browse")}
         </Button>
       </div>
 
       <div className="mt-4 space-y-3">
         {isLoading && (
-          <p className="text-sm text-muted-foreground">Loading marketplace...</p>
+          <p className="text-sm text-muted-foreground">{t("skills.loadingMarketplace")}</p>
         )}
 
         {!isLoading && templates.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            {search ? "No marketplace matches for this search." : "No marketplace skills available."}
+            {search ? t("skills.noMarketplaceMatches") : t("skills.noMarketplaceAvailable")}
           </p>
         )}
 
@@ -1162,6 +1175,8 @@ function MarketplaceSuggestion({
   onPreview: (template: TemplateComponent) => void;
   onQuickInstall: (template: TemplateComponent) => void;
 }) {
+  const { t } = useI18n();
+
   return (
     <div className="border-t border-border pt-3 first:border-t-0 first:pt-0">
       <button onClick={() => onPreview(template)} className="w-full text-left">
@@ -1176,7 +1191,7 @@ function MarketplaceSuggestion({
       <div className="mt-2 flex items-center justify-between gap-3">
         <p className="truncate text-xs text-muted-foreground">
           {getTemplateSourceLabel(template)}
-          {template.downloads != null ? ` · ${template.downloads} downloads` : ""}
+          {template.downloads != null ? ` · ${t("skills.downloads", { count: template.downloads })}` : ""}
         </p>
         <Button
           type="button"
@@ -1187,7 +1202,7 @@ function MarketplaceSuggestion({
           onClick={() => onQuickInstall(template)}
         >
           <Download className="size-3.5" />
-          {installing ? "Installing" : "Install"}
+          {installing ? t("skills.installing") : t("common.install")}
         </Button>
       </div>
     </div>
@@ -1195,13 +1210,15 @@ function MarketplaceSuggestion({
 }
 
 function SourceBreakdownPanel({ sources }: { sources: SourceFilter[] }) {
+  const { t } = useI18n();
+
   if (sources.length === 0) return null;
 
   return (
     <section className="rounded-xl border border-border bg-card p-4">
       <div className="mb-3 flex items-center gap-2">
         <Filter className="size-4 text-primary" />
-        <h2 className="font-serif text-lg font-semibold text-foreground">Sources</h2>
+        <h2 className="font-serif text-lg font-semibold text-foreground">{t("skills.sources")}</h2>
       </div>
       <div className="space-y-2">
         {sources.map((source) => (

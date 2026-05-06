@@ -1,5 +1,5 @@
 // App atoms
-export { sidebarCollapsedAtom, marketplaceCategoryAtom, shortenPathsAtom, profileAtom } from "./atoms/app";
+export { sidebarCollapsedAtom, marketplaceCategoryAtom, shortenPathsAtom } from "./atoms/app";
 
 // UI atoms
 export { selectedFileAtom, fileViewModeAtom, activePanelIdAtom, navigationStateAtom, viewAtom, viewHistoryAtom, historyIndexAtom } from "./atoms/ui";
@@ -25,7 +25,11 @@ export {
 } from "./atoms/chat";
 
 // Settings atoms
-export { globalChatSearchHotkeyAtom } from "./atoms/settings";
+export {
+  globalChatSearchHotkeyAtom,
+  composerSubmitShortcutAtom,
+  type ComposerSubmitShortcut,
+} from "./atoms/settings";
 
 // Commands atoms
 export {

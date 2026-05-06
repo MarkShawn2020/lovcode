@@ -3,14 +3,14 @@
  * - /skills/foo → installed skill
  * - /skills/foo?source=marketplace → marketplace template
  */
+import { useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
-import { useQuery } from "@tanstack/react-query";
 import type { LocalSkill, TemplatesCatalog } from "../../types";
 import { TemplateDetailView } from "../../views/Marketplace";
 import { FeaturesLayout } from "../../views/Features";
 import { LoadingState } from "../../components/config";
 import { skillToTemplate } from "../../views/Skills/skillTemplates";
+import { queryKeys, useInvokeQuery } from "../../hooks";
 
 export default function SkillDetailPage() {
   const { name } = useParams<{ name: string }>();
@@ -18,23 +18,27 @@ export default function SkillDetailPage() {
   const navigate = useNavigate();
   const isMarketplace = searchParams.get("source") === "marketplace";
 
-  const { data: localSkill, isLoading: localLoading } = useQuery({
-    queryKey: ["skill", name],
-    queryFn: async () => {
-      const skills = await invoke<LocalSkill[]>("list_local_skills");
-      return skills.find(s => s.name === name) ?? null;
-    },
-    enabled: !!name && !isMarketplace,
-  });
+  const { data: skills = [], isLoading: localLoading } = useInvokeQuery<LocalSkill[]>(
+    queryKeys.skills,
+    "list_local_skills",
+    undefined,
+    { enabled: !!name && !isMarketplace },
+  );
+  const localSkill = useMemo(
+    () => skills.find((skill) => skill.name === name) ?? null,
+    [name, skills],
+  );
 
-  const { data: marketplaceTemplate, isLoading: marketplaceLoading } = useQuery({
-    queryKey: ["marketplaceSkill", name],
-    queryFn: async () => {
-      const catalog = await invoke<TemplatesCatalog>("get_templates_catalog");
-      return catalog.skills?.find(t => t.name === name) ?? null;
-    },
-    enabled: !!name && isMarketplace,
-  });
+  const { data: catalog, isLoading: marketplaceLoading } = useInvokeQuery<TemplatesCatalog>(
+    queryKeys.templatesCatalog,
+    "get_templates_catalog",
+    undefined,
+    { enabled: !!name && isMarketplace },
+  );
+  const marketplaceTemplate = useMemo(
+    () => catalog?.skills?.find((template) => template.name === name) ?? null,
+    [catalog, name],
+  );
 
   const isLoading = isMarketplace ? marketplaceLoading : localLoading;
 

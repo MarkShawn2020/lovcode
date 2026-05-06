@@ -140,7 +140,7 @@ export function RelocateSessionDialog({ from, open, onOpenChange }: Props) {
               <div>
                 <div className="text-xs text-muted-foreground mb-1.5 flex items-center gap-1">
                   <FolderSearch className="w-3.5 h-3.5" />
-                  Spotlight 搜索结果
+                  候选目录
                   {analysis.candidates.length > 0 && (
                     <span className="opacity-70">({analysis.candidates.length})</span>
                   )}
@@ -167,9 +167,20 @@ export function RelocateSessionDialog({ from, open, onOpenChange }: Props) {
                             <FolderOpen className="w-3.5 h-3.5 mt-0.5 text-muted-foreground shrink-0" />
                           )}
                           <div className="min-w-0 flex-1">
-                            <div className="font-mono text-xs break-all">{c.path}</div>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-mono text-xs break-all">{c.path}</span>
+                              {c.source === "worktree-origin" && (
+                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-primary/10 text-primary border border-primary/30 shrink-0">
+                                  worktree 主项目
+                                </span>
+                              )}
+                            </div>
                             <div className="text-[10px] text-muted-foreground mt-0.5">
-                              {c.full_match ? "完整路径存在" : "仅根目录存在（tail 不匹配）"}
+                              {c.source === "worktree-origin"
+                                ? "推断为合并/删除前的原项目目录"
+                                : c.full_match
+                                ? "完整路径存在"
+                                : "仅根目录存在（tail 不匹配）"}
                               {migrating === c.path && " · 迁移中…"}
                             </div>
                           </div>

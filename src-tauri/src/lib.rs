@@ -180,6 +180,8 @@ pub struct AgentWorkspaceSession {
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_input: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submitted_prompt: Option<String>,
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_state: Option<String>,
@@ -222,6 +224,8 @@ pub struct AgentWorkspaceConversationMeta {
     pub unread: bool,
     #[serde(default)]
     pub needs_review: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_mode: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,6 +237,8 @@ pub struct AgentWorkspaceState {
     pub sessions: Vec<AgentWorkspaceSession>,
     #[serde(default)]
     pub conversation_meta: HashMap<String, AgentWorkspaceConversationMeta>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub global_environment: Option<AgentWorkspaceEnvironmentConfig>,
     #[serde(default)]
     pub project_environments: HashMap<String, AgentWorkspaceEnvironmentConfig>,
     #[serde(default)]
@@ -256,6 +262,8 @@ pub struct AgentWorkspaceSidebarState {
     pub sort_mode: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_worktrees: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub show_project_new_conversation: Option<bool>,
     #[serde(default)]
     pub collapsed_project_paths: Vec<String>,
     #[serde(default)]
@@ -309,6 +317,7 @@ impl Default for AgentWorkspaceState {
             version: default_agent_workspace_version(),
             sessions: Vec::new(),
             conversation_meta: HashMap::new(),
+            global_environment: None,
             project_environments: HashMap::new(),
             session_environments: HashMap::new(),
             sidebar: AgentWorkspaceSidebarState::default(),
@@ -423,6 +432,23 @@ pub struct Message {
     pub is_tool: bool, // tool_use 或 tool_result
     pub line_number: usize,
     pub content_blocks: Option<Vec<ContentBlock>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHandoff {
+    pub source_provider: String,
+    pub target_provider: String,
+    pub source_session_id: String,
+    pub source_project_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_title: Option<String>,
+    pub prompt: String,
+    pub message_count: usize,
+    pub included_message_count: usize,
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -628,9 +654,13 @@ fn get_preferred_skill_home() -> SkillHome {
 }
 
 fn find_skill_home(name: &str) -> Option<SkillHome> {
-    get_readable_skill_homes()
-        .into_iter()
-        .find(|home| home.path.join("skills").join(name).join("SKILL.md").exists())
+    get_readable_skill_homes().into_iter().find(|home| {
+        home.path
+            .join("skills")
+            .join(name)
+            .join("SKILL.md")
+            .exists()
+    })
 }
 
 fn system_time_to_millis(time: SystemTime) -> Option<u64> {
@@ -723,7 +753,9 @@ fn load_agent_workspace_state() -> Result<AgentWorkspaceState, String> {
     serde_json::from_str(&content).map_err(|e| e.to_string())
 }
 
-fn write_agent_workspace_state(mut state: AgentWorkspaceState) -> Result<AgentWorkspaceState, String> {
+fn write_agent_workspace_state(
+    mut state: AgentWorkspaceState,
+) -> Result<AgentWorkspaceState, String> {
     if state.version < default_agent_workspace_version() {
         state.version = default_agent_workspace_version();
     }
@@ -826,6 +858,90 @@ struct MaasProvider {
     /// decide whether the verified state is still valid.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     last_verified_token_hash: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeStatusComponent {
+    id: String,
+    name: String,
+    status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeStatusIncident {
+    id: String,
+    name: String,
+    status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    impact: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resolved_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    shortlink: Option<String>,
+    affected_components: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ClaudeRealtimeStatus {
+    page_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    page_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    indicator: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+    components: Vec<ClaudeStatusComponent>,
+    incidents: Vec<ClaudeStatusIncident>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ZenmuxRealtimeModel {
+    id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    display_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    owned_by: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    created_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context_length: Option<u64>,
+    input_modalities: Vec<String>,
+    output_modalities: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt_price: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completion_price: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ZenmuxRealtimeStatus {
+    fetched_at: String,
+    models: Vec<ZenmuxRealtimeModel>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MaasRealtimeStatus {
+    fetched_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claude: Option<ClaudeRealtimeStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    claude_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    zenmux: Option<ZenmuxRealtimeStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    zenmux_error: Option<String>,
 }
 
 fn get_maas_registry_path() -> PathBuf {
@@ -1829,7 +1945,8 @@ fn codex_function_arguments(payload: &serde_json::Value) -> serde_json::Value {
     let Some(arguments) = payload.get("arguments").and_then(|v| v.as_str()) else {
         return serde_json::Value::Null;
     };
-    serde_json::from_str(arguments).unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()))
+    serde_json::from_str(arguments)
+        .unwrap_or_else(|_| serde_json::Value::String(arguments.to_string()))
 }
 
 fn codex_tool_use_block(payload: &serde_json::Value) -> Option<ContentBlock> {
@@ -1863,9 +1980,14 @@ fn codex_custom_tool_use_block(payload: &serde_json::Value) -> Option<ContentBlo
         .or_else(|| payload.get("id").and_then(|v| v.as_str()))
         .unwrap_or("")
         .to_string();
-    let input_value = payload.get("input").cloned().unwrap_or(serde_json::Value::Null);
+    let input_value = payload
+        .get("input")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let parsed_input = match input_value.as_str() {
-        Some(s) => serde_json::from_str(s).unwrap_or_else(|_| serde_json::Value::String(s.to_string())),
+        Some(s) => {
+            serde_json::from_str(s).unwrap_or_else(|_| serde_json::Value::String(s.to_string()))
+        }
         None => input_value,
     };
     let summary = summarize_tool_input(&name, &parsed_input);
@@ -1987,10 +2109,7 @@ fn read_codex_session_head(path: &Path) -> CodexSessionHead {
         let Ok(parsed) = serde_json::from_str::<CodexRolloutLine>(&line) else {
             continue;
         };
-        let timestamp_secs = parsed
-            .timestamp
-            .as_deref()
-            .and_then(timestamp_to_secs);
+        let timestamp_secs = parsed.timestamp.as_deref().and_then(timestamp_to_secs);
         if head.created_at.is_none() {
             head.created_at = timestamp_secs;
         }
@@ -2234,6 +2353,301 @@ fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, String> {
     }
 
     Ok(messages)
+}
+
+fn parse_claude_session_messages(path: &Path) -> Result<Vec<Message>, String> {
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let mut messages = Vec::new();
+
+    for (idx, line) in content.lines().enumerate() {
+        if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+            let line_type = parsed.line_type.as_deref();
+            let is_msg_line = matches!(
+                line_type,
+                Some("user") | Some("assistant") | Some("message")
+            );
+            if !is_msg_line {
+                continue;
+            }
+            if let Some(msg) = &parsed.message {
+                let role = msg.role.clone().unwrap_or_default();
+                if role != "user" && role != "assistant" {
+                    continue;
+                }
+                let (content, is_tool) = extract_content_with_meta(&msg.content);
+                let content_blocks = extract_content_blocks(&msg.content);
+                let has_content_blocks = content_blocks
+                    .as_ref()
+                    .map(|blocks| !blocks.is_empty())
+                    .unwrap_or(false);
+                let display_content = if content.is_empty() {
+                    content_blocks
+                        .as_deref()
+                        .map(content_blocks_to_text)
+                        .unwrap_or_default()
+                } else {
+                    content
+                };
+                let is_meta = parsed.is_meta.unwrap_or(false);
+
+                if !display_content.is_empty() || has_content_blocks {
+                    messages.push(Message {
+                        uuid: parsed.uuid.unwrap_or_default(),
+                        role,
+                        content: display_content,
+                        timestamp: parsed.timestamp.unwrap_or_default(),
+                        is_meta,
+                        is_tool,
+                        line_number: idx + 1,
+                        content_blocks,
+                    });
+                }
+            }
+        }
+    }
+
+    Ok(messages)
+}
+
+const HANDOFF_HEAD_MESSAGES: usize = 4;
+const HANDOFF_TAIL_MESSAGES: usize = 36;
+const HANDOFF_MAX_TRANSCRIPT_CHARS: usize = 36_000;
+const HANDOFF_MAX_MESSAGE_CHARS: usize = 2_800;
+
+fn truncate_handoff_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut out = value
+        .chars()
+        .take(max_chars.saturating_sub(32))
+        .collect::<String>();
+    out.push_str("\n[truncated]");
+    out
+}
+
+fn is_reasoning_only_message(message: &Message) -> bool {
+    message.content_blocks.as_ref().is_some_and(|blocks| {
+        !blocks.is_empty()
+            && blocks
+                .iter()
+                .all(|block| matches!(block, ContentBlock::Thinking { .. }))
+    })
+}
+
+fn handoff_message_text(message: &Message) -> Option<String> {
+    if message.is_meta || is_reasoning_only_message(message) {
+        return None;
+    }
+    let content = message.content.trim();
+    if content.is_empty() {
+        return None;
+    }
+    let role = match message.role.as_str() {
+        "user" => "User",
+        "assistant" => "Assistant",
+        other => other,
+    };
+    let label = if message.is_tool {
+        format!("{} tool event", role)
+    } else {
+        role.to_string()
+    };
+    Some(format!(
+        "### {}\n{}",
+        label,
+        truncate_handoff_chars(content, HANDOFF_MAX_MESSAGE_CHARS)
+    ))
+}
+
+fn select_handoff_messages(messages: &[Message]) -> (Vec<&Message>, bool) {
+    let usable: Vec<&Message> = messages
+        .iter()
+        .filter(|m| handoff_message_text(m).is_some())
+        .collect();
+    if usable.len() <= HANDOFF_HEAD_MESSAGES + HANDOFF_TAIL_MESSAGES {
+        return (usable, false);
+    }
+    let mut selected = Vec::with_capacity(HANDOFF_HEAD_MESSAGES + HANDOFF_TAIL_MESSAGES);
+    selected.extend(usable.iter().take(HANDOFF_HEAD_MESSAGES).copied());
+    selected.extend(
+        usable
+            .iter()
+            .rev()
+            .take(HANDOFF_TAIL_MESSAGES)
+            .copied()
+            .rev(),
+    );
+    (selected, true)
+}
+
+fn build_handoff_transcript(messages: &[Message]) -> (String, usize, bool) {
+    let (selected, omitted_middle) = select_handoff_messages(messages);
+    let mut transcript = String::new();
+    let mut included = 0usize;
+    let mut truncated = omitted_middle;
+    let mut inserted_gap = false;
+
+    for (idx, message) in selected.iter().enumerate() {
+        if omitted_middle && !inserted_gap && idx == HANDOFF_HEAD_MESSAGES {
+            transcript.push_str("\n\n[Earlier and middle messages omitted. The following entries are the most recent context.]\n");
+            inserted_gap = true;
+        }
+        let Some(text) = handoff_message_text(message) else {
+            continue;
+        };
+        let separator_len = if transcript.is_empty() { 0 } else { 2 };
+        let next_len = transcript.chars().count() + separator_len + text.chars().count();
+        if next_len > HANDOFF_MAX_TRANSCRIPT_CHARS {
+            let used = transcript.chars().count() + separator_len;
+            if used < HANDOFF_MAX_TRANSCRIPT_CHARS {
+                if !transcript.is_empty() {
+                    transcript.push_str("\n\n");
+                }
+                transcript.push_str(&truncate_handoff_chars(
+                    &text,
+                    HANDOFF_MAX_TRANSCRIPT_CHARS - used,
+                ));
+                included += 1;
+            }
+            truncated = true;
+            break;
+        }
+        if !transcript.is_empty() {
+            transcript.push_str("\n\n");
+        }
+        transcript.push_str(&text);
+        included += 1;
+    }
+
+    (transcript, included, truncated)
+}
+
+fn source_provider_for_session_path(path: &Path) -> &'static str {
+    if is_codex_session_path(path) {
+        "codex"
+    } else {
+        "claude"
+    }
+}
+
+fn source_title_for_session_path(path: &Path) -> Option<String> {
+    if is_codex_session_path(path) {
+        let head = read_codex_session_head(path);
+        head.title.or(head.last_prompt)
+    } else {
+        let head = read_session_head(path, 20);
+        head.title.or(head.summary).or(head.last_prompt)
+    }
+}
+
+fn source_project_path_for_session_path(path: &Path) -> Option<String> {
+    if is_codex_session_path(path) {
+        read_codex_session_head(path).cwd
+    } else {
+        read_session_head(path, 20).cwd
+    }
+}
+
+fn build_session_handoff_prompt(
+    project_id: &str,
+    session_id: &str,
+    target_provider: &str,
+    user_prompt: Option<String>,
+) -> Result<SessionHandoff, String> {
+    if target_provider != "claude" && target_provider != "codex" {
+        return Err("targetProvider must be \"claude\" or \"codex\"".to_string());
+    }
+
+    let session_path = resolve_session_path(project_id, session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    let source_provider = source_provider_for_session_path(&session_path).to_string();
+    let source_title = source_title_for_session_path(&session_path);
+    let project_path = source_project_path_for_session_path(&session_path);
+    let messages = if is_codex_session_path(&session_path) {
+        parse_codex_rollout_messages(&session_path)?
+    } else {
+        parse_claude_session_messages(&session_path)?
+    };
+    let (transcript, included_message_count, truncated) = build_handoff_transcript(&messages);
+    let target_label = if target_provider == "codex" {
+        "Codex"
+    } else {
+        "Claude Code"
+    };
+    let source_label = if source_provider == "codex" {
+        "Codex"
+    } else {
+        "Claude Code"
+    };
+    let follow_up = user_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("Continue from the prior conversation context.");
+    let project_line = project_path.as_deref().unwrap_or("(unknown)");
+    let title_line = source_title.as_deref().unwrap_or("Untitled conversation");
+    let truncation_note = if truncated {
+        "\n- The transcript excerpt is truncated. Inspect the repository and original session file if you need more detail."
+    } else {
+        ""
+    };
+    let prompt = format!(
+        r#"# Cross-Agent Session Fork
+
+You are {target_label}, forking work from a {source_label} conversation into a new independent session. You cannot attach to the original session state directly; treat this fork context as prior context and use the current repository on disk as the source of truth.
+
+## Source Session
+- Source: {source_label}
+- Target: {target_label}
+- Session ID: {session_id}
+- Project ID: {project_id}
+- Project path: {project_line}
+- Title: {title_line}
+- Messages parsed: {message_count}
+- Messages included: {included_message_count}{truncation_note}
+
+## Follow-Up Request
+{follow_up}
+
+## Operating Notes
+- Verify file state before editing; the filesystem may have changed since the source session.
+- Preserve user changes and avoid reverting unrelated work.
+- Do not assume prior tool calls, terminals, approvals, or hidden model state are still active.
+- If context is ambiguous, inspect the repo and ask for clarification before making broad changes.
+
+## Prior Conversation Excerpt
+{transcript}
+"#,
+        target_label = target_label,
+        source_label = source_label,
+        session_id = session_id,
+        project_id = project_id,
+        project_line = project_line,
+        title_line = title_line,
+        message_count = messages.len(),
+        included_message_count = included_message_count,
+        truncation_note = truncation_note,
+        follow_up = follow_up,
+        transcript = if transcript.trim().is_empty() {
+            "(No readable transcript messages were found.)"
+        } else {
+            transcript.trim()
+        }
+    );
+
+    Ok(SessionHandoff {
+        source_provider,
+        target_provider: target_provider.to_string(),
+        source_session_id: session_id.to_string(),
+        source_project_id: project_id.to_string(),
+        project_path,
+        source_title,
+        prompt,
+        message_count: messages.len(),
+        included_message_count,
+        truncated,
+    })
 }
 
 fn build_codex_session(path: &Path) -> Option<Session> {
@@ -2886,13 +3300,31 @@ fn compute_all_sessions() -> Vec<Session> {
         };
         match by_id.get(&key) {
             Some(existing) => {
+                let existing_path_exists = existing
+                    .project_path
+                    .as_deref()
+                    .is_some_and(|path| Path::new(path).is_dir());
+                let new_path_exists = s
+                    .project_path
+                    .as_deref()
+                    .is_some_and(|path| Path::new(path).is_dir());
+                let app_metadata_upgrade =
+                    s.source.starts_with("app") && !existing.source.starts_with("app");
                 let take_new = s.rounds > existing.rounds
-                    || (s.source.starts_with("app") && !existing.source.starts_with("app"));
+                    || (app_metadata_upgrade && (new_path_exists || !existing_path_exists));
                 if take_new {
                     let merged = Session {
                         title: s.title.clone().or_else(|| existing.title.clone()),
                         summary: s.summary.clone().or_else(|| existing.summary.clone()),
                         ..s
+                    };
+                    by_id.insert(key, merged);
+                } else if app_metadata_upgrade {
+                    let merged = Session {
+                        title: s.title.clone().or_else(|| existing.title.clone()),
+                        summary: s.summary.clone().or_else(|| existing.summary.clone()),
+                        source: s.source.clone(),
+                        ..existing.clone()
                     };
                     by_id.insert(key, merged);
                 }
@@ -2952,6 +3384,22 @@ enum SessionStreamEvent {
     Done { total: usize },
 }
 
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionFileActivityRequest {
+    project_id: String,
+    session_id: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionFileActivity {
+    project_id: String,
+    session_id: String,
+    modified_at: u64,
+    size: u64,
+}
+
 /// Streamed variant of list_all_sessions. The Rust side still computes the
 /// full list (sorted), then ships it to the webview in 200-session batches
 /// over a Tauri Channel — each batch is a separate IPC message, so the
@@ -2974,6 +3422,61 @@ async fn list_all_sessions_streamed(on_event: Channel<SessionStreamEvent>) -> Re
     })
     .await
     .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_session_file_activity(
+    sessions: Vec<SessionFileActivityRequest>,
+) -> Result<Vec<SessionFileActivity>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut codex_paths_by_id: Option<HashMap<String, PathBuf>> = None;
+        let mut result = Vec::with_capacity(sessions.len());
+
+        for session in sessions {
+            let claude_path = get_session_path(&session.project_id, &session.session_id);
+            let path = if claude_path.exists() {
+                Some(claude_path)
+            } else {
+                if codex_paths_by_id.is_none() {
+                    codex_paths_by_id = Some(
+                        collect_codex_session_paths()
+                            .into_iter()
+                            .filter_map(|path| {
+                                codex_session_id_from_path(&path).map(|id| (id, path))
+                            })
+                            .collect(),
+                    );
+                }
+                codex_paths_by_id
+                    .as_ref()
+                    .and_then(|paths| paths.get(&session.session_id).cloned())
+            };
+
+            let Some(path) = path else {
+                continue;
+            };
+            let Ok(metadata) = fs::metadata(path) else {
+                continue;
+            };
+            let modified_at = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|duration| duration.as_millis() as u64)
+                .unwrap_or(0);
+
+            result.push(SessionFileActivity {
+                project_id: session.project_id,
+                session_id: session.session_id,
+                modified_at,
+                size: metadata.len(),
+            });
+        }
+
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Read Claude desktop app's "starredIds" (its name for pinned sessions) and
@@ -3349,60 +3852,21 @@ async fn get_session_messages(
         if is_codex_session_path(&session_path) {
             return parse_codex_rollout_messages(&session_path);
         }
+        parse_claude_session_messages(&session_path)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 
-        let content = fs::read_to_string(&session_path).map_err(|e| e.to_string())?;
-        let mut messages = Vec::new();
-
-        for (idx, line) in content.lines().enumerate() {
-            if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
-                let line_type = parsed.line_type.as_deref();
-                // Accept legacy CLI format (type=user|assistant) and Claude desktop
-                // app format (type=message wrapping a {role:user|assistant} payload).
-                let is_msg_line = matches!(
-                    line_type,
-                    Some("user") | Some("assistant") | Some("message")
-                );
-                if !is_msg_line {
-                    continue;
-                }
-                if let Some(msg) = &parsed.message {
-                    let role = msg.role.clone().unwrap_or_default();
-                    if role != "user" && role != "assistant" {
-                        continue;
-                    }
-                    let (content, is_tool) = extract_content_with_meta(&msg.content);
-                    let content_blocks = extract_content_blocks(&msg.content);
-                    let has_content_blocks = content_blocks
-                        .as_ref()
-                        .map(|blocks| !blocks.is_empty())
-                        .unwrap_or(false);
-                    let display_content = if content.is_empty() {
-                        content_blocks
-                            .as_deref()
-                            .map(content_blocks_to_text)
-                            .unwrap_or_default()
-                    } else {
-                        content
-                    };
-                    let is_meta = parsed.is_meta.unwrap_or(false);
-
-                    if !display_content.is_empty() || has_content_blocks {
-                        messages.push(Message {
-                            uuid: parsed.uuid.unwrap_or_default(),
-                            role,
-                            content: display_content,
-                            timestamp: parsed.timestamp.unwrap_or_default(),
-                            is_meta,
-                            is_tool,
-                            line_number: idx + 1,
-                            content_blocks,
-                        });
-                    }
-                }
-            }
-        }
-
-        Ok(messages)
+#[tauri::command]
+async fn generate_session_handoff_prompt(
+    project_id: String,
+    session_id: String,
+    target_provider: String,
+    user_prompt: Option<String>,
+) -> Result<SessionHandoff, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        build_session_handoff_prompt(&project_id, &session_id, &target_provider, user_prompt)
     })
     .await
     .map_err(|e| e.to_string())?
@@ -5102,10 +5566,7 @@ fn list_local_skills() -> Result<Vec<LocalSkill>, String> {
                     let installed_at = fs::metadata(&path)
                         .ok()
                         .and_then(|metadata| {
-                            metadata
-                                .created()
-                                .or_else(|_| metadata.modified())
-                                .ok()
+                            metadata.created().or_else(|_| metadata.modified()).ok()
                         })
                         .and_then(system_time_to_millis);
                     let modified_at = fs::metadata(&skill_md)
@@ -7089,7 +7550,10 @@ fn uninstall_skill(name: String) -> Result<String, String> {
     }
 
     fs::remove_dir_all(&skill_dir).map_err(|e| format!("Failed to remove skill: {}", e))?;
-    Ok(format!("Uninstalled skill: {} from {}", name, skill_home.label))
+    Ok(format!(
+        "Uninstalled skill: {} from {}",
+        name, skill_home.label
+    ))
 }
 
 /// Check if a skill is already installed
@@ -8823,17 +9287,44 @@ fn candidate_roots(
 
     if let Some(home) = home {
         roots.extend([
-            CandidateRoot { label: "home".to_string(), path: home.clone() },
-            CandidateRoot { label: "~/.agents".to_string(), path: home.join(".agents") },
-            CandidateRoot { label: "~/.agents/skills".to_string(), path: home.join(".agents").join("skills") },
-            CandidateRoot { label: "~/.agent".to_string(), path: home.join(".agent") },
-            CandidateRoot { label: "~/.claude".to_string(), path: home.join(".claude") },
-            CandidateRoot { label: "~/.codex".to_string(), path: home.join(".codex") },
-            CandidateRoot { label: "~/.cache".to_string(), path: home.join(".cache") },
-            CandidateRoot { label: "~/.local".to_string(), path: home.join(".local") },
+            CandidateRoot {
+                label: "home".to_string(),
+                path: home.clone(),
+            },
+            CandidateRoot {
+                label: "~/.agents".to_string(),
+                path: home.join(".agents"),
+            },
+            CandidateRoot {
+                label: "~/.agents/skills".to_string(),
+                path: home.join(".agents").join("skills"),
+            },
+            CandidateRoot {
+                label: "~/.agent".to_string(),
+                path: home.join(".agent"),
+            },
+            CandidateRoot {
+                label: "~/.claude".to_string(),
+                path: home.join(".claude"),
+            },
+            CandidateRoot {
+                label: "~/.codex".to_string(),
+                path: home.join(".codex"),
+            },
+            CandidateRoot {
+                label: "~/.cache".to_string(),
+                path: home.join(".cache"),
+            },
+            CandidateRoot {
+                label: "~/.local".to_string(),
+                path: home.join(".local"),
+            },
         ]);
     }
-    roots.push(CandidateRoot { label: "temp".to_string(), path: std::env::temp_dir() });
+    roots.push(CandidateRoot {
+        label: "temp".to_string(),
+        path: std::env::temp_dir(),
+    });
 
     let mut seen = std::collections::HashSet::new();
     roots.retain(|root| seen.insert(root.path.to_string_lossy().to_string()) && root.path.is_dir());
@@ -8875,10 +9366,7 @@ fn add_spotlight_file_candidates(
             .args([
                 "-onlyin",
                 "/Users",
-                &format!(
-                    "kMDItemFSName == \"{}\"",
-                    leaf_name.replace('"', "\\\"")
-                ),
+                &format!("kMDItemFSName == \"{}\"", leaf_name.replace('"', "\\\"")),
             ])
             .output();
 
@@ -8957,9 +9445,7 @@ fn resolve_path_candidate(raw: String, cwd_path: Option<&std::path::PathBuf>) ->
         };
         b.exists
             .cmp(&a.exists)
-            .then_with(|| b.full_match
-            .cmp(&a.full_match)
-            )
+            .then_with(|| b.full_match.cmp(&a.full_match))
             .then_with(|| priority(&a.source).cmp(&priority(&b.source)))
             .then_with(|| a.path.len().cmp(&b.path.len()))
     });
@@ -9040,6 +9526,23 @@ struct RelocationResult {
     candidates: Vec<RelocationCandidate>,
 }
 
+/// Returns the origin project path for a Claude worktree path, mirroring
+/// `parseWorktreePath` in the frontend. Matches `<origin>/.claude/worktrees/<slug>`.
+fn parse_worktree_origin(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    let marker = "/.claude/worktrees/";
+    let idx = trimmed.find(marker)?;
+    let after = &trimmed[idx + marker.len()..];
+    if after.is_empty() || after.contains('/') {
+        return None;
+    }
+    let origin = &trimmed[..idx];
+    if origin.is_empty() {
+        return None;
+    }
+    Some(origin.to_string())
+}
+
 /// Walk up `from`, returning (nearest_existing_ancestor, lost_root_path).
 /// `lost_root_path` is the last segment in the chain whose parent exists on disk.
 fn analyze_lost_path(
@@ -9092,6 +9595,20 @@ async fn find_relocation_candidates(from: String) -> Result<RelocationResult, St
 
     let mut candidates: Vec<RelocationCandidate> = Vec::new();
 
+    // Strategy 0: Claude worktree heuristic — paths shaped as
+    // `<origin>/.claude/worktrees/<slug>` are git worktrees that get cleaned up
+    // after a merge. The origin almost always exists and is the right target.
+    if let Some(origin) = parse_worktree_origin(&from) {
+        let origin_path = std::path::PathBuf::from(&origin);
+        if origin_path.is_dir() {
+            candidates.push(RelocationCandidate {
+                path: origin,
+                source: "worktree-origin".into(),
+                full_match: true,
+            });
+        }
+    }
+
     // Strategy: Spotlight (macOS) global search for the leaf folder name.
     #[cfg(target_os = "macos")]
     if !leaf_name.is_empty() {
@@ -9137,10 +9654,17 @@ async fn find_relocation_candidates(from: String) -> Result<RelocationResult, St
         }
     }
 
-    // Sort: full matches first, then by path length (shorter = closer to home).
+    // Sort: full matches first, then worktree-origin (canonical recovery for merged
+    // worktrees) above spotlight, then by path length (shorter = closer to home).
+    let source_rank = |s: &str| match s {
+        "worktree-origin" => 0,
+        "spotlight" => 1,
+        _ => 2,
+    };
     candidates.sort_by(|a, b| {
         b.full_match
             .cmp(&a.full_match)
+            .then_with(|| source_rank(&a.source).cmp(&source_rank(&b.source)))
             .then_with(|| a.path.len().cmp(&b.path.len()))
     });
 
@@ -9320,6 +9844,323 @@ async fn migrate_session_cwd(from: String, to: String) -> Result<MigrateCwdResul
 
     Ok(MigrateCwdResult {
         success,
+        stdout,
+        stderr,
+        migrated,
+    })
+}
+
+/// Scoped variant of rewrite_app_session_cwds: only rewrites Claude Desktop
+/// local_*.json files whose local session id or embedded cliSessionId is in
+/// `session_ids`. Used for the auto-fix worktree flow so that `undo` can safely
+/// reverse only the sessions we touched, without clobbering pre-existing
+/// sessions that legitimately had cwd == to before the forward migration.
+fn rewrite_app_session_cwds_scoped(
+    session_ids: &[String],
+    from: &str,
+    to: &str,
+) -> Result<usize, String> {
+    let home = dirs::home_dir().ok_or_else(|| "no home dir".to_string())?;
+    let root = home
+        .join("Library")
+        .join("Application Support")
+        .join("Claude")
+        .join("claude-code-sessions");
+    if !root.exists() {
+        return Ok(0);
+    }
+
+    let id_set: std::collections::HashSet<&str> = session_ids.iter().map(String::as_str).collect();
+    let mut updated = 0usize;
+
+    for device in fs::read_dir(&root).into_iter().flatten().flatten() {
+        for account in fs::read_dir(device.path()).into_iter().flatten().flatten() {
+            for entry in fs::read_dir(account.path()).into_iter().flatten().flatten() {
+                let path = entry.path();
+                let fname = path
+                    .file_name()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                let local_sid = match fname
+                    .strip_prefix("local_")
+                    .and_then(|s| s.strip_suffix(".json"))
+                {
+                    Some(s) => s,
+                    None => continue,
+                };
+                let content = match fs::read_to_string(&path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+                let mut value: serde_json::Value = match serde_json::from_str(&content) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+                let cli_sid = value.get("cliSessionId").and_then(|v| v.as_str());
+                if !id_set.contains(local_sid) && !cli_sid.is_some_and(|sid| id_set.contains(sid)) {
+                    continue;
+                }
+                let Some(cwd) = value
+                    .get("cwd")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                else {
+                    continue;
+                };
+                if cwd != from && !cwd.starts_with(&format!("{}/", from)) {
+                    continue;
+                }
+                let new_cwd = if cwd == from {
+                    to.to_string()
+                } else {
+                    format!("{}{}", to, &cwd[from.len()..])
+                };
+                value["cwd"] = serde_json::Value::String(new_cwd);
+                if let Ok(serialized) = serde_json::to_string_pretty(&value) {
+                    if fs::write(&path, serialized).is_ok() {
+                        updated += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(updated)
+}
+
+fn rewrite_cwd_value(value: &mut serde_json::Value, from: &str, to: &str) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut changed = false;
+            for (key, child) in map.iter_mut() {
+                if key == "cwd" {
+                    if let serde_json::Value::String(cwd) = child {
+                        if cwd == from {
+                            *cwd = to.to_string();
+                            changed = true;
+                            continue;
+                        }
+                        let from_prefix = format!("{}/", from);
+                        if cwd.starts_with(&from_prefix) {
+                            let rewritten = format!("{}{}", to, &cwd[from.len()..]);
+                            *cwd = rewritten;
+                            changed = true;
+                            continue;
+                        }
+                    }
+                }
+                changed |= rewrite_cwd_value(child, from, to);
+            }
+            changed
+        }
+        serde_json::Value::Array(items) => items.iter_mut().fold(false, |changed, item| {
+            rewrite_cwd_value(item, from, to) || changed
+        }),
+        _ => false,
+    }
+}
+
+fn rewrite_jsonl_cwds_in_file(
+    path: &std::path::Path,
+    from: &str,
+    to: &str,
+) -> Result<usize, String> {
+    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+    let had_trailing_newline = content.ends_with('\n');
+    let mut changed_lines = 0usize;
+    let mut next_lines: Vec<String> = Vec::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim_end_matches('\r');
+        if trimmed.trim().is_empty() {
+            next_lines.push(line.to_string());
+            continue;
+        }
+
+        let Ok(mut value) = serde_json::from_str::<serde_json::Value>(trimmed) else {
+            next_lines.push(line.to_string());
+            continue;
+        };
+
+        if rewrite_cwd_value(&mut value, from, to) {
+            let serialized = serde_json::to_string(&value).map_err(|e| e.to_string())?;
+            next_lines.push(serialized);
+            changed_lines += 1;
+        } else {
+            next_lines.push(line.to_string());
+        }
+    }
+
+    if changed_lines > 0 {
+        let mut output = next_lines.join("\n");
+        if had_trailing_newline {
+            output.push('\n');
+        }
+        fs::write(path, output).map_err(|e| e.to_string())?;
+    }
+
+    Ok(changed_lines)
+}
+
+/// Rewrite `cwd` inside scoped Claude JSONL session files. This is a companion
+/// to cc-mv for the auto-fix path: after a previous partial migration the
+/// source slug may already be deleted, while the destination jsonl still has
+/// the dead worktree cwd in its first metadata line.
+fn rewrite_claude_jsonl_session_cwds_scoped(
+    session_ids: &[String],
+    from: &str,
+    to: &str,
+) -> Result<(usize, usize), String> {
+    let projects_dir = get_claude_dir().join("projects");
+    let from_slug = encode_project_path(from);
+    let to_slug = encode_project_path(to);
+    let mut changed_files = 0usize;
+    let mut changed_lines = 0usize;
+    let mut seen_paths = std::collections::HashSet::new();
+
+    for sid in session_ids {
+        for slug in [&from_slug, &to_slug] {
+            let path = projects_dir.join(slug).join(format!("{}.jsonl", sid));
+            if !seen_paths.insert(path.clone()) || !path.exists() {
+                continue;
+            }
+            let line_count = rewrite_jsonl_cwds_in_file(&path, from, to)?;
+            if line_count > 0 {
+                changed_files += 1;
+                changed_lines += line_count;
+            }
+        }
+    }
+
+    Ok((changed_files, changed_lines))
+}
+
+/// Migrate cwds for a specific set of sessions only — used for auto-fix of dead
+/// worktree paths so `undo` can safely target the same set without clobbering
+/// pre-existing sessions at the destination.
+///
+/// Sessions whose jsonl file isn't actually present in the `from` slug are
+/// silently dropped — they were already migrated by a previous run. If after
+/// filtering there are no jsonls left to move, we still rewrite the lovcode
+/// app-side metadata (which can lag behind cc-mv) and report success.
+#[tauri::command]
+async fn migrate_sessions_cwd_scoped(
+    app_handle: tauri::AppHandle,
+    session_ids: Vec<String>,
+    from: String,
+    to: String,
+) -> Result<MigrateCwdResult, String> {
+    if from.is_empty() || to.is_empty() {
+        return Err("from and to are required".into());
+    }
+    if session_ids.is_empty() {
+        return Err("session_ids is required".into());
+    }
+
+    // Pre-filter to sessions whose jsonl actually lives at the from-slug. cc-mv
+    // hard-errors on missing session ids, but for our auto-fix flow it's normal
+    // for the file to already be at the destination slug (left over from a
+    // previous partial migration).
+    let from_slug = encode_project_path(&from);
+    let from_slug_dir = get_claude_dir().join("projects").join(&from_slug);
+    let present_ids: Vec<String> = session_ids
+        .iter()
+        .filter(|sid| from_slug_dir.join(format!("{}.jsonl", sid)).exists())
+        .cloned()
+        .collect();
+
+    let mut stdout = String::new();
+    let mut stderr = String::new();
+    let mut migrated: Option<u64> = None;
+    let mut cc_mv_success = true;
+
+    if !present_ids.is_empty() {
+        let npx = find_npx().ok_or_else(|| {
+            "找不到 npx — 请确认 Node.js 已安装并在 PATH 中（/opt/homebrew/bin 或 /usr/local/bin）"
+                .to_string()
+        })?;
+
+        let from_clone = from.clone();
+        let to_clone = to.clone();
+        let npx_clone = npx.clone();
+        let present_ids_clone = present_ids.clone();
+
+        let output = tauri::async_runtime::spawn_blocking(move || {
+            let mut cmd = std::process::Command::new(&npx_clone);
+            cmd.args(["-y", "@lovstudio/cc-mv", &from_clone, &to_clone]);
+            for sid in &present_ids_clone {
+                cmd.args(["--session", sid]);
+            }
+            cmd.args(["--no-mv", "--yes", "--json", "--delete-source"]);
+            cmd.output()
+        })
+        .await
+        .map_err(|e| format!("spawn join error: {}", e))?
+        .map_err(|e| format!("spawn cc-mv failed: {}", e))?;
+
+        stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        cc_mv_success = output.status.success();
+
+        migrated = serde_json::from_str::<serde_json::Value>(stdout.trim())
+            .ok()
+            .and_then(|v| v.get("migrated").and_then(|x| x.as_u64()));
+    } else {
+        stderr.push_str(&format!(
+            "[lovcode] all {} session jsonl(s) already at destination slug — skipping cc-mv\n",
+            session_ids.len()
+        ));
+    }
+
+    if cc_mv_success {
+        match rewrite_claude_jsonl_session_cwds_scoped(&session_ids, &from, &to) {
+            Ok((files, lines)) if files > 0 => {
+                stderr.push_str(&format!(
+                    "\n[lovcode] rewrote cwd in {} Claude jsonl file(s), {} line(s) (scoped)",
+                    files, lines
+                ));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                stderr.push_str(&format!(
+                    "\n[lovcode] failed to rewrite Claude jsonl cwd: {}",
+                    e
+                ));
+            }
+        }
+
+        match rewrite_app_session_cwds_scoped(&session_ids, &from, &to) {
+            Ok(n) if n > 0 => {
+                stderr.push_str(&format!(
+                    "\n[lovcode] rewrote cwd in {} app session metadata files (scoped)",
+                    n
+                ));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                stderr.push_str(&format!(
+                    "\n[lovcode] failed to rewrite app session metadata: {}",
+                    e
+                ));
+            }
+        }
+
+        // Invalidate the session-list cache so the next list_all_sessions_streamed
+        // call recomputes from disk. Without this, the 3s TTL on SESSIONS_INFLIGHT
+        // would let the post-migration refresh return stale data (banner stuck on
+        // the old worktree path).
+        if let Some(lock) = SESSIONS_INFLIGHT.get() {
+            *lock.lock().await = None;
+        }
+
+        // Trigger session list refresh in the UI. The fs watcher would also pick
+        // this up via cc-mv's writes/deletes, but it has a 500ms debounce — emit
+        // explicitly so the banner clears as soon as the rewrite completes.
+        let _ = app_handle.emit("sessions-changed", ());
+    }
+
+    Ok(MigrateCwdResult {
+        success: cc_mv_success,
         stdout,
         stderr,
         migrated,
@@ -9798,6 +10639,36 @@ fn get_maas_registry() -> Result<Vec<MaasProvider>, String> {
 }
 
 #[tauri::command]
+async fn get_maas_realtime_status() -> Result<MaasRealtimeStatus, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .user_agent("Lovcode/maas-status")
+        .redirect(reqwest::redirect::Policy::limited(3))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let fetched_at = chrono::Utc::now().to_rfc3339();
+    let claude_result = fetch_claude_realtime_status(&client).await;
+    let zenmux_result = fetch_zenmux_realtime_status(&client).await;
+    let (claude, claude_error) = match claude_result {
+        Ok(status) => (Some(status), None),
+        Err(error) => (None, Some(error)),
+    };
+    let (zenmux, zenmux_error) = match zenmux_result {
+        Ok(status) => (Some(status), None),
+        Err(error) => (None, Some(error)),
+    };
+
+    Ok(MaasRealtimeStatus {
+        fetched_at,
+        claude,
+        claude_error,
+        zenmux,
+        zenmux_error,
+    })
+}
+
+#[tauri::command]
 fn save_maas_registry(registry: Vec<MaasProvider>) -> Result<(), String> {
     persist_maas_registry(&registry)
 }
@@ -9825,6 +10696,340 @@ fn delete_maas_provider(key: String) -> Result<Vec<MaasProvider>, String> {
     registry.retain(|p| p.key != key);
     persist_maas_registry(&registry)?;
     Ok(registry)
+}
+
+async fn fetch_claude_realtime_status(
+    client: &reqwest::Client,
+) -> Result<ClaudeRealtimeStatus, String> {
+    let summary = fetch_realtime_json(client, "https://status.claude.com/api/v2/summary.json")
+        .await?;
+    let incidents = fetch_realtime_json(client, "https://status.claude.com/api/v2/incidents.json")
+        .await
+        .unwrap_or_else(|_| serde_json::json!({ "incidents": [] }));
+
+    let page = summary.get("page").and_then(|value| value.as_object());
+    let status = summary.get("status").and_then(|value| value.as_object());
+    let components = summary
+        .get("components")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(parse_claude_status_component)
+                .collect()
+        })
+        .unwrap_or_default();
+    let incidents = incidents
+        .get("incidents")
+        .and_then(|value| value.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(parse_claude_status_incident)
+                .take(8)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(ClaudeRealtimeStatus {
+        page_name: page
+            .and_then(|page| get_string_field(page, "name"))
+            .unwrap_or_else(|| "Claude".to_string()),
+        page_url: page.and_then(|page| get_string_field(page, "url")),
+        indicator: status.and_then(|status| get_string_field(status, "indicator")),
+        description: status.and_then(|status| get_string_field(status, "description")),
+        updated_at: page.and_then(|page| get_string_field(page, "updated_at")),
+        components,
+        incidents,
+    })
+}
+
+async fn fetch_zenmux_realtime_status(
+    client: &reqwest::Client,
+) -> Result<ZenmuxRealtimeStatus, String> {
+    let anthropic_result =
+        fetch_realtime_json(client, "https://zenmux.ai/api/anthropic/v1/models").await;
+    let openai_result = fetch_realtime_json(client, "https://zenmux.ai/api/v1/models").await;
+
+    let mut models = Vec::new();
+    let mut errors = Vec::new();
+    match anthropic_result {
+        Ok(value) => models.extend(parse_zenmux_realtime_models(&value)),
+        Err(error) => errors.push(error),
+    }
+    match openai_result {
+        Ok(value) => models.extend(parse_zenmux_realtime_models(&value)),
+        Err(error) => errors.push(error),
+    }
+
+    let mut seen = std::collections::HashSet::new();
+    models.retain(|model| seen.insert(model.id.to_ascii_lowercase()));
+    if models.is_empty() {
+        let detail = if errors.is_empty() {
+            "ZenMux model catalog returned no models".to_string()
+        } else {
+            errors.join("; ")
+        };
+        return Err(detail);
+    }
+
+    Ok(ZenmuxRealtimeStatus {
+        fetched_at: chrono::Utc::now().to_rfc3339(),
+        models,
+    })
+}
+
+async fn fetch_realtime_json(client: &reqwest::Client, url: &str) -> Result<Value, String> {
+    let response = client
+        .get(url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("request {}: {}", url, e))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("read {}: {}", url, e))?;
+    if !status.is_success() {
+        return Err(format!("{} returned HTTP {}", url, status.as_u16()));
+    }
+    serde_json::from_str(&text).map_err(|e| format!("parse {}: {}", url, e))
+}
+
+fn parse_claude_status_component(value: &Value) -> Option<ClaudeStatusComponent> {
+    let obj = value.as_object()?;
+    let id = get_string_field(obj, "id")?;
+    let name = get_string_field(obj, "name")?;
+    let status = get_string_field(obj, "status").unwrap_or_else(|| "unknown".to_string());
+    let updated_at = get_string_field(obj, "updated_at");
+    Some(ClaudeStatusComponent {
+        id,
+        name,
+        status,
+        updated_at,
+    })
+}
+
+fn parse_claude_status_incident(value: &Value) -> Option<ClaudeStatusIncident> {
+    let obj = value.as_object()?;
+    let id = get_string_field(obj, "id")?;
+    let name = get_string_field(obj, "name")?;
+    let status = get_string_field(obj, "status").unwrap_or_else(|| "unknown".to_string());
+    let affected_components = obj
+        .get("components")
+        .and_then(|value| value.as_array())
+        .map(|components| {
+            components
+                .iter()
+                .filter_map(|component| {
+                    component
+                        .as_object()
+                        .and_then(|component| get_string_field(component, "name"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(ClaudeStatusIncident {
+        id,
+        name,
+        status,
+        impact: get_string_field(obj, "impact"),
+        created_at: get_string_field(obj, "created_at"),
+        resolved_at: get_string_field(obj, "resolved_at"),
+        shortlink: get_string_field(obj, "shortlink"),
+        affected_components,
+    })
+}
+
+fn parse_zenmux_realtime_models(root: &Value) -> Vec<ZenmuxRealtimeModel> {
+    let Some(items) = get_zenmux_models_array(root) else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(|item| {
+            let obj = item.as_object()?;
+            let id = get_string_field_any(
+                obj,
+                &["id", "slug", "model", "model_name", "modelName", "model_id"],
+            )?;
+            Some(ZenmuxRealtimeModel {
+                display_name: get_string_field_any(obj, &["display_name", "displayName", "name"]),
+                owned_by: get_string_field_any(obj, &["owned_by", "ownedBy", "author", "vendor"]),
+                created_at: get_dateish_field_any(obj, &["created_at", "createdAt", "created"]),
+                context_length: get_u64_field_any(
+                    obj,
+                    &["context_length", "contextLength", "context_window", "contextWindow"],
+                ),
+                input_modalities: get_string_list_field_any(
+                    obj,
+                    &["input_modalities", "inputModalities"],
+                ),
+                output_modalities: get_string_list_field_any(
+                    obj,
+                    &["output_modalities", "outputModalities"],
+                ),
+                prompt_price: get_price_field_any(
+                    obj,
+                    &[
+                        "prompt_price",
+                        "promptPrice",
+                        "input_price",
+                        "inputPrice",
+                        "input_cost_per_million_tokens",
+                    ],
+                ),
+                completion_price: get_price_field_any(
+                    obj,
+                    &[
+                        "completion_price",
+                        "completionPrice",
+                        "output_price",
+                        "outputPrice",
+                        "output_cost_per_million_tokens",
+                    ],
+                ),
+                id,
+            })
+        })
+        .collect()
+}
+
+fn get_zenmux_models_array(root: &Value) -> Option<&Vec<Value>> {
+    if let Some(items) = root.get("data").and_then(|value| value.as_array()) {
+        return Some(items);
+    }
+    if let Some(items) = root
+        .get("data")
+        .and_then(|value| value.get("models"))
+        .and_then(|value| value.as_array())
+    {
+        return Some(items);
+    }
+    if let Some(items) = root.get("models").and_then(|value| value.as_array()) {
+        return Some(items);
+    }
+    root.as_array()
+}
+
+fn get_string_field(map: &serde_json::Map<String, Value>, key: &str) -> Option<String> {
+    map.get(key)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn get_string_field_any(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| get_string_field(map, key))
+}
+
+fn get_dateish_field_any(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        let Some(value) = map.get(*key) else {
+            continue;
+        };
+        if let Some(text) = value.as_str().map(str::trim).filter(|text| !text.is_empty()) {
+            return Some(text.to_string());
+        }
+        if let Some(seconds) = value.as_i64() {
+            if let Some(date) = chrono::DateTime::from_timestamp(seconds, 0) {
+                return Some(date.to_rfc3339());
+            }
+        }
+    }
+    None
+}
+
+fn get_u64_field_any(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        map.get(*key).and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_str().and_then(|text| text.parse::<u64>().ok()))
+        })
+    })
+}
+
+fn get_string_list_field_any(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Vec<String> {
+    for key in keys {
+        let Some(value) = map.get(*key) else {
+            continue;
+        };
+        if let Some(items) = value.as_array() {
+            let values: Vec<String> = items
+                .iter()
+                .filter_map(|item| item.as_str().map(str::trim))
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect();
+            if !values.is_empty() {
+                return values;
+            }
+        }
+        if let Some(text) = value.as_str() {
+            let values = parse_csv_modalities(text);
+            if !values.is_empty() {
+                return values;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn get_price_field_any(map: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        let Some(value) = map.get(*key) else {
+            continue;
+        };
+        if let Some(price) = normalize_price_value(value) {
+            return Some(price);
+        }
+    }
+    map.get("pricings")
+        .and_then(|value| value.as_array())
+        .and_then(|items| {
+            items.iter().find_map(|item| {
+                let obj = item.as_object()?;
+                keys.iter()
+                    .find_map(|key| obj.get(*key).and_then(normalize_price_value))
+            })
+        })
+        .or_else(|| {
+            map.get("pricings")
+                .and_then(|value| value.as_object())
+                .and_then(|pricing| {
+                    keys.iter()
+                        .find_map(|key| pricing.get(*key).and_then(normalize_price_value))
+                })
+        })
+}
+
+fn normalize_price_value(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str().map(str::trim).filter(|text| !text.is_empty()) {
+        return Some(text.to_string());
+    }
+    if let Some(amount) = value.as_f64() {
+        return Some(if amount == 0.0 {
+            "$0".to_string()
+        } else if amount.abs() < 1.0 {
+            format!("${:.4}", amount)
+        } else {
+            format!("${:.2}", amount)
+        });
+    }
+    if let Some(items) = value.as_array() {
+        return items.iter().find_map(normalize_price_value);
+    }
+    if let Some(obj) = value.as_object() {
+        return ["price", "amount", "unit_price", "value"]
+            .iter()
+            .find_map(|key| obj.get(*key).and_then(normalize_price_value));
+    }
+    None
 }
 
 fn codex_maas_provider_id(provider_key: &str) -> String {
@@ -11626,26 +12831,126 @@ fn capture_first(input: &str, pattern: &str) -> Option<String> {
         .map(|m| decode_xml_entities(m.as_str().trim()))
 }
 
+fn github_token() -> Option<String> {
+    ["GITHUB_TOKEN", "GH_TOKEN"]
+        .iter()
+        .find_map(|key| std::env::var(key).ok())
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+}
+
+fn release_cache_is_fresh(fetched_at: SystemTime) -> bool {
+    fetched_at
+        .elapsed()
+        .map(|age| age < LOVCODE_RELEASES_CACHE_TTL)
+        .unwrap_or(false)
+}
+
+fn read_lovcode_releases_cache_file() -> Option<(SystemTime, Vec<LovcodeRelease>)> {
+    let content = fs::read_to_string(get_lovcode_releases_cache_path()).ok()?;
+    let parsed: LovcodeReleaseCacheFile = serde_json::from_str(&content).ok()?;
+    let fetched_at = UNIX_EPOCH + Duration::from_secs(parsed.fetched_at_unix);
+    Some((fetched_at, parsed.releases))
+}
+
+fn write_lovcode_releases_cache_file(releases: &[LovcodeRelease]) {
+    let cache_path = get_lovcode_releases_cache_path();
+    if let Some(parent) = cache_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    let fetched_at_unix = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let cache = LovcodeReleaseCacheFile {
+        fetched_at_unix,
+        releases: releases.to_vec(),
+    };
+    if let Ok(content) = serde_json::to_string_pretty(&cache) {
+        let _ = fs::write(cache_path, content);
+    }
+}
+
+fn get_fresh_lovcode_releases_cache() -> Option<Vec<LovcodeRelease>> {
+    if let Ok(cache) = LOVCODE_RELEASES_CACHE.lock() {
+        if let Some((fetched_at, releases)) = cache.as_ref() {
+            if release_cache_is_fresh(*fetched_at) {
+                return Some(releases.clone());
+            }
+        }
+    }
+
+    let (fetched_at, releases) = read_lovcode_releases_cache_file()?;
+    if !release_cache_is_fresh(fetched_at) {
+        return None;
+    }
+
+    if let Ok(mut cache) = LOVCODE_RELEASES_CACHE.lock() {
+        *cache = Some((fetched_at, releases.clone()));
+    }
+    Some(releases)
+}
+
+fn get_any_lovcode_releases_cache() -> Option<Vec<LovcodeRelease>> {
+    if let Ok(cache) = LOVCODE_RELEASES_CACHE.lock() {
+        if let Some((_, releases)) = cache.as_ref() {
+            return Some(releases.clone());
+        }
+    }
+
+    let (fetched_at, releases) = read_lovcode_releases_cache_file()?;
+    if let Ok(mut cache) = LOVCODE_RELEASES_CACHE.lock() {
+        *cache = Some((fetched_at, releases.clone()));
+    }
+    Some(releases)
+}
+
+fn store_lovcode_releases_cache(releases: &[LovcodeRelease]) {
+    if let Ok(mut cache) = LOVCODE_RELEASES_CACHE.lock() {
+        *cache = Some((SystemTime::now(), releases.to_vec()));
+    }
+    write_lovcode_releases_cache_file(releases);
+}
+
 async fn fetch_lovcode_releases_from_api(
     client: &reqwest::Client,
 ) -> Result<Vec<LovcodeRelease>, String> {
     let mut releases: Vec<LovcodeRelease> = Vec::new();
+    let token = github_token();
 
     for page in 1..=10 {
         let url = format!(
             "https://api.github.com/repos/lovstudio/lovcode/releases?per_page=100&page={}",
             page
         );
-        let response = client
+        let mut request = client
             .get(&url)
-            .header("User-Agent", format!("lovcode/{}", env!("CARGO_PKG_VERSION")))
+            .header(
+                "User-Agent",
+                format!("lovcode/{}", env!("CARGO_PKG_VERSION")),
+            )
             .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28");
+
+        if let Some(token) = token.as_deref() {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
+
+        let response = request
             .send()
             .await
             .map_err(|e| format!("Failed to fetch Lovcode releases: {}", e))?;
 
         if !response.status().is_success() {
-            return Err(format!("GitHub API returned {}", response.status()));
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            let body = body.chars().take(240).collect::<String>();
+            return Err(if body.trim().is_empty() {
+                format!("GitHub API returned {}", status)
+            } else {
+                format!("GitHub API returned {}: {}", status, body)
+            });
         }
 
         let page_releases = response
@@ -11682,7 +12987,10 @@ async fn fetch_lovcode_releases_from_atom(
 ) -> Result<Vec<LovcodeRelease>, String> {
     let text = client
         .get("https://github.com/lovstudio/lovcode/releases.atom")
-        .header("User-Agent", format!("lovcode/{}", env!("CARGO_PKG_VERSION")))
+        .header(
+            "User-Agent",
+            format!("lovcode/{}", env!("CARGO_PKG_VERSION")),
+        )
         .send()
         .await
         .map_err(|e| format!("Failed to fetch Lovcode releases feed: {}", e))?
@@ -11700,8 +13008,12 @@ async fn fetch_lovcode_releases_from_atom(
         let Some(tag_name) = capture_first(entry, r"(?s)<title>(.*?)</title>") else {
             continue;
         };
-        let html_url = capture_first(entry, r#"<link[^>]+href="([^"]+)""#)
-            .unwrap_or_else(|| format!("https://github.com/lovstudio/lovcode/releases/tag/{}", tag_name));
+        let html_url = capture_first(entry, r#"<link[^>]+href="([^"]+)""#).unwrap_or_else(|| {
+            format!(
+                "https://github.com/lovstudio/lovcode/releases/tag/{}",
+                tag_name
+            )
+        });
         let published_at = capture_first(entry, r"(?s)<updated>(.*?)</updated>");
         let body = capture_first(entry, r"(?s)<content(?:\s[^>]*)?>(.*?)</content>");
         let prerelease = tag_name.contains('-');
@@ -11719,6 +13031,60 @@ async fn fetch_lovcode_releases_from_atom(
     }
 
     Ok(releases)
+}
+
+async fn fetch_lovcode_releases(
+    client: &reqwest::Client,
+    force_refresh: bool,
+) -> Result<LovcodeReleaseFetch, String> {
+    if !force_refresh {
+        if let Some(releases) = get_fresh_lovcode_releases_cache() {
+            return Ok(LovcodeReleaseFetch {
+                releases,
+                source: LovcodeReleaseSource::Cache,
+                releases_truncated: false,
+            });
+        }
+    }
+
+    let api_result = match fetch_lovcode_releases_from_api(client).await {
+        Ok(releases) if !releases.is_empty() => Ok(releases),
+        Ok(_) => Err("GitHub API returned no Lovcode releases".to_string()),
+        Err(error) => Err(error),
+    };
+
+    match api_result {
+        Ok(releases) => {
+            store_lovcode_releases_cache(&releases);
+            Ok(LovcodeReleaseFetch {
+                releases,
+                source: LovcodeReleaseSource::GithubApi,
+                releases_truncated: false,
+            })
+        }
+        Err(api_error) => {
+            if let Some(releases) = get_any_lovcode_releases_cache() {
+                return Ok(LovcodeReleaseFetch {
+                    releases,
+                    source: LovcodeReleaseSource::Cache,
+                    releases_truncated: false,
+                });
+            }
+
+            let releases =
+                fetch_lovcode_releases_from_atom(client)
+                    .await
+                    .map_err(|fallback_error| {
+                        format!("{}; fallback failed: {}", api_error, fallback_error)
+                    })?;
+
+            Ok(LovcodeReleaseFetch {
+                releases,
+                source: LovcodeReleaseSource::GithubAtom,
+                releases_truncated: true,
+            })
+        }
+    }
 }
 
 #[tauri::command]
@@ -11757,24 +13123,19 @@ fn set_lovcode_autoupdater(enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-async fn get_lovcode_version_info() -> Result<LovcodeVersionInfo, String> {
+async fn get_lovcode_version_info_inner(force_refresh: bool) -> Result<LovcodeVersionInfo, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(12))
         .build()
         .map_err(|e| e.to_string())?;
 
-    let releases = match fetch_lovcode_releases_from_api(&client).await {
-        Ok(releases) => releases,
-        Err(api_error) => fetch_lovcode_releases_from_atom(&client)
-            .await
-            .map_err(|fallback_error| format!("{}; fallback failed: {}", api_error, fallback_error))?,
-    };
+    let fetch = fetch_lovcode_releases(&client, force_refresh).await?;
 
-    let latest_version = releases
+    let latest_version = fetch
+        .releases
         .iter()
         .find(|release| !release.draft && !release.prerelease)
-        .or_else(|| releases.iter().find(|release| !release.draft))
+        .or_else(|| fetch.releases.iter().find(|release| !release.draft))
         .map(|release| release.version.clone());
 
     let auto_update_enabled = get_lovcode_autoupdater_enabled()?;
@@ -11782,9 +13143,21 @@ async fn get_lovcode_version_info() -> Result<LovcodeVersionInfo, String> {
     Ok(LovcodeVersionInfo {
         current_version: env!("CARGO_PKG_VERSION").to_string(),
         latest_version,
-        releases,
+        releases: fetch.releases,
         auto_update_enabled,
+        release_source: fetch.source,
+        releases_truncated: fetch.releases_truncated,
     })
+}
+
+#[tauri::command]
+async fn get_lovcode_version_info() -> Result<LovcodeVersionInfo, String> {
+    get_lovcode_version_info_inner(false).await
+}
+
+#[tauri::command]
+async fn refresh_lovcode_version_info() -> Result<LovcodeVersionInfo, String> {
+    get_lovcode_version_info_inner(true).await
 }
 
 // ============================================================================
@@ -11876,7 +13249,11 @@ fn save_agent_workspace_state(state: AgentWorkspaceState) -> Result<AgentWorkspa
 }
 
 fn ensure_agent_hook_event(settings: &mut Value, event_type: &str, command: &str) {
-    if !settings.get("hooks").and_then(|value| value.as_object()).is_some() {
+    if !settings
+        .get("hooks")
+        .and_then(|value| value.as_object())
+        .is_some()
+    {
         settings["hooks"] = serde_json::json!({});
     }
     if !settings["hooks"]
@@ -11919,19 +13296,29 @@ fn ensure_agent_hook_event(settings: &mut Value, event_type: &str, command: &str
 
 fn write_claude_agent_hook_script(script_path: &Path) -> Result<(), String> {
     let script = r#"#!/bin/sh
-if [ -z "$LOVCODE_AGENT_SESSION_ID" ] || [ -z "$LOVCODE_AGENT_HOOK_FILE" ]; then
-  exit 0
-fi
-
 INPUT=$(cat)
 EVENT=$(printf '%s' "$INPUT" | sed -n 's/.*"hook_event_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
 if [ -z "$EVENT" ]; then
   EVENT="unknown"
 fi
+SESSION_ID="$LOVCODE_AGENT_SESSION_ID"
+if [ -z "$SESSION_ID" ]; then
+  SESSION_ID=$(printf '%s' "$INPUT" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+fi
+if [ -z "$SESSION_ID" ]; then
+  SESSION_ID=$(printf '%s' "$INPUT" | sed -n 's/.*"sessionId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+fi
+HOOK_FILE="$LOVCODE_AGENT_HOOK_FILE"
+if [ -z "$HOOK_FILE" ] && [ -n "$SESSION_ID" ]; then
+  HOOK_FILE="$HOME/.lovstudio/lovcode/agent-hooks/events/$SESSION_ID.jsonl"
+fi
+if [ -z "$SESSION_ID" ] || [ -z "$HOOK_FILE" ]; then
+  exit 0
+fi
 
-mkdir -p "$(dirname "$LOVCODE_AGENT_HOOK_FILE")"
+mkdir -p "$(dirname "$HOOK_FILE")"
 TS=$(date +%s)
-printf '{"sessionId":"%s","event":"%s","timestamp":%s,"provider":"claude"}\n' "$LOVCODE_AGENT_SESSION_ID" "$EVENT" "$TS" >> "$LOVCODE_AGENT_HOOK_FILE"
+printf '{"sessionId":"%s","event":"%s","timestamp":%s,"provider":"claude"}\n' "$SESSION_ID" "$EVENT" "$TS" >> "$HOOK_FILE"
 exit 0
 "#;
     fs::write(script_path, script).map_err(|e| e.to_string())
@@ -11976,20 +13363,37 @@ def parse_args(args):
 def append_lovcode_event(payload_text):
     session_id = os.environ.get("LOVCODE_AGENT_SESSION_ID")
     hook_file = os.environ.get("LOVCODE_AGENT_HOOK_FILE")
-    if not session_id or not hook_file:
-        return
 
     payload_type = None
+    parsed = None
     if payload_text:
         try:
             parsed = json.loads(payload_text)
             if isinstance(parsed, dict):
                 payload_type = parsed.get("type")
+                if not session_id:
+                    session_id = (
+                        parsed.get("session_id")
+                        or parsed.get("sessionId")
+                        or parsed.get("conversation_id")
+                        or parsed.get("conversationId")
+                    )
         except Exception:
             payload_type = None
 
     if payload_type and payload_type != "agent-turn-complete":
         return
+    if not session_id:
+        return
+    if not hook_file:
+        hook_file = os.path.join(
+            os.path.expanduser("~"),
+            ".lovstudio",
+            "lovcode",
+            "agent-hooks",
+            "events",
+            f"{session_id}.jsonl",
+        )
 
     event = {
         "sessionId": session_id,
@@ -12102,7 +13506,17 @@ fn ensure_codex_notify_config(script_path: &Path) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn ensure_agent_workspace_hooks(provider: Option<String>) -> Result<AgentWorkspaceHookConfig, String> {
+fn get_agent_workspace_hook_config() -> AgentWorkspaceHookConfig {
+    AgentWorkspaceHookConfig {
+        events_dir: get_agent_hook_events_dir().to_string_lossy().to_string(),
+        script_path: get_agent_hook_script_path().to_string_lossy().to_string(),
+    }
+}
+
+#[tauri::command]
+fn ensure_agent_workspace_hooks(
+    provider: Option<String>,
+) -> Result<AgentWorkspaceHookConfig, String> {
     let events_dir = get_agent_hook_events_dir();
     let script_path = get_agent_hook_script_path();
     let codex_notify_script_path = get_agent_codex_notify_script_path();
@@ -12442,7 +13856,10 @@ async fn fetch_remote_image_data_url(url: String) -> Result<String, String> {
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
              (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         )
-        .header(ACCEPT, "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8")
+        .header(
+            ACCEPT,
+            "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        )
         .send()
         .await
         .map_err(|e| format!("Failed to fetch image: {}", e))?;
@@ -12574,8 +13991,8 @@ fn load_lovstudio_auth_session() -> Result<Option<LovstudioAuthSession>, String>
         return Ok(None);
     }
 
-    let session: LovstudioAuthSession =
-        serde_json::from_str(&content).map_err(|e| format!("读取 Lovstudio 登录状态失败: {}", e))?;
+    let session: LovstudioAuthSession = serde_json::from_str(&content)
+        .map_err(|e| format!("读取 Lovstudio 登录状态失败: {}", e))?;
 
     if session.access_token.trim().is_empty()
         || session.refresh_token.trim().is_empty()
@@ -12691,7 +14108,10 @@ async fn ensure_lovstudio_auth_session(
         Err(err) => {
             let _ = clear_lovstudio_auth_session();
             if strict {
-                Err(format!("Lovstudio 登录已过期，请重新登录后再提交反馈。{}", err))
+                Err(format!(
+                    "Lovstudio 登录已过期，请重新登录后再提交反馈。{}",
+                    err
+                ))
             } else {
                 Ok(None)
             }
@@ -12708,7 +14128,9 @@ async fn get_lovstudio_auth_state() -> Result<Option<LovstudioAuthState>, String
 }
 
 #[tauri::command]
-async fn start_lovstudio_login(app_version: Option<String>) -> Result<LovstudioLoginStartResult, String> {
+async fn start_lovstudio_login(
+    app_version: Option<String>,
+) -> Result<LovstudioLoginStartResult, String> {
     use reqwest::header::{ACCEPT, CONTENT_TYPE, USER_AGENT};
 
     let version = app_version
@@ -13087,9 +14509,8 @@ fn read_file(path: String) -> Result<String, String> {
     }
 
     let bytes = fs::read(&file_path).map_err(|e| format!("Failed to read file: {}", e))?;
-    String::from_utf8(bytes).map_err(|_| {
-        "Cannot preview this file as text because it is not valid UTF-8.".to_string()
-    })
+    String::from_utf8(bytes)
+        .map_err(|_| "Cannot preview this file as text because it is not valid UTF-8.".to_string())
 }
 
 /// List ZIP archive contents without extracting files.
@@ -14755,9 +16176,11 @@ pub fn run() {
             get_session_usage,
             list_all_sessions,
             list_all_sessions_streamed,
+            get_session_file_activity,
             get_app_starred_session_ids,
             list_all_chats,
             get_session_messages,
+            generate_session_handoff_prompt,
             build_search_index,
             search_chats,
             list_local_commands,
@@ -14807,6 +16230,7 @@ pub fn run() {
             check_paths_exist,
             resolve_path_candidates,
             migrate_session_cwd,
+            migrate_sessions_cwd_scoped,
             find_relocation_candidates,
             get_session_file_path,
             get_session_summary,
@@ -14829,6 +16253,7 @@ pub fn run() {
             set_provider_context_env,
             snapshot_provider_context,
             get_maas_registry,
+            get_maas_realtime_status,
             save_maas_registry,
             upsert_maas_provider,
             delete_maas_provider,
@@ -14877,6 +16302,7 @@ pub fn run() {
             cancel_claude_code_install,
             set_claude_code_autoupdater,
             get_lovcode_version_info,
+            refresh_lovcode_version_info,
             get_lovcode_autoupdater_enabled,
             set_lovcode_autoupdater,
             // PTY commands
@@ -14895,6 +16321,7 @@ pub fn run() {
             get_agent_plain_chat_workspace_path,
             get_agent_workspace_state,
             save_agent_workspace_state,
+            get_agent_workspace_hook_config,
             ensure_agent_workspace_hooks,
             // Hook watcher commands
             hook_start_monitoring,

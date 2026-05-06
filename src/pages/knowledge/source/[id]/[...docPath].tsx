@@ -1,6 +1,7 @@
 import { useNavigate, useParams } from "react-router-dom";
 import { SourceView, KnowledgeLayout } from "../../../../views/Knowledge";
 import type { FeatureType } from "../../../../types";
+import { LabLayout } from "@/views/Lab";
 
 export default function KnowledgeSourceDocPage() {
   const navigate = useNavigate();
@@ -18,20 +19,22 @@ export default function KnowledgeSourceDocPage() {
   };
 
   return (
-    <KnowledgeLayout
-      currentFeature={null}
-      currentSourceId={id}
-      onFeatureClick={handleFeatureClick}
-      onSourceClick={(sourceId) => navigate(`/knowledge/source/${encodeURIComponent(sourceId)}`)}
-    >
-      <SourceView
-        sourceId={id}
-        initialDocPath={docPath}
-        onDocOpen={(nextPath) =>
-          navigate(`/knowledge/source/${encodeURIComponent(id)}/${encodeURIComponent(nextPath)}`, { replace: true })
-        }
-        onDocClose={() => navigate(`/knowledge/source/${encodeURIComponent(id)}`)}
-      />
-    </KnowledgeLayout>
+    <LabLayout active="knowledge">
+      <KnowledgeLayout
+        currentFeature={null}
+        currentSourceId={id}
+        onFeatureClick={handleFeatureClick}
+        onSourceClick={(sourceId) => navigate(`/knowledge/source/${encodeURIComponent(sourceId)}`)}
+      >
+        <SourceView
+          sourceId={id}
+          initialDocPath={docPath}
+          onDocOpen={(nextPath) =>
+            navigate(`/knowledge/source/${encodeURIComponent(id)}/${encodeURIComponent(nextPath)}`, { replace: true })
+          }
+          onDocClose={() => navigate(`/knowledge/source/${encodeURIComponent(id)}`)}
+        />
+      </KnowledgeLayout>
+    </LabLayout>
   );
 }

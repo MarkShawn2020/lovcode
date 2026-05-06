@@ -4,6 +4,7 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { AppRouter } from "./router";
 import { Toaster } from "./components/ui/toast";
+import { I18nProvider } from "./i18n";
 import "./index.css";
 
 // Disable browser context menu in production (no reload/inspect-element).
@@ -43,29 +44,31 @@ const persister = createSyncStoragePersister({
 });
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <PersistQueryClientProvider
-    client={queryClient}
-    persistOptions={{
-      persister,
-      maxAge: 1000 * 60 * 60 * 24 * 7,
-      dehydrateOptions: {
-        // Only mirror the listed query keys to localStorage.
-        shouldDehydrateQuery: (q) =>
-          q.state.status === "success" &&
-          Array.isArray(q.queryKey) &&
-          typeof q.queryKey[0] === "string" &&
-          PERSIST_KEYS.includes(q.queryKey[0] as string),
-      },
-    }}
-    onSuccess={() => {
-      PERSIST_KEYS.forEach((key) => {
-        queryClient.refetchQueries({ queryKey: [key] });
-      });
-    }}
-  >
-    <AppRouter />
-    <Toaster />
-  </PersistQueryClientProvider>,
+  <I18nProvider>
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister,
+        maxAge: 1000 * 60 * 60 * 24 * 7,
+        dehydrateOptions: {
+          // Only mirror the listed query keys to localStorage.
+          shouldDehydrateQuery: (q) =>
+            q.state.status === "success" &&
+            Array.isArray(q.queryKey) &&
+            typeof q.queryKey[0] === "string" &&
+            PERSIST_KEYS.includes(q.queryKey[0] as string),
+        },
+      }}
+      onSuccess={() => {
+        PERSIST_KEYS.forEach((key) => {
+          queryClient.refetchQueries({ queryKey: [key] });
+        });
+      }}
+    >
+      <AppRouter />
+      <Toaster />
+    </PersistQueryClientProvider>
+  </I18nProvider>,
 );
 
 // Splash fade-out is triggered explicitly by the first layout that mounts

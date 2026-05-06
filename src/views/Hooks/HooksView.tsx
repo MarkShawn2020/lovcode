@@ -11,16 +11,18 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { MarketplaceContent } from "../Marketplace";
 import { useInvokeQuery } from "../../hooks";
+import { useI18n } from "@/i18n";
 
 interface HooksViewProps {
   onMarketplaceSelect: (template: TemplateComponent) => void;
 }
 
 export function HooksView({ onMarketplaceSelect }: HooksViewProps) {
+  const { t } = useI18n();
   const { data: settings, isLoading } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
   const [search, setSearch] = useState("");
 
-  if (isLoading) return <LoadingState message="Loading hooks..." />;
+  if (isLoading) return <LoadingState message={t("config.loadingHooks")} />;
 
   const hooks = settings?.hooks as Record<string, unknown[]> | null;
   const hookEntries = hooks ? Object.entries(hooks) : [];
@@ -31,19 +33,19 @@ export function HooksView({ onMarketplaceSelect }: HooksViewProps) {
   return (
     <ConfigPage>
       <PageHeader
-        title="Hooks"
-        subtitle="Automation triggers in ~/.claude/settings.json"
+        title={t("common.hooks")}
+        subtitle={t("config.hooksSubtitle")}
       />
 
       <Tabs defaultValue="installed" className="flex-1 flex flex-col">
         <TabsList className="bg-card-alt border border-border">
-          <TabsTrigger value="installed">已安装</TabsTrigger>
-          <TabsTrigger value="marketplace">市场</TabsTrigger>
+          <TabsTrigger value="installed">{t("common.installed")}</TabsTrigger>
+          <TabsTrigger value="marketplace">{t("common.marketplace")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="installed" className="mt-4 space-y-4">
           <SearchInput
-            placeholder="Search installed hooks..."
+            placeholder={t("config.searchInstalledHooks")}
             value={search}
             onChange={setSearch}
           />
@@ -72,13 +74,13 @@ export function HooksView({ onMarketplaceSelect }: HooksViewProps) {
           {filtered.length === 0 && !search && (
             <EmptyState
               icon={Link2Icon}
-              message="No hooks configured"
-              hint="Browse marketplace to install hooks"
+              message={t("config.noHooks")}
+              hint={t("config.installHooksHint")}
             />
           )}
 
           {filtered.length === 0 && search && (
-            <p className="text-muted-foreground text-sm">No hooks match "{search}"</p>
+            <p className="text-muted-foreground text-sm">{t("config.noHooksMatch", { search })}</p>
           )}
         </TabsContent>
 

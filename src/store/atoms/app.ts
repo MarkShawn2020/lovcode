@@ -1,5 +1,5 @@
 import { atomWithStorage } from "jotai/utils";
-import type { TemplateCategory, UserProfile } from "@/types";
+import type { TemplateCategory } from "@/types";
 
 // 侧边栏折叠状态 (always true - expanded sidebar removed from App.tsx)
 export const sidebarCollapsedAtom = atomWithStorage("lovcode:sidebarCollapsed", true);
@@ -9,7 +9,4 @@ export const marketplaceCategoryAtom = atomWithStorage<TemplateCategory>("lovcod
 
 // 路径缩短显示
 export const shortenPathsAtom = atomWithStorage("lovcode:shortenPaths", true);
-
-// 用户档案
-export const profileAtom = atomWithStorage<UserProfile>("lovcode:profile", { nickname: "", avatarUrl: "" });
 

@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { Button } from "../../components/ui/button";
 import { Progress } from "../../components/ui/progress";
@@ -12,6 +11,7 @@ import {
 } from "../../components/ui/select";
 import { CollapsibleCard } from "../../components/shared";
 import type { ClaudeCodeVersionInfo, ClaudeCodeInstallType } from "../../types";
+import { queryKeys, useInvokeMutation, useInvokeQuery } from "../../hooks";
 
 function formatDownloads(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -25,42 +25,46 @@ const INSTALL_TYPES: { value: ClaudeCodeInstallType; label: string; desc: string
 ];
 
 export function ClaudeCodeVersionSection() {
-  const [versionInfo, setVersionInfo] = useState<ClaudeCodeVersionInfo | null>(null);
-  const [loading, setLoading] = useState(true);
+  const {
+    data: versionInfo,
+    error: queryError,
+    isLoading: loading,
+    refetch,
+  } = useInvokeQuery<ClaudeCodeVersionInfo>(
+    queryKeys.claudeCodeVersionInfo,
+    "get_claude_code_version_info",
+  );
+  const installMutation = useInvokeMutation<string, { version: string; installType: ClaudeCodeInstallType }>(
+    "install_claude_code_version",
+    [queryKeys.claudeCodeVersionInfo],
+  );
+  const cancelMutation = useInvokeMutation<void, void>("cancel_claude_code_install");
+  const autoupdaterMutation = useInvokeMutation<void, { disabled: boolean }>(
+    "set_claude_code_autoupdater",
+    [queryKeys.claudeCodeVersionInfo],
+  );
   const [installing, setInstalling] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<string>("latest");
   const [selectedInstallType, setSelectedInstallType] = useState<ClaudeCodeInstallType>("native");
-  const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [installLogs, setInstallLogs] = useState<string[]>([]);
   const [downloadProgress, setDownloadProgress] = useState<number | null>(null);
   const logsEndRef = useRef<HTMLDivElement>(null);
   const unlistenRef = useRef<UnlistenFn | null>(null);
   const installGenRef = useRef(0); // Track install generation to filter stale events
-
-  const loadVersionInfo = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const info = await invoke<ClaudeCodeVersionInfo>("get_claude_code_version_info");
-      setVersionInfo(info);
-      if (info.current_version) {
-        setSelectedVersion(info.current_version);
-      }
-      // Set install type from detected type
-      if (info.install_type !== "none") {
-        setSelectedInstallType(info.install_type);
-      }
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const initializedFromInfoRef = useRef(false);
 
   useEffect(() => {
-    loadVersionInfo();
-  }, []);
+    if (!versionInfo || initializedFromInfoRef.current) return;
+    if (versionInfo.current_version) {
+      setSelectedVersion(versionInfo.current_version);
+    }
+    if (versionInfo.install_type !== "none") {
+      setSelectedInstallType(versionInfo.install_type);
+    }
+    initializedFromInfoRef.current = true;
+  }, [versionInfo]);
 
   // Auto-scroll to latest log
   useEffect(() => {
@@ -83,7 +87,7 @@ export function ClaudeCodeVersionSection() {
     const currentGen = ++installGenRef.current;
 
     setInstalling(true);
-    setError(null);
+    setActionError(null);
     setSuccess(null);
     setInstallLogs([]);
     setDownloadProgress(null);
@@ -126,16 +130,16 @@ export function ClaudeCodeVersionSection() {
         }
       });
 
-      await invoke<string>("install_claude_code_version", {
+      await installMutation.mutateAsync({
         version: selectedVersion,
         installType: selectedInstallType,
       });
 
       const typeLabel = INSTALL_TYPES.find((t) => t.value === selectedInstallType)?.label;
       setSuccess(`Successfully installed Claude Code ${selectedVersion} (${typeLabel})`);
-      await loadVersionInfo();
+      await refetch();
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     } finally {
       unlistenRef.current?.();
       unlistenRef.current = null;
@@ -152,9 +156,9 @@ export function ClaudeCodeVersionSection() {
     unlistenRef.current = null;
 
     try {
-      await invoke("cancel_claude_code_install");
+      await cancelMutation.mutateAsync(undefined);
       setInstallLogs((prev) => [...prev, "[Cancelled by user]"]);
-      setError("Installation cancelled");
+      setActionError("Installation cancelled");
     } catch (e) {
       console.error("Failed to cancel:", e);
     } finally {
@@ -165,12 +169,15 @@ export function ClaudeCodeVersionSection() {
   const handleToggleAutoupdater = async () => {
     if (!versionInfo) return;
     try {
-      await invoke("set_claude_code_autoupdater", { disabled: !versionInfo.autoupdater_disabled });
-      setVersionInfo({ ...versionInfo, autoupdater_disabled: !versionInfo.autoupdater_disabled });
+      setActionError(null);
+      await autoupdaterMutation.mutateAsync({ disabled: !versionInfo.autoupdater_disabled });
+      await refetch();
     } catch (e) {
-      setError(String(e));
+      setActionError(String(e));
     }
   };
+
+  const error = actionError ?? (queryError ? queryError.message : null);
 
   if (loading) {
     return (

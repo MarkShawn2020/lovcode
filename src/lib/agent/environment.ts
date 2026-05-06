@@ -11,8 +11,25 @@ export const ENVIRONMENT_PLATFORMS: Array<{ key: EnvironmentPlatform; label: str
   { key: "windows", label: "Windows" },
 ];
 
+const DEFAULT_SESSION_ENVIRONMENT_PREFIX = "session-default:";
+
 export function normalizeEnvironmentKey(path?: string | null): string {
   return path ? path.replace(/[/\\]+$/, "") : "";
+}
+
+export function getDefaultSessionEnvironmentKey(projectPath?: string | null): string {
+  const projectKey = normalizeEnvironmentKey(projectPath);
+  return projectKey ? `${DEFAULT_SESSION_ENVIRONMENT_PREFIX}${projectKey}` : "";
+}
+
+export function isDefaultSessionEnvironmentKey(key?: string | null): boolean {
+  return Boolean(key?.startsWith(DEFAULT_SESSION_ENVIRONMENT_PREFIX));
+}
+
+export function getProjectPathFromDefaultSessionEnvironmentKey(key: string): string {
+  return isDefaultSessionEnvironmentKey(key)
+    ? key.slice(DEFAULT_SESSION_ENVIRONMENT_PREFIX.length)
+    : "";
 }
 
 export function getProjectName(path?: string | null): string {

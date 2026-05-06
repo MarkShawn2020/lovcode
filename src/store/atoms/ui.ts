@@ -24,7 +24,9 @@ interface NavigationState {
 function routeToFeature(route: string): FeatureType | null {
   const map: Record<string, FeatureType> = {
     dashboard: "dashboard",
+    lab: "lab",
     workbench: "workbench",
+    wishes: "wish-room",
     mcp: "mcp", skills: "skills", hooks: "hooks", agents: "sub-agents",
     "output-styles": "output-styles", statusline: "statusline",
     commands: "commands", settings: "settings",
@@ -46,7 +48,9 @@ function parseUrlToView(hash: string): View {
 
   switch (first) {
     case "dashboard": return { type: "dashboard" };
+    case "lab": return { type: "lab" };
     case "workbench": return { type: "workbench" };
+    case "wishes": return { type: "wish-room" };
     case "features": return { type: "features" };
     case "workspace": return { type: "workspace" };
     case "annual-report-2025": return { type: "annual-report-2025" };

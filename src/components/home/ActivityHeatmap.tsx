@@ -1,6 +1,7 @@
 import { useMemo, useRef, useEffect } from "react";
 import { useAtom } from "jotai";
 import { activityViewModeAtom } from "@/store";
+import { useI18n } from "@/i18n";
 
 interface ActivityHeatmapProps {
   /** Map of date (YYYY-MM-DD) to count */
@@ -11,6 +12,7 @@ interface ActivityHeatmapProps {
 
 export function ActivityHeatmap({ daily, detailed }: ActivityHeatmapProps) {
   const [mode, setMode] = useAtom(activityViewModeAtom);
+  const { locale, t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const dailyMap = useMemo(() => new Map(Object.entries(daily)), [daily]);
@@ -140,7 +142,7 @@ export function ActivityHeatmap({ daily, detailed }: ActivityHeatmapProps) {
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground uppercase tracking-wide">
-            Activity
+            {t("home.activity")}
           </span>
           {/* Mode toggle */}
           <div className="flex rounded-md border border-border/60 overflow-hidden">
@@ -152,7 +154,7 @@ export function ActivityHeatmap({ daily, detailed }: ActivityHeatmapProps) {
                   : "bg-transparent text-muted-foreground hover:bg-accent"
               }`}
             >
-              Week
+              {t("home.week")}
             </button>
             <button
               onClick={() => setMode("hour")}
@@ -162,12 +164,12 @@ export function ActivityHeatmap({ daily, detailed }: ActivityHeatmapProps) {
                   : "bg-transparent text-muted-foreground hover:bg-accent"
               }`}
             >
-              Hour
+              {t("home.hour")}
             </button>
           </div>
         </div>
         <span className="text-xs text-muted-foreground">
-          {totalSessions.toLocaleString()} chats
+          {t("home.chatsCount", { count: totalSessions.toLocaleString(locale) })}
         </span>
       </div>
 
@@ -224,7 +226,7 @@ export function ActivityHeatmap({ daily, detailed }: ActivityHeatmapProps) {
                           cell.date ? getColorClass(cell.count, weekdayData.maxCount) : "bg-transparent"
                         }`}
                         style={{ width: `${cellSize}px`, height: `${cellSize}px` }}
-                        title={cell.date ? `${cell.date}: ${cell.count} chats` : ""}
+                        title={cell.date ? `${cell.date}: ${t("home.chatsCount", { count: cell.count })}` : ""}
                       />
                     ))}
                   </div>
@@ -257,7 +259,7 @@ export function ActivityHeatmap({ daily, detailed }: ActivityHeatmapProps) {
                         key={periodIdx}
                         className={`rounded-sm cursor-default ${getColorClass(count, hourData.maxCount)}`}
                         style={{ width: `${cellSize}px`, height: `${cellSize}px` }}
-                        title={`${day.date} ${periodLabels[periodIdx]} - ${count} chats`}
+                        title={`${day.date} ${periodLabels[periodIdx]} - ${t("home.chatsCount", { count })}`}
                       />
                     ))}
                   </div>
@@ -270,13 +272,13 @@ export function ActivityHeatmap({ daily, detailed }: ActivityHeatmapProps) {
 
       {/* Legend */}
       <div className="flex items-center justify-end gap-1 text-[10px] text-muted-foreground/70">
-        <span>Less</span>
+        <span>{t("home.less")}</span>
         <div className="w-[11px] h-[11px] rounded-sm bg-muted/30" />
         <div className="w-[11px] h-[11px] rounded-sm bg-primary/20" />
         <div className="w-[11px] h-[11px] rounded-sm bg-primary/40" />
         <div className="w-[11px] h-[11px] rounded-sm bg-primary/70" />
         <div className="w-[11px] h-[11px] rounded-sm bg-primary" />
-        <span>More</span>
+        <span>{t("home.more")}</span>
       </div>
     </div>
   );

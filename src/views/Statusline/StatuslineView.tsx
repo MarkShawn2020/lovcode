@@ -8,6 +8,7 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "../../compo
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { MarketplaceContent } from "../Marketplace";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
+import { useI18n } from "@/i18n";
 import type { ClaudeSettings, TemplateComponent } from "../../types";
 
 const JSON_REFERENCE = `{
@@ -46,6 +47,7 @@ interface StatuslineViewProps {
 }
 
 export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
   const [editing, setEditing] = useState(false);
@@ -145,40 +147,40 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
     }
   };
 
-  if (isLoading) return <LoadingState message="Loading settings..." />;
+  if (isLoading) return <LoadingState message={t("settings.loadingSettings")} />;
 
   return (
     <ConfigPage>
       <PageHeader
-        title="Status Line"
-        subtitle="Customize Claude Code's CLI status bar"
+        title={t("statusline.title")}
+        subtitle={t("statusline.subtitle")}
       />
 
       <Tabs defaultValue="installed" className="flex-1 flex flex-col">
         <TabsList className="bg-card-alt border border-border">
-          <TabsTrigger value="installed">已安装</TabsTrigger>
-          <TabsTrigger value="marketplace">市场</TabsTrigger>
+          <TabsTrigger value="installed">{t("common.installed")}</TabsTrigger>
+          <TabsTrigger value="marketplace">{t("common.marketplace")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="installed" className="mt-4 space-y-4">
           <CollapsibleCard
             storageKey="lovcode:statusline:configOpen"
-            title="Current Configuration"
-            subtitle={statusLine ? `Command: ${statusLine.command}` : "Not configured"}
+            title={t("statusline.currentConfiguration")}
+            subtitle={statusLine ? t("statusline.commandSubtitle", { command: statusLine.command }) : t("statusline.notConfigured")}
             bodyClassName="p-4 space-y-4"
             defaultOpen
           >
             {statusLine && !editing ? (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground w-20">Command</span>
+                  <span className="text-xs text-muted-foreground w-20">{t("statusline.command")}</span>
                   <code className="text-xs px-2 py-1 rounded bg-muted text-ink font-mono flex-1">
                     {statusLine.command}
                   </code>
                 </div>
                 {statusLine.padding !== undefined && (
                   <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground w-20">Padding</span>
+                    <span className="text-xs text-muted-foreground w-20">{t("statusline.padding")}</span>
                     <span className="text-xs text-ink">{statusLine.padding}</span>
                   </div>
                 )}
@@ -186,7 +188,7 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
                   <Collapsible defaultOpen>
                     <div className="rounded-lg border border-border overflow-hidden">
                       <CollapsibleTrigger className="w-full flex items-center justify-between px-3 py-2 bg-muted/50 hover:bg-muted transition-colors">
-                        <span className="text-xs font-medium text-ink">Script Content</span>
+                        <span className="text-xs font-medium text-ink">{t("statusline.scriptContent")}</span>
                         <ChevronDownIcon className="w-4 h-4 text-muted-foreground transition-transform duration-200 [[data-state=open]_&]:rotate-180" />
                       </CollapsibleTrigger>
                       <CollapsibleContent>
@@ -196,21 +198,21 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
                   </Collapsible>
                 )}
                 {loadingScript && (
-                  <p className="text-xs text-muted-foreground">Loading script...</p>
+                  <p className="text-xs text-muted-foreground">{t("statusline.loadingScript")}</p>
                 )}
                 <div className="flex gap-2 pt-2">
                   <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
                     <Pencil1Icon className="w-4 h-4 mr-1" />
-                    Edit
+                    {t("common.edit")}
                   </Button>
                   <Button size="sm" variant="outline" className="text-destructive" onClick={handleRemove} disabled={saving}>
                     <TrashIcon className="w-4 h-4 mr-1" />
-                    Remove
+                    {t("common.remove")}
                   </Button>
                   {hasPrevious && (
                     <Button size="sm" variant="outline" onClick={handleRestore} disabled={saving}>
                       <ResetIcon className="w-4 h-4 mr-1" />
-                      Restore Previous
+                      {t("statusline.restorePrevious")}
                     </Button>
                   )}
                 </div>
@@ -218,7 +220,7 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
             ) : (
               <div className="space-y-3">
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-ink">Command</label>
+                  <label className="text-xs font-medium text-ink">{t("statusline.command")}</label>
                   <input
                     className="w-full text-xs px-3 py-2 rounded-lg bg-canvas border border-border text-ink font-mono"
                     placeholder="~/.claude/statusline.sh"
@@ -226,11 +228,11 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
                     onChange={(e) => setCommand(e.target.value)}
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    Path to script that outputs status line text. Receives session JSON via stdin.
+                    {t("statusline.scriptPathHelp")}
                   </p>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-xs font-medium text-ink">Padding</label>
+                  <label className="text-xs font-medium text-ink">{t("statusline.padding")}</label>
                   <input
                     type="number"
                     min={0}
@@ -240,13 +242,13 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
                     onChange={(e) => setPadding(e.target.value ? parseInt(e.target.value) : undefined)}
                   />
                   <p className="text-[10px] text-muted-foreground">
-                    Set to 0 to let status line extend to edge. Leave empty for default.
+                    {t("statusline.paddingHelp")}
                   </p>
                 </div>
                 <div className="flex gap-2 pt-2">
                   <Button size="sm" onClick={handleSave} disabled={!command.trim() || saving}>
                     <CheckIcon className="w-4 h-4 mr-1" />
-                    Save
+                    {t("common.save")}
                   </Button>
                   {statusLine && (
                     <Button size="sm" variant="outline" onClick={() => {
@@ -255,7 +257,7 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
                       setPadding(statusLine.padding);
                     }}>
                       <Cross1Icon className="w-4 h-4 mr-1" />
-                      Cancel
+                      {t("common.cancel")}
                     </Button>
                   )}
                 </div>
@@ -265,13 +267,13 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
 
           <CollapsibleCard
             storageKey="lovcode:statusline:helpOpen"
-            title="JSON Input Reference"
-            subtitle="Data available to your statusline script"
+            title={t("statusline.jsonReference")}
+            subtitle={t("statusline.jsonReferenceSubtitle")}
             bodyClassName="p-4"
           >
             <CodePreview value={JSON_REFERENCE} language="json" height={280} />
             <p className="text-[10px] text-muted-foreground mt-2">
-              Use <code className="bg-muted px-1 rounded">jq</code> to parse JSON in bash scripts.
+              {t("statusline.jqHelp")}
             </p>
           </CollapsibleCard>
 
@@ -279,11 +281,11 @@ export function StatuslineView({ onMarketplaceSelect }: StatuslineViewProps) {
             <div className="text-center py-8">
               <EmptyState
                 icon={RowsIcon}
-                message="No status line configured"
-                hint="Browse marketplace to install statusline templates"
+                message={t("statusline.noConfigured")}
+                hint={t("statusline.installHint")}
               />
               <Button className="mt-4" onClick={() => setEditing(true)}>
-                Configure Status Line
+                {t("statusline.configure")}
               </Button>
             </div>
           )}

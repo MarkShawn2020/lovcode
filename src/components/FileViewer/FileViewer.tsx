@@ -16,6 +16,7 @@ import {
 import { Archive, FileWarning, Folder } from "lucide-react";
 import Editor from "@monaco-editor/react";
 import { MarkdownRenderer } from "../MarkdownRenderer";
+import { useI18n } from "@/i18n";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -289,6 +290,8 @@ function UnsupportedPreview({
   onOpenDefault: () => void;
   onReveal: () => void;
 }) {
+  const { t, translate } = useI18n();
+
   return (
     <div className="flex h-full items-center justify-center bg-background p-6">
       <div className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-sm">
@@ -297,18 +300,18 @@ function UnsupportedPreview({
             <FileWarning className="h-5 w-5" />
           </div>
           <div className="min-w-0">
-            <h3 className="font-serif text-base font-semibold text-foreground">{info.title}</h3>
-            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{info.description}</p>
+            <h3 className="font-serif text-base font-semibold text-foreground">{translate(info.title)}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-muted-foreground">{translate(info.description)}</p>
           </div>
         </div>
         <dl className="mb-4 space-y-1.5 text-xs">
           <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2">
-            <dt className="text-muted-foreground">File</dt>
+            <dt className="text-muted-foreground">{t("common.file")}</dt>
             <dd className="truncate font-mono text-foreground" title={fileName}>{fileName}</dd>
           </div>
           {fileSize !== undefined && (
             <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-2">
-              <dt className="text-muted-foreground">Size</dt>
+              <dt className="text-muted-foreground">{t("common.size")}</dt>
               <dd className="font-mono text-foreground">{formatFileSize(fileSize)}</dd>
             </div>
           )}
@@ -320,7 +323,7 @@ function UnsupportedPreview({
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             <ExternalLinkIcon className="h-3.5 w-3.5" />
-            Open with default app
+            {t("fileViewer.openWithDefaultApp")}
           </button>
           <button
             type="button"
@@ -328,7 +331,7 @@ function UnsupportedPreview({
             className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-card-alt"
           >
             <Folder className="h-3.5 w-3.5" />
-            Reveal in Finder
+            {t("fileViewer.revealInFinder")}
           </button>
         </div>
       </div>
@@ -421,6 +424,7 @@ function ArchivePreview({
   onOpenDefault: () => void;
   onReveal: () => void;
 }) {
+  const { t } = useI18n();
   const tree = useMemo(() => buildArchiveTree(listing.entries), [listing.entries]);
   const { files: fileCount, folders: folderCount } = useMemo(() => countArchiveTree(tree), [tree]);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set());
@@ -454,9 +458,11 @@ function ArchivePreview({
               {fileName}
             </h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {fileCount} files · {folderCount} folders
+              {t("fileViewer.archiveSummary", { files: fileCount, folders: folderCount })}
               {fileSize !== undefined ? ` · ${formatFileSize(fileSize)}` : ""}
-              {listing.truncated ? ` · ${listing.entries.length}/${listing.total_entries} shown` : ""}
+              {listing.truncated
+                ? ` · ${t("fileViewer.archiveShown", { shown: listing.entries.length, total: listing.total_entries })}`
+                : ""}
             </p>
           </div>
           <div className="flex shrink-0 gap-1">
@@ -464,7 +470,7 @@ function ArchivePreview({
               type="button"
               onClick={onOpenDefault}
               className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-card-alt hover:text-ink"
-              title="Open with default app"
+              title={t("fileViewer.openWithDefaultApp")}
             >
               <ExternalLinkIcon className="h-4 w-4" />
             </button>
@@ -472,7 +478,7 @@ function ArchivePreview({
               type="button"
               onClick={onReveal}
               className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-card-alt hover:text-ink"
-              title="Reveal in Finder"
+              title={t("fileViewer.revealInFinder")}
             >
               <Folder className="h-4 w-4" />
             </button>
@@ -482,7 +488,7 @@ function ArchivePreview({
       <div className="min-h-0 flex-1 overflow-auto">
         {tree.length === 0 ? (
           <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-            Empty archive
+            {t("fileViewer.emptyArchive")}
           </div>
         ) : (
           <ul className="py-1">
@@ -517,6 +523,7 @@ function PathBreadcrumbs({
   currentIsDir?: boolean | null;
   className?: string;
 }) {
+  const { t } = useI18n();
   if (!segments) {
     return (
       <span className={cn("min-w-0 text-ink", className)} title={path}>
@@ -544,7 +551,7 @@ function PathBreadcrumbs({
         className,
       )}
       title={path}
-      aria-label="File path"
+      aria-label={t("fileViewer.filePath")}
     >
       {!shouldCollapse && (
         <button
@@ -571,7 +578,7 @@ function PathBreadcrumbs({
                 className={cn(
                   "inline-flex h-5 shrink-0 items-center justify-center rounded-md px-1 text-muted-foreground transition-colors hover:bg-card-alt hover:text-primary",
                 )}
-                title="Show parent folders"
+                title={t("fileViewer.showParentFolders")}
               >
                 <DotsHorizontalIcon className="h-3.5 w-3.5" />
               </button>
@@ -635,6 +642,7 @@ export function FileViewer({
   revealColumn,
   revealNonce,
 }: FileViewerProps) {
+  const { t } = useI18n();
   // Internal navigation: lets users drill into directories without losing the
   // original `filePath` prop. History stack supports the back button.
   const [currentPath, setCurrentPath] = useState(filePath);
@@ -888,7 +896,7 @@ export function FileViewer({
           <button
             onClick={goBack}
             className="p-1 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
-            title="Back"
+            title={t("fileViewer.back")}
           >
             <ChevronLeftIcon className="w-4 h-4" />
           </button>
@@ -911,7 +919,7 @@ export function FileViewer({
                   ? "bg-background text-ink shadow-sm"
                   : "text-muted-foreground hover:text-ink"
               }`}
-              title="Source"
+              title={t("fileViewer.source")}
             >
               <CodeIcon className="w-4 h-4" />
             </button>
@@ -922,7 +930,7 @@ export function FileViewer({
                   ? "bg-background text-ink shadow-sm"
                   : "text-muted-foreground hover:text-ink"
               }`}
-              title="Side by Side"
+              title={t("fileViewer.sideBySide")}
             >
               <ColumnsIcon className="w-4 h-4" />
             </button>
@@ -933,7 +941,7 @@ export function FileViewer({
                   ? "bg-background text-ink shadow-sm"
                   : "text-muted-foreground hover:text-ink"
               }`}
-              title="Preview"
+              title={t("fileViewer.preview")}
             >
               <ReaderIcon className="w-4 h-4" />
             </button>
@@ -942,14 +950,14 @@ export function FileViewer({
         <button
           onClick={handleOpenInEditor}
           className="p-1.5 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
-          title="Open in editor"
+          title={t("common.openInEditor")}
         >
           <ExternalLinkIcon className="w-4 h-4" />
         </button>
         <button
           onClick={onClose}
           className="p-1.5 text-muted-foreground hover:text-ink hover:bg-card-alt rounded transition-colors"
-          title="Close"
+          title={t("common.close")}
         >
           <Cross2Icon className="w-4 h-4" />
         </button>
@@ -959,7 +967,7 @@ export function FileViewer({
       <div className="flex-1 min-h-0 overflow-auto">
         {loading ? (
           <div className="flex items-center justify-center h-full">
-            <div className="text-sm text-muted-foreground">Loading...</div>
+            <div className="text-sm text-muted-foreground">{t("common.loading")}</div>
           </div>
         ) : error ? (
           <div className="flex items-center justify-center h-full">
@@ -978,12 +986,12 @@ export function FileViewer({
             {dirEntries.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-48 gap-2">
                 <Folder className="w-8 h-8 text-muted-foreground/40" />
-                <div className="text-sm text-muted-foreground">Empty directory</div>
+                <div className="text-sm text-muted-foreground">{t("fileViewer.emptyDirectory")}</div>
                 <button
                   onClick={revealInFinder}
                   className="text-xs text-primary hover:underline"
                 >
-                  Reveal in Finder
+                  {t("fileViewer.revealInFinder")}
                 </button>
               </div>
             ) : (
@@ -1025,21 +1033,21 @@ export function FileViewer({
               />
             </div>
             <div className="w-48 border-l border-border bg-canvas-alt p-3 flex-shrink-0">
-              <h3 className="text-xs font-medium text-muted-foreground mb-3">Image Info</h3>
+              <h3 className="text-xs font-medium text-muted-foreground mb-3">{t("fileViewer.imageInfo")}</h3>
               <div className="space-y-2 text-sm">
                 <div>
-                  <span className="text-muted-foreground">Format</span>
+                  <span className="text-muted-foreground">{t("common.format")}</span>
                   <p className="text-ink">{fileExt}</p>
                 </div>
                 {imageInfo?.width && imageInfo.width > 0 && (
                   <div>
-                    <span className="text-muted-foreground">Dimensions</span>
+                    <span className="text-muted-foreground">{t("fileViewer.dimensions")}</span>
                     <p className="text-ink">{imageInfo.width} × {imageInfo.height}</p>
                   </div>
                 )}
                 {imageInfo?.fileSize && imageInfo.fileSize > 0 && (
                   <div>
-                    <span className="text-muted-foreground">Size</span>
+                    <span className="text-muted-foreground">{t("common.size")}</span>
                     <p className="text-ink">{formatFileSize(imageInfo.fileSize)}</p>
                   </div>
                 )}

@@ -12,6 +12,7 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { MarketplaceContent } from "../Marketplace";
 import { useInvokeQuery } from "../../hooks";
+import { useI18n } from "@/i18n";
 
 interface SubAgentsViewProps {
   onSelect: (agent: LocalAgent) => void;
@@ -19,27 +20,28 @@ interface SubAgentsViewProps {
 }
 
 export function SubAgentsView({ onSelect, onMarketplaceSelect }: SubAgentsViewProps) {
+  const { t } = useI18n();
   const { data: agents = [], isLoading } = useInvokeQuery<LocalAgent[]>(["agents"], "list_local_agents");
   const { search, setSearch, filtered } = useSearch(agents, ["name", "description", "model"]);
 
-  if (isLoading) return <LoadingState message="Loading sub-agents..." />;
+  if (isLoading) return <LoadingState message={t("config.loadingSubAgents")} />;
 
   return (
     <ConfigPage>
       <PageHeader
-        title="Sub Agents"
-        subtitle={`${agents.length} sub-agents in ~/.claude/commands`}
+        title={t("common.subAgents")}
+        subtitle={t("config.subAgentsCount", { count: agents.length })}
       />
 
       <Tabs defaultValue="installed" className="flex-1 flex flex-col">
         <TabsList className="bg-card-alt border border-border">
-          <TabsTrigger value="installed">已安装</TabsTrigger>
-          <TabsTrigger value="marketplace">市场</TabsTrigger>
+          <TabsTrigger value="installed">{t("common.installed")}</TabsTrigger>
+          <TabsTrigger value="marketplace">{t("common.marketplace")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="installed" className="mt-4 space-y-4">
           <SearchInput
-            placeholder="Search installed sub-agents..."
+            placeholder={t("config.searchInstalledSubAgents")}
             value={search}
             onChange={setSearch}
           />
@@ -61,13 +63,13 @@ export function SubAgentsView({ onSelect, onMarketplaceSelect }: SubAgentsViewPr
           {filtered.length === 0 && !search && (
             <EmptyState
               icon={PersonIcon}
-              message="No sub-agents found"
-              hint="Browse marketplace to install sub-agents"
+              message={t("config.noSubAgents")}
+              hint={t("config.installSubAgentsHint")}
             />
           )}
 
           {filtered.length === 0 && search && (
-            <p className="text-muted-foreground text-sm">No sub-agents match "{search}"</p>
+            <p className="text-muted-foreground text-sm">{t("config.noSubAgentsMatch", { search })}</p>
           )}
         </TabsContent>
 

@@ -12,6 +12,7 @@ import {
 } from "../ui/dropdown-menu";
 import { Button } from "../ui/button";
 import { differenceInMinutes, differenceInHours, differenceInDays, differenceInWeeks, differenceInMonths } from "date-fns";
+import { useI18n, type Language } from "@/i18n";
 
 /** Parse YAML frontmatter from markdown content */
 function parseFrontmatter(content: string): { meta: Record<string, string>; body: string } {
@@ -30,19 +31,19 @@ function parseFrontmatter(content: string): { meta: Record<string, string>; body
   return { meta, body: match[2] };
 }
 
-function formatRelativeTime(date: Date): string {
+function formatRelativeTime(date: Date, language: Language): string {
   const now = new Date();
   const mins = differenceInMinutes(now, date);
-  if (mins < 1) return "刚刚";
-  if (mins < 60) return `${mins}分钟前`;
+  if (mins < 1) return language === "zh" ? "刚刚" : "just now";
+  if (mins < 60) return language === "zh" ? `${mins}分钟前` : `${mins}m ago`;
   const hours = differenceInHours(now, date);
-  if (hours < 24) return `${hours}小时前`;
+  if (hours < 24) return language === "zh" ? `${hours}小时前` : `${hours}h ago`;
   const days = differenceInDays(now, date);
-  if (days < 7) return `${days}天前`;
+  if (days < 7) return language === "zh" ? `${days}天前` : `${days}d ago`;
   const weeks = differenceInWeeks(now, date);
-  if (weeks < 5) return `${weeks}周前`;
+  if (weeks < 5) return language === "zh" ? `${weeks}周前` : `${weeks}w ago`;
   const months = differenceInMonths(now, date);
-  return `${months}个月前`;
+  return language === "zh" ? `${months}个月前` : `${months}mo ago`;
 }
 
 // ============================================================================
@@ -156,6 +157,7 @@ export function DetailHeader({
   onChangelogClick?: () => void;
   onRename?: (newName: string) => void;
 }) {
+  const { t } = useI18n();
   const hasMenu = Boolean(path) || onNavigateSession || (menuItems && menuItems.length > 0);
   const hasDefaultMenuItems = Boolean(path) || onNavigateSession;
   const [isEditing, setIsEditing] = useState(false);
@@ -254,19 +256,19 @@ export function DetailHeader({
               {path && onOpenPath && (
                 <DropdownMenuItem onClick={() => onOpenPath(path)}>
                   <ExternalLinkIcon className="w-4 h-4 mr-2" />
-                  Open in Editor
+                  {t("common.openInEditor")}
                 </DropdownMenuItem>
               )}
               {path && (
                 <DropdownMenuItem onClick={() => navigator.clipboard.writeText(path)}>
                   <CopyIcon className="w-4 h-4 mr-2" />
-                  Copy Path
+                  {t("common.copyPath")}
                 </DropdownMenuItem>
               )}
               {onNavigateSession && (
                 <DropdownMenuItem onClick={onNavigateSession}>
                   <ChatBubbleIcon className="w-4 h-4 mr-2" />
-                  Go to Session
+                  {t("common.goToSession")}
                 </DropdownMenuItem>
               )}
               {hasDefaultMenuItems && menuItems && menuItems.length > 0 && (
@@ -312,13 +314,14 @@ export function ItemCard({
   timestamp?: string | Date;
   onClick: () => void;
 }) {
+  const { activeLanguage } = useI18n();
   const badgeClass =
     badgeVariant === "accent"
       ? "bg-accent/20 text-accent"
       : "bg-card-alt text-muted-foreground";
 
   const relativeTime = timestamp
-    ? formatRelativeTime(new Date(timestamp))
+    ? formatRelativeTime(new Date(timestamp), activeLanguage)
     : null;
 
   return (

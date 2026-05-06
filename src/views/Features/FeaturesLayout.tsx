@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { SidebarLayout, NavSidebar } from "@/components/shared";
 import { TEMPLATE_CATEGORIES } from "@/constants";
+import { useI18n } from "@/i18n";
 import type { FeatureType, TemplateCategory } from "@/types";
 
 type SidebarKey = TemplateCategory | "introduction" | "basic-env" | "basic-maas" | "basic-version" | "basic-context" | "extensions";
@@ -53,31 +54,32 @@ interface FeaturesLayoutProps {
 
 export function FeaturesLayout({ children, feature, currentFeature, onFeatureClick }: FeaturesLayoutProps) {
   const navigate = useNavigate();
+  const { t, translate } = useI18n();
 
   const groups = useMemo(() => [
     {
-      title: "Quick Start",
+      title: t("features.quickStart"),
       items: [
-        { key: "introduction", label: "Introduction" },
-        { key: "basic-maas", label: "MaaS Registry" },
+        { key: "introduction", label: t("features.introduction") },
+        { key: "basic-maas", label: t("feature.maasRegistry") },
       ],
     },
     {
-      title: "Basic",
+      title: t("features.basic"),
       items: [
-        { key: "basic-env", label: "Environment" },
-        { key: "basic-version", label: "CC Version" },
-        { key: "basic-context", label: "Context" },
+        { key: "basic-env", label: t("common.environment") },
+        { key: "basic-version", label: t("feature.ccVersion") },
+        { key: "basic-context", label: t("feature.context") },
       ],
     },
     {
-      title: "Features",
+      title: t("features.features"),
       items: [
-        ...TEMPLATE_CATEGORIES.map(c => ({ key: c.key, label: c.label })),
-        { key: "extensions", label: "Extensions" },
+        ...TEMPLATE_CATEGORIES.map(c => ({ key: c.key, label: translate(c.label) })),
+        { key: "extensions", label: t("common.extensions") },
       ],
     },
-  ], []);
+  ], [t, translate]);
 
   const activeFeature = feature ?? currentFeature;
   const activeKey = activeFeature ? FEATURE_TO_KEY[activeFeature] ?? null : null;

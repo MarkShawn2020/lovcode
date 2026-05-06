@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { expandedPathsAtom } from "@/store";
 import { ChevronRightIcon, ChevronDownIcon, FileIcon, CopyIcon, ExternalLinkIcon } from "@radix-ui/react-icons";
 import { ImageIcon } from "lucide-react";
+import { useI18n } from "@/i18n";
 import { isImageFile } from "@/lib/utils";
 import {
   ContextMenu,
@@ -35,6 +36,7 @@ interface TreeNodeProps {
 }
 
 function TreeNode({ entry, depth, onFileClick, selectedFile, expandedPaths, onToggleExpand }: TreeNodeProps) {
+  const { t } = useI18n();
   const [children, setChildren] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const expanded = entry.is_dir && expandedPaths.has(entry.path);
@@ -127,22 +129,22 @@ function TreeNode({ entry, depth, onFileClick, selectedFile, expandedPaths, onTo
         <ContextMenuContent>
           <ContextMenuItem onClick={handleCopyPath}>
             <CopyIcon className="w-4 h-4 mr-2" />
-            Copy Path
+            {t("common.copyPath")}
           </ContextMenuItem>
           <ContextMenuItem onClick={handleCopyName}>
             <CopyIcon className="w-4 h-4 mr-2" />
-            Copy Name
+            {t("common.copyName")}
           </ContextMenuItem>
           {!entry.is_dir && (
             <ContextMenuItem onClick={handleCopyContent}>
               <CopyIcon className="w-4 h-4 mr-2" />
-              Copy Content
+              {t("common.copyContent")}
             </ContextMenuItem>
           )}
           <ContextMenuSeparator />
           <ContextMenuItem onClick={handleOpenInEditor}>
             <ExternalLinkIcon className="w-4 h-4 mr-2" />
-            Open in Editor
+            {t("common.openInEditor")}
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
@@ -166,6 +168,7 @@ function TreeNode({ entry, depth, onFileClick, selectedFile, expandedPaths, onTo
 }
 
 export function FileTree({ rootPath, onFileClick, selectedFile }: FileTreeProps) {
+  const { t } = useI18n();
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -215,7 +218,7 @@ export function FileTree({ rootPath, onFileClick, selectedFile }: FileTreeProps)
   }, [rootPath]);
 
   if (loading) {
-    return <div className="text-xs text-muted-foreground p-2">Loading...</div>;
+    return <div className="text-xs text-muted-foreground p-2">{t("common.loading")}</div>;
   }
 
   if (error) {
@@ -223,7 +226,7 @@ export function FileTree({ rootPath, onFileClick, selectedFile }: FileTreeProps)
   }
 
   if (entries.length === 0) {
-    return <div className="text-xs text-muted-foreground p-2">Empty directory</div>;
+    return <div className="text-xs text-muted-foreground p-2">{t("fileTree.emptyDirectory")}</div>;
   }
 
   return (

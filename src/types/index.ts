@@ -7,6 +7,7 @@ export * from "./agent";
 
 export type FeatureType =
   | "dashboard"
+  | "lab"
   | "workbench"
   | "chat"
   | "workspace"
@@ -25,6 +26,7 @@ export type FeatureType =
   | "output-styles"
   | "marketplace"
   | "extensions"
+  | "wish-room"
   | "kb-distill"
   | "events";
 
@@ -126,6 +128,19 @@ export interface Message {
   is_tool: boolean;
   line_number: number;
   content_blocks?: ContentBlock[];
+}
+
+export interface SessionHandoff {
+  sourceProvider: "claude" | "codex";
+  targetProvider: "claude" | "codex";
+  sourceSessionId: string;
+  sourceProjectId: string;
+  projectPath?: string | null;
+  sourceTitle?: string | null;
+  prompt: string;
+  messageCount: number;
+  includedMessageCount: number;
+  truncated: boolean;
 }
 
 export interface ChatMessage {
@@ -303,8 +318,10 @@ export type TemplateCategory =
 export type View =
   | { type: "home" }
   | { type: "dashboard" }
+  | { type: "lab" }
   | { type: "workbench" }
   | { type: "workspace" }
+  | { type: "wish-room" }
   | { type: "features" }
   | { type: "chat-projects" }
   | { type: "chat-sessions"; projectId: string; projectPath: string }
@@ -365,15 +382,6 @@ export interface AnnualReport2025 {
   longest_streak: number;
   daily_activity: Record<string, number>;
   hourly_distribution: Record<string, number>;
-}
-
-// ============================================================================
-// User Types
-// ============================================================================
-
-export interface UserProfile {
-  nickname: string;
-  avatarUrl: string;
 }
 
 // ============================================================================
@@ -438,6 +446,8 @@ export interface LovcodeVersionInfo {
   latest_version: string | null;
   releases: LovcodeRelease[];
   auto_update_enabled: boolean;
+  release_source: "github_api" | "cache" | "github_atom";
+  releases_truncated: boolean;
 }
 
 // ============================================================================

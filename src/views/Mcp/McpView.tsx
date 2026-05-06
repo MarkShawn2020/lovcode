@@ -14,6 +14,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/ta
 import { FilePath } from "../../components/shared/FilePath";
 import { MarketplaceContent } from "../Marketplace";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
+import { useI18n } from "@/i18n";
 
 interface McpViewProps {
   onMarketplaceSelect: (template: TemplateComponent) => void;
@@ -21,6 +22,7 @@ interface McpViewProps {
 
 export function McpView({ onMarketplaceSelect }: McpViewProps) {
   const queryClient = useQueryClient();
+  const { t } = useI18n();
   const { data: settings, isLoading: settingsLoading } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
   const { data: mcpConfigPath = "" } = useInvokeQuery<string>(["mcpConfigPath"], "get_mcp_config_path");
   const servers = settings?.mcp_servers ?? [];
@@ -63,7 +65,7 @@ export function McpView({ onMarketplaceSelect }: McpViewProps) {
     return null;
   };
 
-  if (settingsLoading) return <LoadingState message="Loading MCP servers..." />;
+  if (settingsLoading) return <LoadingState message={t("config.loadingMcpServers")} />;
 
   const filtered = servers.filter(
     (s) =>
@@ -74,20 +76,20 @@ export function McpView({ onMarketplaceSelect }: McpViewProps) {
   return (
     <ConfigPage>
       <PageHeader
-        title="MCP Servers"
-        subtitle={`${servers.length} configured servers`}
+        title={t("common.mcpServers")}
+        subtitle={t("config.configuredServers", { count: servers.length })}
         action={mcpConfigPath && <FilePath path={mcpConfigPath} showIcon filenameOnly />}
       />
 
       <Tabs defaultValue="installed" className="flex-1 flex flex-col">
         <TabsList className="bg-card-alt border border-border">
-          <TabsTrigger value="installed">已安装</TabsTrigger>
-          <TabsTrigger value="marketplace">市场</TabsTrigger>
+          <TabsTrigger value="installed">{t("common.installed")}</TabsTrigger>
+          <TabsTrigger value="marketplace">{t("common.marketplace")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="installed" className="mt-4 space-y-4">
           <SearchInput
-            placeholder="Search installed MCP servers..."
+            placeholder={t("config.searchInstalledMcp")}
             value={search}
             onChange={setSearch}
           />
@@ -104,7 +106,7 @@ export function McpView({ onMarketplaceSelect }: McpViewProps) {
                           <button
                             onClick={() => openUrl(getMcpUrl(server)!)}
                             className="text-muted-foreground hover:text-primary transition-colors"
-                            title="Open in npm"
+                            title={t("config.openInNpm")}
                           >
                             <ExternalLinkIcon className="w-3.5 h-3.5" />
                           </button>
@@ -118,7 +120,7 @@ export function McpView({ onMarketplaceSelect }: McpViewProps) {
                       onClick={() => handleUninstall(server.name)}
                       disabled={uninstallingServer === server.name}
                       className="p-1.5 text-muted-foreground hover:text-red-500 hover:bg-red-500/10 rounded transition-colors disabled:opacity-50"
-                      title="Uninstall"
+                      title={t("config.uninstall")}
                     >
                       <TrashIcon className="w-4 h-4" />
                     </button>
@@ -137,7 +139,7 @@ export function McpView({ onMarketplaceSelect }: McpViewProps) {
                         )}
                       </p>
                     ) : (
-                      <p className="text-muted-foreground italic">No command or URL configured</p>
+                      <p className="text-muted-foreground italic">{t("config.noCommandOrUrl")}</p>
                     )}
                   </div>
                   {Object.keys(server.env).length > 0 && (
@@ -179,13 +181,13 @@ export function McpView({ onMarketplaceSelect }: McpViewProps) {
           {filtered.length === 0 && !search && (
             <EmptyState
               icon={Component1Icon}
-              message="No MCP servers configured"
-              hint="Browse marketplace to install MCP servers"
+              message={t("config.noMcpServers")}
+              hint={t("config.installMcpHint")}
             />
           )}
 
           {filtered.length === 0 && search && (
-            <p className="text-muted-foreground text-sm">No MCP servers match "{search}"</p>
+            <p className="text-muted-foreground text-sm">{t("config.noMcpMatch", { search })}</p>
           )}
         </TabsContent>
 

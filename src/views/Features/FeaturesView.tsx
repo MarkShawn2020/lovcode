@@ -1,4 +1,5 @@
 import { FEATURES } from "@/constants";
+import { useI18n } from "@/i18n";
 import type { FeatureType, FeatureConfig } from "@/types";
 import { FeaturesLayout } from "./FeaturesLayout";
 import {
@@ -59,6 +60,8 @@ function QuickStartCard({
   onClick: () => void;
 }) {
   const Icon = ICONS[feature.type] ?? Layers3;
+  const { t, translate } = useI18n();
+
   return (
     <button
       onClick={onClick}
@@ -77,13 +80,13 @@ function QuickStartCard({
       </div>
       <div className="relative mt-10">
         <div className="font-serif text-xl text-foreground leading-tight">
-          {feature.label}
+          {translate(feature.label)}
         </div>
         <div className="mt-2 text-sm text-muted-foreground leading-relaxed">
-          {feature.description}
+          {translate(feature.description)}
         </div>
         <div className="mt-5 flex items-center gap-1.5 text-xs font-medium text-primary/80 group-hover:text-primary">
-          <span>Open</span>
+          <span>{t("common.open")}</span>
           <ArrowUpRight className="w-3.5 h-3.5 transition-transform duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
         </div>
       </div>
@@ -101,6 +104,8 @@ function IndexRow({
   onClick: () => void;
 }) {
   const Icon = ICONS[feature.type] ?? Layers3;
+  const { translate } = useI18n();
+
   return (
     <button
       onClick={onClick}
@@ -111,9 +116,9 @@ function IndexRow({
       </span>
       <Icon className="w-4 h-4 text-muted-foreground group-hover:text-primary transition-colors" />
       <div className="min-w-0">
-        <div className="font-medium text-foreground truncate">{feature.label}</div>
+        <div className="font-medium text-foreground truncate">{translate(feature.label)}</div>
         <div className="text-xs text-muted-foreground truncate mt-0.5">
-          {feature.description}
+          {translate(feature.description)}
         </div>
       </div>
       <ArrowUpRight className="w-4 h-4 text-muted-foreground/40 group-hover:text-primary transition-all duration-300 group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
@@ -122,6 +127,7 @@ function IndexRow({
 }
 
 export function FeaturesView({ onFeatureClick, currentFeature }: FeaturesViewProps) {
+  const { t } = useI18n();
   const byType = new Map(FEATURES.map((f) => [f.type, f]));
   const quickStartFeatures = QUICK_START.map((t) => byType.get(t)).filter(
     (f): f is FeatureConfig => Boolean(f),
@@ -144,18 +150,18 @@ export function FeaturesView({ onFeatureClick, currentFeature }: FeaturesViewPro
         <header className="mb-14">
           <div className="flex items-center gap-3 mb-6 text-[11px] tracking-[0.22em] uppercase text-muted-foreground">
             <span className="w-8 h-px bg-border" />
-            <span>Lovcode · Workbench</span>
+            <span>{t("features.mastheadKicker")}</span>
             <span className="w-1 h-1 rounded-full bg-primary/60" />
             <span className="tabular-nums">{today}</span>
           </div>
           <h1 className="font-serif text-5xl leading-[1.05] text-foreground tracking-tight">
-            A quiet workbench
+            {t("features.titleLine1")}
             <br />
-            for <em className="text-primary not-italic font-serif">vibe&nbsp;coding</em>.
+            {t("features.titleLine2Prefix")}{" "}
+            <em className="text-primary not-italic font-serif">{t("features.titleLine2Emphasis")}</em>.
           </h1>
           <p className="mt-6 max-w-xl text-[15px] leading-relaxed text-muted-foreground">
-            Curate the Claude Code ecosystem from one place — environments, models, prompts,
-            hooks, agents. Pick up where you left off, or start something new below.
+            {t("features.subtitle")}
           </p>
         </header>
 
@@ -163,7 +169,7 @@ export function FeaturesView({ onFeatureClick, currentFeature }: FeaturesViewPro
         <section className="mb-16">
           <div className="flex items-baseline justify-between mb-6 pb-3 border-b border-border">
             <h2 className="font-serif text-sm tracking-[0.18em] uppercase text-foreground">
-              Begin here
+              {t("features.beginHere")}
             </h2>
             <span className="text-xs text-muted-foreground tabular-nums">
               {pad(quickStartFeatures.length)} / {pad(FEATURES.filter(f => f.group === "basic" || f.group === "config").length)}
@@ -185,10 +191,10 @@ export function FeaturesView({ onFeatureClick, currentFeature }: FeaturesViewPro
         <section>
           <div className="flex items-baseline justify-between mb-6 pb-3 border-b border-border">
             <h2 className="font-serif text-sm tracking-[0.18em] uppercase text-foreground">
-              The library
+              {t("features.library")}
             </h2>
             <span className="text-xs text-muted-foreground">
-              Every configurable surface, at a glance
+              {t("features.librarySubtitle")}
             </span>
           </div>
 
@@ -197,7 +203,7 @@ export function FeaturesView({ onFeatureClick, currentFeature }: FeaturesViewPro
             <div>
               <div className="flex items-center gap-3 mb-2 mt-1">
                 <span className="font-serif italic text-muted-foreground text-sm">
-                  Basic
+                  {t("features.basic")}
                 </span>
                 <span className="flex-1 h-px bg-border/70" />
               </div>
@@ -217,7 +223,7 @@ export function FeaturesView({ onFeatureClick, currentFeature }: FeaturesViewPro
             <div>
               <div className="flex items-center gap-3 mb-2 mt-1">
                 <span className="font-serif italic text-muted-foreground text-sm">
-                  Features
+                  {t("features.features")}
                 </span>
                 <span className="flex-1 h-px bg-border/70" />
               </div>
@@ -239,9 +245,9 @@ export function FeaturesView({ onFeatureClick, currentFeature }: FeaturesViewPro
 
         {/* ── Colophon ────────────────────────────────────────────────── */}
         <footer className="mt-20 pt-6 border-t border-border flex items-center justify-between text-[11px] tracking-[0.15em] uppercase text-muted-foreground">
-          <span>Warm · Academic · Tactile</span>
+          <span>{t("features.colophon")}</span>
           <span className="font-serif italic normal-case tracking-normal text-[13px]">
-            — select a section from the sidebar to continue.
+            {t("features.selectSection")}
           </span>
         </footer>
       </div>

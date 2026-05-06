@@ -1,24 +1,26 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { CheckCircle2, Copy, ExternalLink, Loader2, LogIn, LogOut, Mail, MessageSquarePlus, Send, UserRound } from "lucide-react";
+import { CheckCircle2, Copy, ExternalLink, Loader2, LogIn, Mail, Send } from "lucide-react";
 import { version as APP_VERSION } from "../../package.json";
+import { useLovstudioAuth } from "@/hooks/useLovstudioAuth";
+import { useI18n } from "@/i18n";
+import { cn } from "@/lib/utils";
 import { Button } from "./ui/button";
 import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "./ui/dialog";
-import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { toast } from "./ui/toast";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 const FEEDBACK_EMAIL = "mark@lovstudio.ai";
 const MIN_MESSAGE_CHARS = 4;
+const MAX_TAGS = 6;
+const MAX_TAG_CHARS = 20;
 const TICKETS_URL = "https://lovstudio.ai/account/tickets";
 
 const categoryOptions = [
@@ -37,34 +39,6 @@ interface FeedbackSubmitResult {
   authenticated?: boolean;
 }
 
-interface LovstudioAuthUser {
-  id: string;
-  email: string;
-}
-
-interface LovstudioAuthState {
-  expiresAt: number;
-  user: LovstudioAuthUser;
-}
-
-interface LovstudioLoginStartResult {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  verificationUriComplete: string;
-  expiresIn: number;
-  interval: number;
-}
-
-interface ActiveLoginFlow extends LovstudioLoginStartResult {
-  startedAt: number;
-}
-
-interface LovstudioLoginPollResult {
-  status: "pending" | "authenticated";
-  session?: LovstudioAuthState | null;
-}
-
 function getCurrentPath() {
   return `${window.location.pathname}${window.location.search}`;
 }
@@ -81,109 +55,73 @@ function charCount(value: string) {
   return Array.from(value).length;
 }
 
-export function FeedbackButton() {
-  const [open, setOpen] = useState(false);
-  const [category, setCategory] = useState<FeedbackCategory>("idea");
+function normalizeTag(value: string) {
+  return value
+    .trim()
+    .replace(/^#+/, "")
+    .replace(/[#,，]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_TAG_CHARS);
+}
+
+function formatTag(value: string) {
+  return `#${value}`;
+}
+
+function getCategoryFromTags(tags: string[]): FeedbackCategory {
+  return categoryOptions.find((item) => tags.includes(item.label))?.value ?? "idea";
+}
+
+interface FeedbackButtonProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function FeedbackButton({ open, onOpenChange }: FeedbackButtonProps) {
+  const { t, translate } = useI18n();
   const [message, setMessage] = useState("");
-  const [contact, setContact] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>(["建议"]);
+  const [customTags, setCustomTags] = useState<string[]>([]);
+  const [customTagInput, setCustomTagInput] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
   const [submittedTicket, setSubmittedTicket] = useState<FeedbackSubmitResult | null>(null);
-  const [authState, setAuthState] = useState<LovstudioAuthState | null>(null);
-  const [authLoading, setAuthLoading] = useState(false);
-  const [loginFlow, setLoginFlow] = useState<ActiveLoginFlow | null>(null);
-  const [loginPolling, setLoginPolling] = useState(false);
+  const {
+    authState,
+    authLoading,
+    loginFlow,
+    loginPolling,
+    startLogin,
+  } = useLovstudioAuth();
 
   const trimmedMessage = message.trim();
   const messageLength = charCount(trimmedMessage);
   const isMessageTooShort = messageLength > 0 && messageLength < MIN_MESSAGE_CHARS;
-  const canSubmit = messageLength >= MIN_MESSAGE_CHARS && !submitting;
+  const canSubmit = Boolean(authState) && messageLength >= MIN_MESSAGE_CHARS && !submitting;
+  const selectedCategory = useMemo(() => getCategoryFromTags(selectedTags), [selectedTags]);
+  const localizeTag = (tag: string) => {
+    const category = categoryOptions.find((item) => item.label === tag);
+    return category ? translate(category.label) : tag;
+  };
+  const selectedTagText = useMemo(() => selectedTags.map((tag) => formatTag(localizeTag(tag))).join(" "), [selectedTags, translate]);
 
   const selectedCategoryLabel = useMemo(
-    () => categoryOptions.find((item) => item.value === category)?.label ?? "建议",
-    [category],
+    () => translate(categoryOptions.find((item) => item.value === selectedCategory)?.label ?? "建议"),
+    [selectedCategory, translate],
   );
 
-  useEffect(() => {
-    if (!open) return;
-
-    let cancelled = false;
-    setAuthLoading(true);
-    invoke<LovstudioAuthState | null>("get_lovstudio_auth_state")
-      .then((state) => {
-        if (!cancelled) setAuthState(state);
-      })
-      .catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        if (!cancelled) toast.error(`读取登录状态失败: ${message}`);
-      })
-      .finally(() => {
-        if (!cancelled) setAuthLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open || !loginFlow || authState) return;
-
-    let cancelled = false;
-    let timer: number | undefined;
-
-    const poll = async () => {
-      if (cancelled) return;
-
-      if (Date.now() - loginFlow.startedAt > loginFlow.expiresIn * 1000) {
-        setLoginFlow(null);
-        setLoginPolling(false);
-        toast.error("Lovstudio 登录授权已过期，请重新登录。");
-        return;
-      }
-
-      setLoginPolling(true);
-      try {
-        const result = await invoke<LovstudioLoginPollResult>("poll_lovstudio_login", {
-          deviceCode: loginFlow.deviceCode,
-        });
-        if (cancelled) return;
-        if (result.status === "authenticated" && result.session) {
-          setAuthState(result.session);
-          setLoginFlow(null);
-          toast.success("Lovstudio 已登录");
-        }
-      } catch (err) {
-        if (cancelled) return;
-        const message = err instanceof Error ? err.message : String(err);
-        setLoginFlow(null);
-        toast.error(`Lovstudio 登录失败: ${message}`);
-      } finally {
-        if (!cancelled) setLoginPolling(false);
-      }
-    };
-
-    void poll();
-    timer = window.setInterval(poll, Math.max(loginFlow.interval, 3) * 1000);
-
-    return () => {
-      cancelled = true;
-      if (timer) window.clearInterval(timer);
-    };
-  }, [authState, loginFlow, open]);
-
   const resetForm = () => {
-    setCategory("idea");
     setMessage("");
-    setContact("");
+    setSelectedTags(["建议"]);
+    setCustomTags([]);
+    setCustomTagInput("");
     setError("");
     setSubmittedTicket(null);
-    setLoginFlow(null);
-    setLoginPolling(false);
   };
 
   const handleOpenChange = (nextOpen: boolean) => {
-    setOpen(nextOpen);
+    onOpenChange(nextOpen);
     if (nextOpen) {
       setError("");
     } else {
@@ -192,15 +130,15 @@ export function FeedbackButton() {
   };
 
   const buildMailtoUrl = () => {
-    const subject = `[Lovcode 反馈] ${selectedCategoryLabel}`;
+    const subject = t("feedback.mailSubject", { category: selectedCategoryLabel });
     const body = [
       "Lovcode Feedback",
       `Category: ${selectedCategoryLabel}`,
+      selectedTagText ? `Tags: ${selectedTagText}` : "",
       `Page: ${getCurrentPath()}`,
       `App Version: ${APP_VERSION}`,
-      contact.trim() ? `Contact: ${contact.trim()}` : "",
       "",
-      trimmedMessage || "请在这里写下反馈内容。",
+      trimmedMessage || t("feedback.mailEmptyMessage"),
     ].filter(Boolean).join("\n");
 
     return `mailto:${FEEDBACK_EMAIL}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
@@ -211,7 +149,7 @@ export function FeedbackButton() {
       await openUrl(buildMailtoUrl());
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      toast.error(`打开邮件失败: ${message}`);
+      toast.error(t("feedback.openMailFailed", { message }));
     }
   };
 
@@ -220,10 +158,10 @@ export function FeedbackButton() {
 
     try {
       await navigator.clipboard.writeText(submittedTicket.feedbackId);
-      toast.success("工单 ID 已复制");
+      toast.success(t("feedback.ticketCopied"));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      toast.error(`复制失败: ${message}`);
+      toast.error(t("feedback.copyFailed", { message }));
     }
   };
 
@@ -232,55 +170,95 @@ export function FeedbackButton() {
       await openUrl(TICKETS_URL);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      toast.error(`打开用户中心失败: ${message}`);
+      toast.error(t("feedback.openAccountFailed", { message }));
     }
   };
 
   const handleStartLogin = async () => {
-    try {
-      const result = await invoke<LovstudioLoginStartResult>("start_lovstudio_login", {
-        appVersion: APP_VERSION,
-      });
-      setLoginFlow({ ...result, startedAt: Date.now() });
-      await openUrl(result.verificationUriComplete);
-      toast.success("已打开 Lovstudio 登录/注册页面");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      toast.error(`发起登录失败: ${message}`);
+    await startLogin(APP_VERSION);
+  };
+
+  const toggleTag = (tag: string) => {
+    if (!selectedTags.includes(tag) && selectedTags.length >= MAX_TAGS) {
+      toast.error(t("feedback.maxTags", { count: MAX_TAGS }));
+      return;
+    }
+
+    setSelectedTags((current) => (
+      current.includes(tag)
+        ? current.filter((item) => item !== tag)
+        : [...current, tag]
+    ));
+  };
+
+  const addCustomTag = () => {
+    const tag = normalizeTag(customTagInput);
+    if (!tag) {
+      setCustomTagInput("");
+      return;
+    }
+
+    if (!selectedTags.includes(tag) && selectedTags.length >= MAX_TAGS) {
+      toast.error(t("feedback.maxTags", { count: MAX_TAGS }));
+      return;
+    }
+
+    if (!categoryOptions.some((item) => item.label === tag)) {
+      setCustomTags((current) => (
+        current.includes(tag) ? current : [...current, tag]
+      ));
+    }
+    setSelectedTags((current) => (
+      current.includes(tag) ? current : [...current, tag]
+    ));
+    setCustomTagInput("");
+  };
+
+  const handleCustomTagKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter" || event.key === "," || event.key === "，") {
+      event.preventDefault();
+      addCustomTag();
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await invoke("logout_lovstudio");
-      setAuthState(null);
-      setLoginFlow(null);
-      toast.success("已退出 Lovstudio");
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      toast.error(`退出失败: ${message}`);
+  const getSubmissionTags = () => {
+    const pendingTag = normalizeTag(customTagInput);
+    if (!pendingTag || selectedTags.includes(pendingTag) || selectedTags.length >= MAX_TAGS) {
+      return selectedTags;
     }
+
+    return [...selectedTags, pendingTag];
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!authState) {
+      if (!authLoading) {
+        await handleStartLogin();
+      }
+      return;
+    }
     if (!canSubmit) return;
 
     setSubmitting(true);
     setError("");
 
     try {
+      const submissionTags = getSubmissionTags();
+      const submissionCategory = getCategoryFromTags(submissionTags);
+
       const result = await invoke<FeedbackSubmitResult>("submit_feedback", {
         payload: {
-          category,
+          category: submissionCategory,
           message: trimmedMessage,
-          contact: contact.trim() || null,
           path: getCurrentPath(),
           appVersion: APP_VERSION,
           userAgent: navigator.userAgent,
           locale: navigator.language,
           timezone: getTimezone(),
           metadata: {
+            tags: submissionTags.map(formatTag),
+            tagLabels: submissionTags,
             screen: `${window.screen.width}x${window.screen.height}`,
             pixelRatio: window.devicePixelRatio,
           },
@@ -289,214 +267,187 @@ export function FeedbackButton() {
 
       setSubmittedTicket(result);
       setMessage("");
-      toast.success("反馈已提交，请复制工单 ID");
+      toast.success(t("feedback.submittedToast"));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
-      toast.error(`提交失败: ${message}`);
+      toast.error(t("feedback.submitFailed", { message }));
     } finally {
       setSubmitting(false);
     }
   };
 
   return (
-    <>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            type="button"
-            size="icon"
-            className="fixed bottom-10 right-4 z-40 h-10 w-10 rounded-full border border-border shadow-lg"
-            onClick={() => handleOpenChange(true)}
-            aria-label="提交反馈"
-          >
-            <MessageSquarePlus className="h-5 w-5" />
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="left" sideOffset={8}>提交反馈</TooltipContent>
-      </Tooltip>
-
-      <Dialog open={open} onOpenChange={handleOpenChange}>
-        <DialogContent className="sm:max-w-[440px]">
-          <DialogHeader>
-            <DialogTitle className="font-serif">提交反馈</DialogTitle>
-            <DialogDescription>
-              {submittedTicket
-                ? "反馈已进入工单系统。"
-                : `登录 Lovstudio 后会自动绑定工单，并通知 ${FEEDBACK_EMAIL}。`}
-            </DialogDescription>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogContent className="gap-0 overflow-x-hidden p-0 sm:max-w-[420px] sm:rounded-2xl">
+          <DialogHeader className="px-5 pb-3 pt-5 pr-12 text-left">
+            <DialogTitle className="font-serif text-2xl leading-tight">
+              {submittedTicket ? t("feedback.submitted") : t("feedback.submitFeedback")}
+            </DialogTitle>
           </DialogHeader>
 
           {submittedTicket ? (
-            <div className="space-y-4">
-              <div className="max-w-full overflow-hidden rounded-xl border border-primary/30 bg-primary/5 p-4">
-                <div className="flex min-w-0 items-start gap-3">
-                  <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                  <div className="min-w-0 flex-1 space-y-2">
-                    <p className="font-medium text-foreground">反馈已提交</p>
-                    <p className="text-sm text-muted-foreground">
-                      {submittedTicket.authenticated
-                        ? `已绑定 ${submittedTicket.submitterEmail || "当前 Lovstudio 账号"}，后续可以在用户中心查看处理状态。`
-                        : "这次未绑定账号，请复制工单 ID 保存；登录后提交的工单会自动进入用户中心。"}
-                    </p>
-                    <div className="grid min-w-0 max-w-full gap-2 rounded-lg border border-border bg-background px-3 py-2">
-                      <code className="block max-w-full whitespace-normal break-all rounded bg-muted/50 px-2 py-1 font-mono text-xs leading-relaxed text-foreground">
-                        {submittedTicket.feedbackId}
-                      </code>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="w-full"
-                        onClick={handleCopyTicketId}
-                      >
-                        <Copy className="mr-2 h-4 w-4" />
-                        复制
-                      </Button>
-                    </div>
-                  </div>
+            <div className="space-y-4 px-5 pb-5">
+              <div className="max-w-full overflow-hidden rounded-xl border border-primary/30 bg-primary/5 p-3">
+                <div className="mb-3 flex items-center gap-2 text-sm font-medium text-foreground">
+                  <CheckCircle2 className="h-4 w-4 text-primary" />
+                  {t("feedback.ticketId")}
                 </div>
+                <div className="grid min-w-0 max-w-full gap-2 rounded-lg border border-border bg-background p-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center">
+                  <code className="block min-w-0 break-all rounded bg-muted/50 px-2 py-1.5 font-mono text-xs leading-relaxed text-foreground">
+                    {submittedTicket.feedbackId}
+                  </code>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="w-full sm:w-auto"
+                    onClick={handleCopyTicketId}
+                  >
+                    <Copy className="mr-2 h-4 w-4" />
+                    {t("common.copy")}
+                  </Button>
+                </div>
+                {submittedTicket.authenticated && (
+                  <p className="mt-2 truncate text-xs text-muted-foreground">
+                    {submittedTicket.submitterEmail || t("feedback.currentAccount")}
+                  </p>
+                )}
               </div>
 
               <DialogFooter className="gap-2 sm:space-x-0 [&>button]:w-full sm:[&>button]:w-auto">
                 {!submittedTicket.authenticated && (
                   <Button type="button" variant="outline" onClick={handleStartLogin}>
                     <LogIn className="mr-2 h-4 w-4" />
-                    登录 / 注册
+                    {t("auth.loginOrRegister")}
                   </Button>
                 )}
                 <Button type="button" variant="outline" onClick={handleOpenTickets}>
                   <ExternalLink className="mr-2 h-4 w-4" />
-                  用户中心
+                  {t("feedback.accountCenter")}
                 </Button>
                 <Button type="button" onClick={() => handleOpenChange(false)}>
-                  完成
+                  {t("common.done")}
                 </Button>
               </DialogFooter>
             </div>
           ) : (
-            <form className="space-y-4" onSubmit={handleSubmit}>
-            <div className="grid grid-cols-3 gap-2">
-              {categoryOptions.map((item) => (
-                <button
-                  key={item.value}
-                  type="button"
-                  className={`rounded-lg border px-3 py-2 text-sm transition-colors ${
-                    category === item.value
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
-                  }`}
-                  onClick={() => setCategory(item.value)}
-                >
-                  {item.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="feedback-message">反馈内容</Label>
-              <textarea
-                id="feedback-message"
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-                placeholder="遇到的问题、期待的功能，或希望我联系你的事项。"
-                maxLength={5000}
-                className="min-h-32 w-full resize-none rounded-lg border border-input bg-background px-3 py-2 text-sm text-foreground shadow-sm outline-none transition-colors placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
-              />
-              <div className="flex items-center justify-between text-xs text-muted-foreground">
-                <span className={isMessageTooShort ? "text-destructive" : ""}>
-                  {isMessageTooShort ? `至少输入 ${MIN_MESSAGE_CHARS} 个字符` : " "}
-                </span>
-                <span>{messageLength}/5000</span>
-              </div>
-            </div>
-
-            <div className="grid gap-3 rounded-xl border border-border bg-muted/30 p-3 sm:grid-cols-[1fr_auto] sm:items-start">
-              <div className="flex min-w-0 gap-3">
-                <UserRound className="mt-0.5 h-5 w-5 shrink-0 text-primary" />
-                <div className="min-w-0 space-y-1">
-                  <p className="text-sm font-medium text-foreground">Lovstudio 账号</p>
-                  {authState ? (
-                    <p className="break-all text-xs text-muted-foreground">
-                      已登录 {authState.user.email}
-                    </p>
-                  ) : loginFlow ? (
-                    <div className="space-y-1">
-                      <p className="text-xs text-muted-foreground">
-                        在浏览器完成登录/注册授权后，Lovcode 会自动绑定账号。
-                      </p>
-                      <p className="inline-flex max-w-full rounded-md border border-border bg-background px-2 py-1 font-mono text-xs tracking-widest text-foreground">
-                        {loginFlow.userCode}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      登录/注册后，提交的反馈会自动出现在用户中心。
-                    </p>
-                  )}
+            <form className="space-y-4 px-5 pb-5" onSubmit={handleSubmit}>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <Label htmlFor="feedback-message" className="text-sm font-medium">{t("feedback.message")}</Label>
+                  <span
+                    className={cn(
+                      "shrink-0 text-xs tabular-nums",
+                      isMessageTooShort ? "text-destructive" : "text-muted-foreground",
+                    )}
+                  >
+                    {isMessageTooShort ? translate(`还差 ${MIN_MESSAGE_CHARS - messageLength} 字`) : `${messageLength}/5000`}
+                  </span>
                 </div>
+                <textarea
+                  id="feedback-message"
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                  placeholder={t("feedback.messagePlaceholder")}
+                  maxLength={5000}
+                  autoFocus
+                  className="min-h-[148px] w-full resize-none rounded-xl border border-input bg-background px-3 py-3 text-sm leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                />
               </div>
 
-              {authState ? (
-                <Button type="button" variant="outline" size="sm" className="w-full sm:w-auto" onClick={handleLogout}>
-                  <LogOut className="mr-2 h-4 w-4" />
-                  退出
+              <div className="flex flex-wrap items-center gap-2" aria-label={t("feedback.tags")}>
+                {categoryOptions.map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={selectedTags.includes(item.label)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                      selectedTags.includes(item.label)
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground",
+                    )}
+                    onClick={() => toggleTag(item.label)}
+                  >
+                    {formatTag(localizeTag(item.label))}
+                  </button>
+                ))}
+                {customTags.map((tag) => (
+                  <button
+                    key={tag}
+                    type="button"
+                    aria-pressed={selectedTags.includes(tag)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                      selectedTags.includes(tag)
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border bg-background text-muted-foreground hover:bg-accent hover:text-foreground",
+                    )}
+                    onClick={() => toggleTag(tag)}
+                  >
+                    {formatTag(tag)}
+                  </button>
+                ))}
+                <input
+                  value={customTagInput}
+                  onChange={(event) => setCustomTagInput(event.target.value)}
+                  onKeyDown={handleCustomTagKeyDown}
+                  onBlur={addCustomTag}
+                  placeholder={t("feedback.customTag")}
+                  aria-label={t("feedback.addCustomTag")}
+                  maxLength={MAX_TAG_CHARS + 1}
+                  className="h-8 min-w-24 flex-1 rounded-full border border-border bg-background px-3 text-xs text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </div>
+
+              <div className="min-w-0 text-xs leading-relaxed text-muted-foreground">
+                {authLoading ? (
+                  t("feedback.checkingLogin")
+                ) : authState ? (
+                  <span className="block truncate">{t("feedback.loggedInAs", { email: authState.user.email })}</span>
+                ) : loginFlow ? (
+                  <span className="inline-flex max-w-full items-center gap-2">
+                    <span>{t("feedback.authCode")}</span>
+                    <span className="truncate rounded-md border border-border bg-background px-2 py-0.5 font-mono tracking-widest text-foreground">
+                      {loginFlow.userCode}
+                    </span>
+                  </span>
+                ) : (
+                  t("feedback.loginToTrack")
+                )}
+              </div>
+
+              {error && (
+                <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                  {error}
+                </p>
+              )}
+
+              <div className="flex flex-col-reverse gap-2 pt-2 sm:flex-row sm:items-center sm:justify-between">
+                <Button type="button" variant="ghost" className="w-full sm:w-auto" onClick={handleOpenMail}>
+                  <Mail className="mr-2 h-4 w-4" />
+                  {t("feedback.email")}
                 </Button>
-              ) : (
                 <Button
-                  type="button"
-                  variant={loginFlow ? "outline" : "default"}
-                  size="sm"
-                  className="w-full sm:w-auto"
-                  onClick={handleStartLogin}
-                  disabled={authLoading}
+                  type={authState ? "submit" : "button"}
+                  className="w-full sm:min-w-32 sm:w-auto"
+                  onClick={authState ? undefined : handleStartLogin}
+                  disabled={authState ? !canSubmit : authLoading}
                 >
-                  {authLoading || loginPolling ? (
+                  {submitting || authLoading || (!authState && loginPolling) ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : authState ? (
+                    <Send className="mr-2 h-4 w-4" />
                   ) : (
                     <LogIn className="mr-2 h-4 w-4" />
                   )}
-                  {loginFlow ? "重新打开" : "登录 / 注册"}
+                  {authState ? t("feedback.submitTicket") : loginFlow ? t("feedback.reopenAuth") : t("feedback.loginToSubmit")}
                 </Button>
-              )}
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="feedback-contact">补充联系方式</Label>
-              <Input
-                id="feedback-contact"
-                value={contact}
-                onChange={(event) => setContact(event.target.value)}
-                placeholder="微信、电话或备用邮箱（可选）"
-                maxLength={200}
-              />
-              <p className="text-xs text-muted-foreground">
-                {authState
-                  ? "工单会绑定到已登录账号，这里只用于补充其他联系方式。"
-                  : "未登录也可提交，但不会自动出现在用户中心；建议先登录/注册。"}
-              </p>
-            </div>
-
-            {error && (
-              <p className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
-                {error}
-              </p>
-            )}
-
-            <DialogFooter className="gap-2 sm:space-x-0">
-              <Button type="button" variant="outline" onClick={handleOpenMail}>
-                <Mail className="mr-2 h-4 w-4" />
-                邮件发送
-              </Button>
-              <Button type="submit" disabled={!canSubmit}>
-                {submitting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
-                提交
-              </Button>
-            </DialogFooter>
+              </div>
             </form>
           )}
-        </DialogContent>
-      </Dialog>
-    </>
+      </DialogContent>
+    </Dialog>
   );
 }

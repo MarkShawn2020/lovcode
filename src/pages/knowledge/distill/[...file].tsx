@@ -1,17 +1,30 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
 import { DistillDetailView, KnowledgeLayout } from "../../../views/Knowledge";
 import { LoadingState } from "../../../components/config";
 import type { DistillDocument, FeatureType } from "../../../types";
+import { queryKeys, useInvokeQuery } from "../../../hooks";
+import { LabLayout } from "@/views/Lab";
 
 export default function DistillDetailPage() {
   const navigate = useNavigate();
   const params = useParams();
   const file = params["*"] ? decodeURIComponent(params["*"]) : "";
 
-  const [document, setDocument] = useState<DistillDocument | null>(null);
-  const [loading, setLoading] = useState(true);
+  const {
+    data: documents = [],
+    isFetched,
+    isLoading: loading,
+  } = useInvokeQuery<DistillDocument[]>(
+    queryKeys.distillDocuments,
+    "list_distill_documents",
+    undefined,
+    { enabled: Boolean(file) },
+  );
+  const document = useMemo(
+    () => documents.find((item) => item.file === file) ?? null,
+    [documents, file],
+  );
 
   useEffect(() => {
     if (!file) {
@@ -19,18 +32,10 @@ export default function DistillDetailPage() {
       return;
     }
 
-    invoke<DistillDocument[]>("list_distill_documents")
-      .then((docs) => {
-        const doc = docs.find((d) => d.file === file);
-        if (doc) {
-          setDocument(doc);
-        } else {
-          navigate("/knowledge/distill");
-        }
-      })
-      .catch(() => navigate("/knowledge/distill"))
-      .finally(() => setLoading(false));
-  }, [file, navigate]);
+    if (isFetched && !document) {
+      navigate("/knowledge/distill");
+    }
+  }, [document, file, isFetched, navigate]);
 
   const handleFeatureClick = (feature: FeatureType) => {
     if (feature === "kb-distill") navigate("/knowledge/distill");
@@ -49,21 +54,25 @@ export default function DistillDetailPage() {
 
   if (loading) {
     return (
-      <KnowledgeLayout currentFeature="kb-distill" onFeatureClick={handleFeatureClick} onSourceClick={handleSourceClick}>
-        <LoadingState message="Loading document..." />
-      </KnowledgeLayout>
+      <LabLayout active="knowledge">
+        <KnowledgeLayout currentFeature="kb-distill" onFeatureClick={handleFeatureClick} onSourceClick={handleSourceClick}>
+          <LoadingState message="Loading document..." />
+        </KnowledgeLayout>
+      </LabLayout>
     );
   }
 
   if (!document) return null;
 
   return (
-    <KnowledgeLayout currentFeature="kb-distill" onFeatureClick={handleFeatureClick} onSourceClick={handleSourceClick}>
-      <DistillDetailView
-        document={document}
-        onBack={() => navigate("/knowledge/distill")}
-        onNavigateSession={handleNavigateSession}
-      />
-    </KnowledgeLayout>
+    <LabLayout active="knowledge">
+      <KnowledgeLayout currentFeature="kb-distill" onFeatureClick={handleFeatureClick} onSourceClick={handleSourceClick}>
+        <DistillDetailView
+          document={document}
+          onBack={() => navigate("/knowledge/distill")}
+          onNavigateSession={handleNavigateSession}
+        />
+      </KnowledgeLayout>
+    </LabLayout>
   );
 }

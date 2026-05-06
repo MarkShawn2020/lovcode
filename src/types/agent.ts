@@ -14,7 +14,7 @@ export type AgentWorkState = "idle" | "working" | "stopped";
 
 export type EnvironmentPlatform = "default" | "macos" | "linux" | "windows";
 
-export type EnvironmentScope = "project" | "session";
+export type EnvironmentScope = "global" | "project" | "session";
 
 export interface EnvironmentAction {
   id: string;
@@ -38,6 +38,7 @@ export interface AgentSession {
   cwd: string;
   command?: string | null;
   initialInput?: string | null;
+  submittedPrompt?: string | null;
   status: AgentSessionStatus;
   workState?: AgentWorkState | null;
   ptyId?: string | null;
@@ -59,6 +60,7 @@ export interface AgentWorkspaceState {
   version: number;
   sessions: AgentSession[];
   conversationMeta?: Record<string, WorkbenchConversationMeta>;
+  globalEnvironment?: EnvironmentConfig | null;
   projectEnvironments?: Record<string, EnvironmentConfig>;
   sessionEnvironments?: Record<string, EnvironmentConfig>;
   sidebar?: AgentWorkspaceSidebarState;
@@ -70,7 +72,9 @@ export interface AgentWorkspaceSidebarState {
   outlineMode?: "project" | "recent";
   displayFilter?: "all" | "running" | "review";
   sortMode?: "last-modified" | "created" | "name";
+  reorderGroups?: boolean;
   mergeWorktrees?: boolean;
+  showProjectNewConversation?: boolean;
   collapsedProjectPaths?: string[];
   expandedProjectPaths?: string[];
   sessionsSidebarWidth?: number | null;
@@ -84,6 +88,7 @@ export interface WorkbenchConversationMeta {
   pinned?: boolean;
   unread?: boolean;
   needsReview?: boolean;
+  displayMode?: "chat" | "pty";
 }
 
 export interface NewAgentSessionInput {

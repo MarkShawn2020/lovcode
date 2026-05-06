@@ -4,5 +4,6 @@ export { CollapsibleCard } from "./CollapsibleCard";
 export { CodePreview } from "./CodePreview";
 export { FilePath } from "./FilePath";
 export { ProjectPathLabel, formatProjectPathLabel, parseWorktreePath } from "./ProjectPathLabel";
+export { SessionDetailHeader } from "./SessionDetailHeader";
 export { SidebarLayout } from "./SidebarLayout";
 export { NavSidebar } from "./NavSidebar";

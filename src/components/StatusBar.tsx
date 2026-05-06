@@ -21,6 +21,7 @@ import type { Project } from "../types";
 import { version as VERSION } from "../../package.json";
 import { AppVersionManager } from "./AppVersionManager";
 import { updateStateAtom, type UpdateStage } from "./UpdateChecker";
+import { useI18n } from "@/i18n";
 
 interface NetworkInfo {
   region: string;
@@ -113,15 +114,16 @@ function parseAnsi(text: string): AnsiSpan[] {
 
 function VersionWithUpdateStatus({ onOpen }: { onOpen: () => void }) {
   const { stage, update, error } = useAtomValue(updateStateAtom);
+  const { t } = useI18n();
 
   const titles: Record<UpdateStage, string> = {
-    checking: "Checking for updates...",
-    latest: "You're on the latest version",
-    available: `v${update?.version} available`,
-    downloading: "Downloading update...",
-    done: "Update installed - restart to apply",
-    error: error || "Update check failed",
-    disabled: "Auto update disabled",
+    checking: t("updates.checkingForUpdatesEllipsis"),
+    latest: t("updates.latestVersion"),
+    available: t("updates.available", { version: update?.version ?? "" }),
+    downloading: t("updates.downloading"),
+    done: t("updates.installedRestart"),
+    error: error || t("updates.checkFailed"),
+    disabled: t("updates.autoUpdateDisabled"),
   };
 
   const className =
@@ -144,7 +146,7 @@ function VersionWithUpdateStatus({ onOpen }: { onOpen: () => void }) {
     <button
       type="button"
       className={`bg-transparent p-0 cursor-pointer hover:text-foreground ${className}`}
-      title={`${titles[stage]} - open version management`}
+      title={`${titles[stage]} - ${t("updates.openVersionManagement")}`}
       onClick={onOpen}
     >
       {label}
@@ -157,6 +159,7 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ onOpenSettings }: StatusBarProps) {
+  const { locale, t } = useI18n();
   // Same data as ProjectList's ["projects"] — share the cache key so it's
   // fetched once instead of duplicating a multi-second invoke on cold start.
   const { data: ccProjects = [] } = useInvokeQuery<Project[]>(["projects"], "list_projects");
@@ -284,21 +287,21 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
   }, [settings?.enabled]);
 
   const formatTime = useCallback((d: Date) => {
-    return d.toLocaleTimeString("zh-CN", {
+    return d.toLocaleTimeString(locale, {
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
     });
-  }, []);
+  }, [locale]);
 
   const formatDate = useCallback((d: Date) => {
-    return d.toLocaleDateString("zh-CN", {
+    return d.toLocaleDateString(locale, {
       month: "short",
       day: "numeric",
       weekday: "short",
     });
-  }, []);
+  }, [locale]);
 
   // Render script output with ANSI color support
   const renderedScriptOutput = useMemo(() => {
@@ -324,7 +327,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
           <button
             onClick={onOpenSettings}
             className="ml-2 p-0.5 rounded hover:bg-muted transition-colors"
-            title="StatusBar Settings"
+            title={t("common.statusBar")}
           >
             <SettingsIcon className="w-3 h-3" />
           </button>
@@ -347,12 +350,12 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
 
           {/* Stats */}
           <div className="flex items-center gap-3 ml-2 border-l border-border/50 pl-4">
-            <div className="flex items-center gap-1" title="Projects">
+            <div className="flex items-center gap-1" title={t("common.projects")}>
               <FolderIcon className="w-3 h-3" />
               <span>{projectCount}</span>
             </div>
             {(todayStats.lines_added > 0 || todayStats.lines_deleted > 0) && (
-              <div className="flex items-center gap-1" title="Today's changes">
+              <div className="flex items-center gap-1" title={t("status.todayChanges")}>
                 <CodeIcon className="w-3 h-3" />
                 <span className="text-green-600">+{todayStats.lines_added}</span>
                 <span className="text-red-500">-{todayStats.lines_deleted}</span>
@@ -386,7 +389,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
             <button
               onClick={onOpenSettings}
               className="ml-1 p-0.5 rounded hover:bg-muted transition-colors"
-              title="StatusBar Settings"
+              title={t("common.statusBar")}
             >
               <SettingsIcon className="w-3 h-3" />
             </button>

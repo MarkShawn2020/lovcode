@@ -19,9 +19,11 @@ import {
   PageHeader,
   ConfigPage,
 } from "../../components/config";
+import { useI18n } from "@/i18n";
 import type { ClaudeSettings } from "../../types";
 
 export function EnvSettingsView() {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const { data: settings, isLoading } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
 
@@ -33,7 +35,7 @@ export function EnvSettingsView() {
   const [revealedEnvKeys, setRevealedEnvKeys] = useState<Record<string, boolean>>({});
   const [editingEnvIsDisabled, setEditingEnvIsDisabled] = useState(false);
 
-  if (isLoading) return <LoadingState message="Loading settings..." />;
+  if (isLoading) return <LoadingState message={t("settings.loadingSettings")} />;
 
   const getRawEnvFromSettings = (value: ClaudeSettings | null | undefined) => {
     const envValue =
@@ -143,10 +145,10 @@ export function EnvSettingsView() {
 
   return (
     <ConfigPage>
-      <PageHeader title="Environment" subtitle="Manage env vars in ~/.claude/settings.json" />
+      <PageHeader title={t("common.environment")} subtitle={t("environment.envSubtitle")} />
 
       <div className="flex-1 flex flex-col space-y-4">
-        <SearchInput placeholder="Search env keys..." value={search} onChange={setSearch} />
+        <SearchInput placeholder={t("environment.searchEnvKeys")} value={search} onChange={setSearch} />
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center p-3 rounded-lg border border-border bg-card">
           <input
@@ -164,19 +166,19 @@ export function EnvSettingsView() {
             onKeyDown={(e) => e.key === "Enter" && handleEnvCreate()}
           />
           <Button size="sm" onClick={handleEnvCreate} disabled={!newEnvKey.trim()}>
-            Add
+            {t("common.add")}
           </Button>
         </div>
 
         <div className="flex items-center justify-between gap-3 p-3 rounded-lg border border-dashed border-border bg-card-alt">
           <div className="min-w-0 flex-1">
-            <p className="text-xs font-medium text-ink">Corporate HTTP(S) Proxy</p>
+            <p className="text-xs font-medium text-ink">{t("environment.corporateProxy")}</p>
             <p className="text-[10px] text-muted-foreground">
-              Add HTTP_PROXY / HTTPS_PROXY for firewalled networks
+              {t("environment.corporateProxyHint")}
             </p>
           </div>
           <Button size="sm" variant="outline" onClick={handleApplyCorporateProxy}>
-            Apply
+            {t("environment.apply")}
           </Button>
         </div>
 
@@ -185,9 +187,9 @@ export function EnvSettingsView() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="text-left text-muted-foreground border-b border-border">
-                  <th className="py-2 px-3 font-medium">Key</th>
-                  <th className="py-2 px-3 font-medium">Value</th>
-                  <th className="py-2 px-3 font-medium text-right">Actions</th>
+                  <th className="py-2 px-3 font-medium">{t("environment.key")}</th>
+                  <th className="py-2 px-3 font-medium">{t("environment.value")}</th>
+                  <th className="py-2 px-3 font-medium text-right">{t("skills.actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -226,7 +228,7 @@ export function EnvSettingsView() {
                             <button
                               onClick={() => toggleEnvReveal(key)}
                               className="text-muted-foreground hover:text-foreground p-0.5"
-                              title={isRevealed ? "Hide" : "View"}
+                              title={isRevealed ? t("environment.hide") : t("environment.view")}
                             >
                               {isRevealed ? (
                                 <EyeClosedIcon className="w-3.5 h-3.5" />
@@ -240,19 +242,19 @@ export function EnvSettingsView() {
                       <td className="py-2 px-3 whitespace-nowrap text-right">
                         {editingEnvKey === key ? (
                           <div className="flex items-center justify-end gap-1">
-                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={handleEnvSave} title="Save">
+                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={handleEnvSave} title={t("common.save")}>
                               <CheckIcon />
                             </Button>
-                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setEditingEnvKey(null)} title="Cancel">
+                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => setEditingEnvKey(null)} title={t("common.cancel")}>
                               <Cross1Icon />
                             </Button>
                           </div>
                         ) : isDisabled ? (
                           <div className="flex items-center justify-end gap-1">
-                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => handleEnvEdit(key, value, true)} title="Edit">
+                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => handleEnvEdit(key, value, true)} title={t("common.edit")}>
                               <Pencil1Icon />
                             </Button>
-                            <Button size="icon" variant="outline" className="h-7 w-7 text-green-600 border-green-200 hover:bg-green-50" onClick={() => handleEnvEnable(key)} title="Enable">
+                            <Button size="icon" variant="outline" className="h-7 w-7 text-green-600 border-green-200 hover:bg-green-50" onClick={() => handleEnvEnable(key)} title={t("environment.enable")}>
                               <PlusCircledIcon />
                             </Button>
                             <TooltipProvider delayDuration={1000}>
@@ -264,16 +266,16 @@ export function EnvSettingsView() {
                                     </Button>
                                   </span>
                                 </TooltipTrigger>
-                                {!isCustom && <TooltipContent>Only custom can be deleted</TooltipContent>}
+                                {!isCustom && <TooltipContent>{t("environment.onlyCustomCanDelete")}</TooltipContent>}
                               </Tooltip>
                             </TooltipProvider>
                           </div>
                         ) : (
                           <div className="flex items-center justify-end gap-1">
-                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => handleEnvEdit(key, value, false)} title="Edit">
+                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => handleEnvEdit(key, value, false)} title={t("common.edit")}>
                               <Pencil1Icon />
                             </Button>
-                            <Button size="icon" variant="outline" className="h-7 w-7 text-amber-600 border-amber-200 hover:bg-amber-50" onClick={() => handleEnvDisable(key)} title="Disable">
+                            <Button size="icon" variant="outline" className="h-7 w-7 text-amber-600 border-amber-200 hover:bg-amber-50" onClick={() => handleEnvDisable(key)} title={t("environment.disable")}>
                               <MinusCircledIcon />
                             </Button>
                             <TooltipProvider delayDuration={1000}>
@@ -285,7 +287,7 @@ export function EnvSettingsView() {
                                     </Button>
                                   </span>
                                 </TooltipTrigger>
-                                {!isCustom && <TooltipContent>Only custom can be deleted</TooltipContent>}
+                                {!isCustom && <TooltipContent>{t("environment.onlyCustomCanDelete")}</TooltipContent>}
                               </Tooltip>
                             </TooltipProvider>
                           </div>
@@ -299,7 +301,7 @@ export function EnvSettingsView() {
           </div>
         ) : (
           <div className="p-4 rounded-lg border border-border bg-card text-center">
-            <p className="text-sm text-muted-foreground">No env variables configured.</p>
+            <p className="text-sm text-muted-foreground">{t("environment.noEnvConfigured")}</p>
           </div>
         )}
       </div>

@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Session } from "../types";
 
@@ -27,21 +28,28 @@ export function useStreamedSessions(): UseStreamedSessions {
   const [initialLoading, setInitialLoading] = useState(true);
   const [streaming, setStreaming] = useState(true);
   const queryClient = useQueryClient();
+  const streamSeqRef = useRef(0);
+  const streamCleanupRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
+  const streamSessions = useCallback((mode: "initial" | "refresh") => {
+    streamCleanupRef.current?.();
     let cancelled = false;
+    const seq = streamSeqRef.current + 1;
+    streamSeqRef.current = seq;
     const accumulated: Session[] = [];
     const t0 = performance.now();
     const channel = new Channel<SessionStreamEvent>();
 
+    if (mode === "initial") setInitialLoading(true);
+    setStreaming(true);
     console.log(`[DEBUG][STREAM] invoke list_all_sessions_streamed at ${performance.now().toFixed(0)}`);
 
     channel.onmessage = (event) => {
-      if (cancelled) return;
+      if (cancelled || streamSeqRef.current !== seq) return;
 
       if (event.kind === "batch") {
         accumulated.push(...event.sessions);
-        setSessions([...accumulated]);
+        if (mode === "initial") setSessions([...accumulated]);
         setInitialLoading(false);
         console.log(`[DEBUG][STREAM] batch n=${event.sessions.length}, total=${accumulated.length} at +${(performance.now() - t0).toFixed(0)}ms`);
         return;
@@ -54,16 +62,40 @@ export function useStreamedSessions(): UseStreamedSessions {
       console.log(`[DEBUG][STREAM] done total=${event.total} at +${(performance.now() - t0).toFixed(0)}ms`);
     };
 
+    const cleanup = () => {
+      cancelled = true;
+      if (streamCleanupRef.current === cleanup) streamCleanupRef.current = null;
+    };
+    streamCleanupRef.current = cleanup;
+
     invoke("list_all_sessions_streamed", { onEvent: channel })
       .catch((err) => {
         console.error("[DEBUG][STREAM] failed:", err);
-        if (cancelled) return;
+        if (cancelled || streamSeqRef.current !== seq) return;
         setInitialLoading(false);
         setStreaming(false);
       });
 
-    return () => { cancelled = true; };
+    return cleanup;
   }, [queryClient]);
+
+  useEffect(() => {
+    const cleanup = streamSessions("initial");
+    return () => {
+      cleanup();
+      streamCleanupRef.current?.();
+      streamCleanupRef.current = null;
+    };
+  }, [streamSessions]);
+
+  useEffect(() => {
+    const unlisten = listen("sessions-changed", () => {
+      streamSessions("refresh");
+    });
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [streamSessions]);
 
   return { sessions, initialLoading, streaming };
 }

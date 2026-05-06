@@ -1,4 +1,5 @@
 import { FolderOpen, MessageSquare } from "lucide-react";
+import { useI18n, type Language } from "@/i18n";
 import type { Project, Session } from "../../types";
 import { useReadableText } from "../../views/Chat/utils";
 
@@ -22,6 +23,7 @@ export function RecentActivity({
   maxItems = 5,
 }: RecentActivityProps) {
   const toReadable = useReadableText();
+  const { activeLanguage, locale, t } = useI18n();
 
   // Merge and sort by last_modified
   const activities: ActivityItem[] = [
@@ -35,18 +37,18 @@ export function RecentActivity({
     })
     .slice(0, maxItems);
 
-  const formatTime = (timestamp: number): string => {
+  const formatTime = (timestamp: number, language: Language): string => {
     const now = Date.now();
     const diff = now - timestamp * 1000;
     const minutes = Math.floor(diff / 60000);
     const hours = Math.floor(diff / 3600000);
     const days = Math.floor(diff / 86400000);
 
-    if (minutes < 1) return "just now";
-    if (minutes < 60) return `${minutes}m ago`;
-    if (hours < 24) return `${hours}h ago`;
-    if (days < 7) return `${days}d ago`;
-    return new Date(timestamp * 1000).toLocaleDateString();
+    if (minutes < 1) return language === "zh" ? "刚刚" : "just now";
+    if (minutes < 60) return language === "zh" ? `${minutes}分钟前` : `${minutes}m ago`;
+    if (hours < 24) return language === "zh" ? `${hours}小时前` : `${hours}h ago`;
+    if (days < 7) return language === "zh" ? `${days}天前` : `${days}d ago`;
+    return new Date(timestamp * 1000).toLocaleDateString(locale);
   };
 
   const getProjectName = (path: string): string => {
@@ -56,7 +58,7 @@ export function RecentActivity({
   if (activities.length === 0) {
     return (
       <div className="text-center py-8 text-muted-foreground text-sm">
-        No recent activity
+        {t("home.noRecentActivity")}
       </div>
     );
   }
@@ -78,11 +80,11 @@ export function RecentActivity({
                   {getProjectName(project.path)}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {project.session_count} sessions
+                  {t("home.sessionsCount", { count: project.session_count })}
                 </p>
               </div>
               <span className="text-xs text-muted-foreground/70 shrink-0">
-                {formatTime(project.last_active)}
+                {formatTime(project.last_active, activeLanguage)}
               </span>
             </button>
           );
@@ -97,14 +99,14 @@ export function RecentActivity({
               <MessageSquare className="w-4 h-4 text-muted-foreground/70 shrink-0" />
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-foreground truncate group-hover:text-primary transition-colors">
-                  {toReadable(session.summary) || "Untitled session"}
+                  {toReadable(session.summary) || t("dashboard.untitledSession")}
                 </p>
-                <p className="text-xs text-muted-foreground" title={`${session.message_count} messages total`}>
-                  {session.rounds} rounds
+                <p className="text-xs text-muted-foreground" title={t("chat.messagesTotal", { count: session.message_count })}>
+                  {t("chat.rounds", { count: session.rounds })}
                 </p>
               </div>
               <span className="text-xs text-muted-foreground/70 shrink-0">
-                {formatTime(session.last_modified)}
+                {formatTime(session.last_modified, activeLanguage)}
               </span>
             </button>
           );

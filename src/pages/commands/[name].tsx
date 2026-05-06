@@ -3,14 +3,14 @@
  * - /commands/foo → installed command
  * - /commands/foo?source=marketplace → marketplace template
  */
+import { useMemo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
-import { useQuery } from "@tanstack/react-query";
 import type { LocalCommand, TemplatesCatalog } from "../../types";
 import { CommandDetailView } from "../../views/Commands";
 import { TemplateDetailView } from "../../views/Marketplace";
 import { FeaturesLayout } from "../../views/Features";
 import { LoadingState } from "../../components/config";
+import { queryKeys, useInvokeQuery } from "../../hooks";
 
 export default function CommandDetailPage() {
   const { name } = useParams<{ name: string }>();
@@ -18,23 +18,27 @@ export default function CommandDetailPage() {
   const navigate = useNavigate();
   const isMarketplace = searchParams.get("source") === "marketplace";
 
-  const { data: command, isLoading: localLoading, refetch } = useQuery({
-    queryKey: ["command", name],
-    queryFn: async () => {
-      const commands = await invoke<LocalCommand[]>("list_local_commands");
-      return commands.find(c => c.name === name) ?? null;
-    },
-    enabled: !!name && !isMarketplace,
-  });
+  const { data: commands = [], isLoading: localLoading, refetch } = useInvokeQuery<LocalCommand[]>(
+    queryKeys.commands,
+    "list_local_commands",
+    undefined,
+    { enabled: !!name && !isMarketplace },
+  );
+  const command = useMemo(
+    () => commands.find((item) => item.name === name) ?? null,
+    [commands, name],
+  );
 
-  const { data: marketplaceTemplate, isLoading: marketplaceLoading } = useQuery({
-    queryKey: ["marketplaceCommand", name],
-    queryFn: async () => {
-      const catalog = await invoke<TemplatesCatalog>("get_templates_catalog");
-      return catalog.commands?.find(t => t.name === name) ?? null;
-    },
-    enabled: !!name && isMarketplace,
-  });
+  const { data: catalog, isLoading: marketplaceLoading } = useInvokeQuery<TemplatesCatalog>(
+    queryKeys.templatesCatalog,
+    "get_templates_catalog",
+    undefined,
+    { enabled: !!name && isMarketplace },
+  );
+  const marketplaceTemplate = useMemo(
+    () => catalog?.commands?.find((template) => template.name === name) ?? null,
+    [catalog, name],
+  );
 
   const isLoading = isMarketplace ? marketplaceLoading : localLoading;
 
@@ -90,8 +94,9 @@ export default function CommandDetailPage() {
         onBack={() => navigate("/commands")}
         onCommandUpdated={() => refetch()}
         onRenamed={async (newPath: string) => {
-          const commands = await invoke<LocalCommand[]>("list_local_commands");
-          const cmd = commands.find(c => c.path === newPath);
+          const result = await refetch();
+          const latestCommands = result.data ?? commands;
+          const cmd = latestCommands.find((item) => item.path === newPath);
           if (cmd) navigate(`/commands/${encodeURIComponent(cmd.name)}`);
         }}
       />

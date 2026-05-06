@@ -3,27 +3,29 @@ import type { TemplateComponent } from "../../types";
 import { ConfigPage, PageHeader, EmptyState } from "../../components/config";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { MarketplaceContent } from "../Marketplace";
+import { useI18n } from "@/i18n";
 
 interface OutputStylesViewProps {
   onMarketplaceSelect: (template: TemplateComponent) => void;
 }
 
 export function OutputStylesView({ onMarketplaceSelect }: OutputStylesViewProps) {
+  const { t } = useI18n();
   return (
     <ConfigPage>
-      <PageHeader title="Output Styles" subtitle="Response formatting styles" />
+      <PageHeader title={t("common.outputStyles")} subtitle={t("config.outputStylesSubtitle")} />
 
       <Tabs defaultValue="installed" className="flex-1 flex flex-col">
         <TabsList className="bg-card-alt border border-border">
-          <TabsTrigger value="installed">已安装</TabsTrigger>
-          <TabsTrigger value="marketplace">市场</TabsTrigger>
+          <TabsTrigger value="installed">{t("common.installed")}</TabsTrigger>
+          <TabsTrigger value="marketplace">{t("common.marketplace")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="installed" className="mt-4 space-y-4">
           <EmptyState
             icon={MixerHorizontalIcon}
-            message="Coming soon"
-            hint="Output styles will be available in a future update"
+            message={t("config.comingSoon")}
+            hint={t("config.outputStylesComingSoon")}
           />
         </TabsContent>
 

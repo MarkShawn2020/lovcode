@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { ActivityHeatmap } from "@/components/home";
 import { useInvokeQuery, useStreamedSessions } from "@/hooks";
+import { useI18n, type Language } from "@/i18n";
 import type {
   AgentSession,
   AgentWorkspaceState,
@@ -40,25 +41,25 @@ const EMPTY_ACTIVITY_STATS: ActivityStats = {
   detailed: {},
 };
 
-function formatNumber(value: number) {
-  return value.toLocaleString();
+function formatNumber(value: number, locale: string) {
+  return value.toLocaleString(locale);
 }
 
-function formatRelativeSeconds(timestamp: number | null | undefined) {
-  if (!timestamp) return "No activity";
+function formatRelativeSeconds(timestamp: number | null | undefined, language: Language, locale: string) {
+  if (!timestamp) return language === "zh" ? "暂无活动" : "No activity";
   const diff = Math.max(0, Math.floor(Date.now() / 1000 - timestamp));
-  if (diff < 60) return "Just now";
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  if (diff < 604800) return `${Math.floor(diff / 86400)}d ago`;
-  return new Date(timestamp * 1000).toLocaleDateString(undefined, {
+  if (diff < 60) return language === "zh" ? "刚刚" : "Just now";
+  if (diff < 3600) return language === "zh" ? `${Math.floor(diff / 60)}分钟前` : `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return language === "zh" ? `${Math.floor(diff / 3600)}小时前` : `${Math.floor(diff / 3600)}h ago`;
+  if (diff < 604800) return language === "zh" ? `${Math.floor(diff / 86400)}天前` : `${Math.floor(diff / 86400)}d ago`;
+  return new Date(timestamp * 1000).toLocaleDateString(locale, {
     month: "short",
     day: "numeric",
   });
 }
 
-function formatRelativeMs(timestamp: number | null | undefined) {
-  return timestamp ? formatRelativeSeconds(Math.floor(timestamp / 1000)) : "No activity";
+function formatRelativeMs(timestamp: number | null | undefined, language: Language, locale: string) {
+  return timestamp ? formatRelativeSeconds(Math.floor(timestamp / 1000), language, locale) : formatRelativeSeconds(null, language, locale);
 }
 
 function projectName(path: string | null | undefined) {
@@ -67,8 +68,8 @@ function projectName(path: string | null | undefined) {
   return clean.split("/").filter(Boolean).pop() || path;
 }
 
-function sessionTitle(session: Session) {
-  return session.title || session.summary || session.last_prompt || "Untitled session";
+function sessionTitle(session: Session, fallback: string) {
+  return session.title || session.summary || session.last_prompt || fallback;
 }
 
 function isAgentRunning(session: AgentSession) {
@@ -77,6 +78,7 @@ function isAgentRunning(session: AgentSession) {
 
 export default function DashboardPage() {
   const navigate = useNavigate();
+  const { activeLanguage, locale, t } = useI18n();
   const { sessions, initialLoading, streaming } = useStreamedSessions();
   const { data: projects = [] } = useInvokeQuery<Project[]>(["projects"], "list_projects");
   const { data: activityStats = EMPTY_ACTIVITY_STATS } = useInvokeQuery<ActivityStats>(
@@ -151,7 +153,14 @@ export default function DashboardPage() {
     navigate(`/history/${encodeURIComponent(session.project_id)}/${encodeURIComponent(session.id)}`);
   };
 
-  const sessionStreamLabel = initialLoading ? "Loading" : streaming ? "Streaming" : "Ready";
+  const number = (value: number) => formatNumber(value, locale);
+  const relativeSeconds = (timestamp: number | null | undefined) => formatRelativeSeconds(timestamp, activeLanguage, locale);
+  const relativeMs = (timestamp: number | null | undefined) => formatRelativeMs(timestamp, activeLanguage, locale);
+  const sessionStreamLabel = initialLoading
+    ? t("dashboard.status.loading")
+    : streaming
+      ? t("dashboard.status.streaming")
+      : t("dashboard.status.ready");
 
   return (
     <div className="h-full overflow-auto bg-canvas">
@@ -162,14 +171,13 @@ export default function DashboardPage() {
               <span className="h-px w-8 bg-border" />
               <span>Lovcode</span>
               <span className="h-1 w-1 rounded-full bg-primary/60" />
-              <span>Cross-module overview</span>
+              <span>{t("dashboard.overview")}</span>
             </div>
             <h1 className="font-serif text-4xl leading-tight text-foreground lg:text-5xl">
-              Dashboard
+              {t("common.dashboard")}
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-muted-foreground">
-              One operational view for coding agents, chat history, reusable commands,
-              distilled knowledge, and product events.
+              {t("dashboard.subtitle")}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -178,14 +186,14 @@ export default function DashboardPage() {
               className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground hover:bg-card-alt"
             >
               <History className="h-4 w-4 text-muted-foreground" />
-              Workbench
+              {t("common.workbench")}
             </button>
             <button
               onClick={() => navigate("/workbench")}
               className="inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
             >
               <Play className="h-4 w-4" />
-              New agent session
+              {t("dashboard.newAgentSession")}
             </button>
           </div>
         </header>
@@ -193,82 +201,94 @@ export default function DashboardPage() {
         <section className="mt-7 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
           <MetricCard
             icon={History}
-            label="History"
-            value={formatNumber(sessions.length)}
-            detail={`${formatNumber(totals.rounds)} rounds · ${sessionStreamLabel}`}
+            label={t("dashboard.history")}
+            value={number(sessions.length)}
+            detail={`${t("dashboard.rounds", { count: number(totals.rounds) })} · ${sessionStreamLabel}`}
           />
           <MetricCard
             icon={Activity}
-            label="Today"
-            value={formatNumber(activityStats.daily[todayKey] ?? 0)}
-            detail={`${formatNumber(totals.messages)} transcript messages`}
+            label={t("dashboard.today")}
+            value={number(activityStats.daily[todayKey] ?? 0)}
+            detail={t("dashboard.transcriptMessages", { count: number(totals.messages) })}
           />
           <MetricCard
             icon={Bot}
-            label="Agents"
-            value={formatNumber(runningAgents.length)}
-            detail={`${formatNumber(activeAgentSessions.length)} active · ${formatNumber(unreadAgents.length)} unread`}
+            label={t("dashboard.agents")}
+            value={number(runningAgents.length)}
+            detail={t("dashboard.activeUnread", {
+              active: number(activeAgentSessions.length),
+              unread: number(unreadAgents.length),
+            })}
             busy={runningAgents.length > 0}
           />
           <MetricCard
             icon={Command}
-            label="Commands"
-            value={formatNumber(activeCommands.length)}
-            detail={`${formatNumber(deprecatedCommands.length)} deprecated · ${formatNumber(archivedCommands.length)} archived`}
+            label={t("dashboard.commands")}
+            value={number(activeCommands.length)}
+            detail={t("dashboard.deprecatedArchived", {
+              deprecated: number(deprecatedCommands.length),
+              archived: number(archivedCommands.length),
+            })}
           />
           <MetricCard
             icon={BookOpen}
-            label="Knowledge"
-            value={formatNumber(documents.length)}
-            detail={latestDocument ? latestDocument.title : "No distill documents"}
+            label={t("common.knowledge")}
+            value={number(documents.length)}
+            detail={latestDocument ? latestDocument.title : t("dashboard.noDistillDocuments")}
           />
         </section>
 
         <section className="mt-6 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.65fr)_minmax(320px,0.85fr)]">
           <Panel
-            title="Activity"
-            subtitle={`${formatNumber(projects.length || totals.projects)} workspaces · ${formatNumber(totals.rounds)} rounds`}
-            actionLabel="Open Workbench"
+            title={t("dashboard.activity")}
+            subtitle={t("dashboard.workspacesRounds", {
+              workspaces: number(projects.length || totals.projects),
+              rounds: number(totals.rounds),
+            })}
+            actionLabel={t("dashboard.openWorkbench")}
             onAction={() => navigate("/workbench")}
           >
             <ActivityHeatmap daily={activityStats.daily} detailed={activityStats.detailed} />
           </Panel>
 
-          <Panel title="Module Pulse" subtitle="Status sorted by what needs attention">
+          <Panel title={t("dashboard.modulePulse")} subtitle={t("dashboard.modulePulseSubtitle")}>
             <div className="space-y-2">
               <ModuleRow
                 icon={Bot}
-                label="Workbench Agents"
-                value={`${runningAgents.length} running`}
-                detail={`${unreadAgents.length} unread · ${reviewAgents.length} needs review`}
-                status={runningAgents.length > 0 ? "Running" : reviewAgents.length > 0 ? "Review" : "Idle"}
+                label={t("dashboard.workbenchAgents")}
+                value={t("dashboard.runningCount", { count: number(runningAgents.length) })}
+                detail={t("dashboard.unreadReview", {
+                  unread: number(unreadAgents.length),
+                  review: number(reviewAgents.length),
+                })}
+                status={runningAgents.length > 0 ? t("dashboard.status.running") : reviewAgents.length > 0 ? t("dashboard.status.review") : t("dashboard.status.idle")}
                 statusTone={reviewAgents.length > 0 ? "warning" : runningAgents.length > 0 ? "active" : "muted"}
                 onClick={() => navigate("/workbench")}
               />
               <ModuleRow
                 icon={History}
-                label="History"
-                value={`${sessions.length} sessions`}
-                detail={`${topProjects.length} active project views`}
+                label={t("dashboard.history")}
+                value={t("dashboard.sessionsCount", { count: number(sessions.length) })}
+                detail={t("dashboard.activeProjectViews", { count: number(topProjects.length) })}
                 status={sessionStreamLabel}
                 statusTone={streaming ? "active" : "ok"}
                 onClick={() => navigate("/workbench")}
               />
               <ModuleRow
                 icon={Terminal}
-                label="Commands"
-                value={`${activeCommands.length} active`}
-                detail={`${commands.length} local command files`}
-                status={deprecatedCommands.length > 0 ? "Review" : "Ready"}
+                label={t("dashboard.commands")}
+                value={t("dashboard.activeCount", { count: number(activeCommands.length) })}
+                detail={t("dashboard.localCommandFiles", { count: number(commands.length) })}
+                status={deprecatedCommands.length > 0 ? t("dashboard.status.review") : t("dashboard.status.ready")}
                 statusTone={deprecatedCommands.length > 0 ? "warning" : "ok"}
                 onClick={() => navigate("/commands")}
               />
               <ModuleRow
                 icon={BookOpen}
-                label="Knowledge"
-                value={`${documents.length} distills`}
-                detail={latestDocument ? `Latest: ${latestDocument.title}` : "No captured distills"}
-                status={documents.length > 0 ? "Ready" : "Empty"}
+                label={t("common.knowledge")}
+                value={t("dashboard.distillsCount", { count: number(documents.length) })}
+                detail={latestDocument ? t("dashboard.latest", { title: latestDocument.title }) : t("dashboard.noCapturedDistills")}
+                status={documents.length > 0 ? t("dashboard.status.ready") : t("dashboard.status.empty")}
                 statusTone={documents.length > 0 ? "ok" : "muted"}
                 onClick={() => navigate("/knowledge/distill")}
               />
@@ -277,7 +297,7 @@ export default function DashboardPage() {
         </section>
 
         <section className="mt-5 grid grid-cols-1 gap-5 xl:grid-cols-[minmax(0,1.15fr)_minmax(360px,0.85fr)]">
-          <Panel title="Recent Sessions" subtitle="Fast resume into the Workbench surface">
+          <Panel title={t("dashboard.recentSessions")} subtitle={t("dashboard.recentSessionsSubtitle")}>
             {recentSessions.length > 0 ? (
               <div className="divide-y divide-border">
                 {recentSessions.map((session) => (
@@ -290,14 +310,14 @@ export default function DashboardPage() {
                       <div className="flex min-w-0 items-center gap-2">
                         <MessageDot source={session.source} />
                         <span className="truncate text-sm font-medium text-foreground">
-                          {sessionTitle(session)}
+                          {sessionTitle(session, t("dashboard.untitledSession"))}
                         </span>
                       </div>
                       <div className="mt-1 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
                         <FolderOpen className="h-3.5 w-3.5 shrink-0" />
                         <span className="truncate">{projectName(session.project_path || session.project_id)}</span>
                         <span className="shrink-0">·</span>
-                        <span className="shrink-0">{formatRelativeSeconds(session.last_modified)}</span>
+                        <span className="shrink-0">{relativeSeconds(session.last_modified)}</span>
                       </div>
                     </div>
                     <ArrowUpRight className="h-4 w-4 text-muted-foreground/50 group-hover:text-primary" />
@@ -305,21 +325,23 @@ export default function DashboardPage() {
                 ))}
               </div>
             ) : (
-              <EmptyPanel icon={History} label={initialLoading ? "Loading sessions..." : "No sessions yet"} />
+              <EmptyPanel icon={History} label={initialLoading ? t("dashboard.loadingSessions") : t("dashboard.noSessionsYet")} />
             )}
           </Panel>
 
           <Panel
-            title="Workbench Agents"
-            subtitle={latestAgent ? `Latest activity ${formatRelativeMs(latestAgent.lastActivityAt || latestAgent.updatedAt)}` : "No active agent sessions"}
-            actionLabel="Open Workbench"
+            title={t("dashboard.workbenchAgents")}
+            subtitle={latestAgent
+              ? t("dashboard.latestActivity", { time: relativeMs(latestAgent.lastActivityAt || latestAgent.updatedAt) })
+              : t("dashboard.noActiveAgentSessions")}
+            actionLabel={t("dashboard.openWorkbench")}
             onAction={() => navigate("/workbench")}
           >
             <div className="space-y-3">
               <div className="grid grid-cols-3 border-y border-border py-3">
-                <CompactStat label="Running" value={runningAgents.length} />
-                <CompactStat label="Unread" value={unreadAgents.length} />
-                <CompactStat label="Review" value={reviewAgents.length} />
+                <CompactStat label={t("dashboard.status.running")} value={runningAgents.length} />
+                <CompactStat label={t("dashboard.unread")} value={unreadAgents.length} />
+                <CompactStat label={t("dashboard.status.review")} value={reviewAgents.length} />
               </div>
               {latestAgent ? (
                 <button
@@ -342,12 +364,12 @@ export default function DashboardPage() {
                     </div>
                   </div>
                   <StatusBadge
-                    label={latestAgent.status === "needs-review" ? "Review" : isAgentRunning(latestAgent) ? "Running" : "Idle"}
+                    label={latestAgent.status === "needs-review" ? t("dashboard.status.review") : isAgentRunning(latestAgent) ? t("dashboard.status.running") : t("dashboard.status.idle")}
                     tone={latestAgent.status === "needs-review" ? "warning" : isAgentRunning(latestAgent) ? "active" : "muted"}
                   />
                 </button>
               ) : (
-                <EmptyPanel icon={Bot} label="Create a coding agent session from Workbench" />
+                <EmptyPanel icon={Bot} label={t("dashboard.createAgentSession")} />
               )}
             </div>
           </Panel>
@@ -356,23 +378,26 @@ export default function DashboardPage() {
         <section className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-3">
           <ModuleCard
             icon={Terminal}
-            title="Command Library"
-            description={`${commands.length} local commands with ${deprecatedCommands.length} needing retirement decisions.`}
-            action="Manage commands"
+            title={t("dashboard.commandLibrary")}
+            description={t("dashboard.commandLibraryDescription", {
+              commands: number(commands.length),
+              deprecated: number(deprecatedCommands.length),
+            })}
+            action={t("dashboard.manageCommands")}
             onClick={() => navigate("/commands")}
           />
           <ModuleCard
             icon={Archive}
-            title="Knowledge Distill"
-            description={latestDocument ? `Latest capture: ${latestDocument.title}` : "No distilled notes yet."}
-            action="Open knowledge"
+            title={t("dashboard.knowledgeDistill")}
+            description={latestDocument ? t("dashboard.latestCapture", { title: latestDocument.title }) : t("dashboard.noDistilledNotes")}
+            action={t("dashboard.openKnowledge")}
             onClick={() => navigate("/knowledge/distill")}
           />
           <ModuleCard
             icon={CalendarDays}
-            title="Events"
-            description="Reports, launches, and app milestones live in the Events surface."
-            action="Open events"
+            title={t("common.events")}
+            description={t("dashboard.eventsDescription")}
+            action={t("dashboard.openEvents")}
             onClick={() => navigate("/events")}
           />
         </section>

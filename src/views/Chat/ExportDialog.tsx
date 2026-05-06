@@ -7,6 +7,7 @@ import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
+import { useI18n } from "@/i18n";
 import { restoreSlashCommand } from "./utils";
 import type { ExportFormat, MarkdownStyle } from "./types";
 import type { Message } from "../../types";
@@ -36,6 +37,7 @@ export function ExportDialog({
   onSelectedIdsChange,
   defaultName,
 }: ExportDialogProps) {
+  const { t } = useI18n();
   const [selectPreset, setSelectPreset] = useState<"all" | "user" | "custom">("all");
 
   useEffect(() => {
@@ -144,23 +146,23 @@ export function ExportDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="!flex !flex-col max-w-2xl max-h-[80vh] overflow-hidden">
         <DialogHeader>
-          <DialogTitle>Export {messages.length} Messages</DialogTitle>
+          <DialogTitle>{t("export.title", { count: messages.length })}</DialogTitle>
         </DialogHeader>
 
         <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 py-2 border-b border-border items-center">
-          <Label className="text-sm text-muted-foreground-foreground">Select</Label>
+          <Label className="text-sm text-muted-foreground-foreground">{t("common.select")}</Label>
           <Select value={selectPreset} onValueChange={(v) => setSelectPreset(v as "all" | "user" | "custom")}>
             <SelectTrigger size="sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All ({allMessages.length})</SelectItem>
-              <SelectItem value="user">User only ({allMessages.filter((m) => m.role === "user").length})</SelectItem>
-              <SelectItem value="custom">Custom ({selectedIds.size})</SelectItem>
+              <SelectItem value="all">{t("export.selectAll", { count: allMessages.length })}</SelectItem>
+              <SelectItem value="user">{t("export.userOnly", { count: allMessages.filter((m) => m.role === "user").length })}</SelectItem>
+              <SelectItem value="custom">{t("export.custom", { count: selectedIds.size })}</SelectItem>
             </SelectContent>
           </Select>
 
-          <Label className="text-sm text-muted-foreground-foreground">Format</Label>
+          <Label className="text-sm text-muted-foreground-foreground">{t("export.format")}</Label>
           <Select value={format} onValueChange={(v) => setFormat(v as ExportFormat)}>
             <SelectTrigger size="sm">
               <SelectValue />
@@ -173,21 +175,21 @@ export function ExportDialog({
 
           {format === "markdown" && (
             <>
-              <Label className="text-sm text-muted-foreground-foreground">Style</Label>
+              <Label className="text-sm text-muted-foreground-foreground">{t("export.style")}</Label>
               <Select value={mdStyle} onValueChange={(v) => setMdStyle(v as MarkdownStyle)}>
                 <SelectTrigger size="sm">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="full">Full</SelectItem>
-                  <SelectItem value="qa">QA</SelectItem>
-                  <SelectItem value="bullet">QA (list)</SelectItem>
+                  <SelectItem value="full">{t("export.full")}</SelectItem>
+                  <SelectItem value="qa">{t("export.qa")}</SelectItem>
+                  <SelectItem value="bullet">{t("export.qaList")}</SelectItem>
                 </SelectContent>
               </Select>
             </>
           )}
 
-          <Label className="text-sm text-muted-foreground">Options</Label>
+          <Label className="text-sm text-muted-foreground">{t("export.options")}</Label>
           <div className="flex gap-4 flex-wrap">
             <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
               <input
@@ -196,7 +198,7 @@ export function ExportDialog({
                 onChange={(e) => setExportOriginal(e.target.checked)}
                 className="w-4 h-4 accent-primary cursor-pointer"
               />
-              <span>Original</span>
+              <span>{t("export.original")}</span>
             </label>
 
             {format === "markdown" && (
@@ -208,7 +210,7 @@ export function ExportDialog({
                     onChange={(e) => setTruncateBullet(e.target.checked)}
                     className="w-4 h-4 accent-primary cursor-pointer"
                   />
-                  <span>Truncate</span>
+                  <span>{t("export.truncate")}</span>
                 </label>
                 <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
                   <input
@@ -217,7 +219,7 @@ export function ExportDialog({
                     onChange={(e) => setAddSeparator(e.target.checked)}
                     className="w-4 h-4 accent-primary cursor-pointer"
                   />
-                  <span>Separator</span>
+                  <span>{t("export.separator")}</span>
                 </label>
                 <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
                   <input
@@ -226,7 +228,7 @@ export function ExportDialog({
                     onChange={(e) => setAddWatermark(e.target.checked)}
                     className="w-4 h-4 accent-primary cursor-pointer"
                   />
-                  <span>Watermark</span>
+                  <span>{t("export.watermark")}</span>
                 </label>
               </>
             )}
@@ -239,14 +241,14 @@ export function ExportDialog({
                   onChange={(e) => setJsonPretty(e.target.checked)}
                   className="w-4 h-4 accent-primary cursor-pointer"
                 />
-                <span>Pretty</span>
+                <span>{t("export.pretty")}</span>
               </label>
             )}
           </div>
         </div>
 
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden mt-4">
-          <div className="text-xs text-muted-foreground-foreground mb-2 shrink-0">Preview</div>
+          <div className="text-xs text-muted-foreground-foreground mb-2 shrink-0">{t("export.preview")}</div>
           <div className="flex-1 bg-card-alt rounded-lg p-4 text-sm text-ink overflow-auto font-mono whitespace-pre-wrap break-all">
             {preview}
           </div>
@@ -254,12 +256,12 @@ export function ExportDialog({
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border shrink-0">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button variant="outline" onClick={handleCopy}>
-            Copy
+            {t("common.copy")}
           </Button>
-          <Button onClick={handleExport}>Export</Button>
+          <Button onClick={handleExport}>{t("export.export")}</Button>
         </div>
       </DialogContent>
     </Dialog>

@@ -28,16 +28,17 @@ import {
 } from "../../store";
 import { useAppConfig } from "../../context";
 import { useReadableText, formatTokens, inferModelInfo, resolveSessionLabel, titleSourceBadge } from "./utils";
-import { useInvokeQuery, useQueryClient, useStreamedSessions } from "../../hooks";
+import { useInvokeQuery, useQueryClient, useStreamedSessions, useSessionsCache } from "../../hooks";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ContentBlockRenderer } from "./ContentBlockRenderer";
 import { ChatFilePreviewProvider } from "./FilePreviewContext";
 import { HighlightText } from "./HighlightText";
 import { PathAwareText } from "./PathAwareText";
 import { usePathHits } from "./usePathHits";
-import { useCwdValidity } from "./useCwdValidity";
+import { useCwdValidity, invalidateCwdValidity } from "./useCwdValidity";
 import { RelocateSessionDialog } from "./RelocateSessionDialog";
 import { ProjectLogo } from "../../components/shared/ProjectLogo";
+import { toast } from "../../components/ui/toast";
 import { ActivityCard } from "../../components/home";
 import {
   DropdownMenu,
@@ -51,9 +52,11 @@ import {
   DropdownMenuCheckboxItem,
 } from "../../components/ui/dropdown-menu";
 import {
+  SessionDetailDropdownMenuItems,
   SessionDropdownMenuItems,
 } from "../../components/shared/SessionMenuItems";
-import { ProjectPathLabel } from "../../components/shared/ProjectPathLabel";
+import { parseWorktreePath } from "../../components/shared/ProjectPathLabel";
+import { SessionDetailHeader } from "../../components/shared/SessionDetailHeader";
 import { ExportDialog } from "./ExportDialog";
 import { chatSearchOpenAtom } from "../../components/GlobalChatSearch";
 import type { ContentBlock, Project, Session, ChatMessage, Message } from "../../types";
@@ -84,6 +87,13 @@ const MAX_RECENT_MODELS = 5;
 const recentModelsAtom = atomWithStorage<RecentModelEntry[]>(
   "lovcode:recentModels",
   [],
+);
+
+export type SessionDetailDisplayMode = "chat" | "pty";
+
+const sessionDetailDisplayModesAtom = atomWithStorage<Record<string, SessionDetailDisplayMode>>(
+  "lovcode:sessionDetailDisplayModes",
+  {},
 );
 
 /** MRU of cwds the user has launched a new session from. Used to populate the
@@ -293,12 +303,17 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
   // Always re-derive the selected session from the live `allSessions` array so that
   // when cwd repair / migration moves a session to a new project slug, the right panel
   // picks up the new object (with updated project_path / project_id) automatically.
+  // Falls back to id-only match for migrated sessions where project_id changed.
   const selectedSession: Session | null = useMemo(() => {
     if (!selectedSessionRaw) return null;
-    return allSessions.find((s) =>
-      s.id === selectedSessionRaw.id &&
-      s.project_id === selectedSessionRaw.project_id
-    ) ?? selectedSessionRaw;
+    return (
+      allSessions.find((s) =>
+        s.id === selectedSessionRaw.id &&
+        s.project_id === selectedSessionRaw.project_id
+      ) ??
+      allSessions.find((s) => s.id === selectedSessionRaw.id) ??
+      selectedSessionRaw
+    );
   }, [selectedSessionRaw, allSessions]);
   const [recentProjects, setRecentProjects] = useAtom(recentProjectsAtom);
   const [activeCwd, setActiveCwd] = useState<string | null>(null);
@@ -1173,6 +1188,7 @@ function SessionItemButton({
             <SessionDropdownMenuItems
               projectId={session.project_id}
               sessionId={session.id}
+              title={titleText}
               source={session.source}
               projectPath={session.project_path ?? undefined}
               isPinnedOverride={isPinned}
@@ -1191,6 +1207,10 @@ function SessionItemButton({
 
 function isUserPromptMessage(msg: Message) {
   return msg.role === "user" && !msg.is_tool;
+}
+
+function getSessionDetailDisplayModeKey(session: Pick<Session, "project_id" | "id">) {
+  return `${session.project_id}:${session.id}`;
 }
 
 function isUserPromptGroup(group: Message[]) {
@@ -1578,8 +1598,142 @@ const MessageGroupCard = memo(function MessageGroupCard({
   );
 });
 
+/** Concurrency guard — paths whose auto-fix is currently running. Prevents
+ *  parallel cc-mv invocations when sessions stream in batches and re-fire the
+ *  effect before the first run finishes. Cleared in finally regardless of outcome. */
+const autoFixInFlight = new Set<string>();
+/** Per-`from` snapshot of the affected session-id set we just migrated. If a
+ *  post-migration refresh briefly returns the same stale set, the cooldown
+ *  prevents an immediate loop. Once the migration propagates, sessions[].project_path
+ *  flips to origin and the effect early-returns naturally. */
+const AUTO_FIX_RETRY_COOLDOWN_MS = 3000;
+const autoFixLastAttempt = new Map<string, { fingerprint: string; attemptedAt: number }>();
+function fingerprintIds(ids: string[]) {
+  return [...ids].sort().join("|");
+}
+
+interface MigrateResult {
+  success: boolean;
+  stdout: string;
+  stderr: string;
+  migrated: number | null;
+}
+
+async function migrateScoped(sessionIds: string[], from: string, to: string) {
+  return invoke<MigrateResult>("migrate_sessions_cwd_scoped", { sessionIds, from, to });
+}
+
 function CwdMissingBanner({ from }: { from: string }) {
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [autoFixing, setAutoFixing] = useState(false);
+  const queryClient = useQueryClient();
+  const sessions = useSessionsCache();
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (autoFixInFlight.has(from)) {
+      console.debug("[CwdMissingBanner] skip — in-flight for", from);
+      return;
+    }
+    const { worktreeName, origin } = parseWorktreePath(from);
+    if (!worktreeName || !origin) {
+      console.debug("[CwdMissingBanner] skip — not a worktree path:", from);
+      return;
+    }
+
+    // Capture session ids whose cwd is currently the dead worktree path. These
+    // are exactly the sessions we'll rewrite — and the only ones undo touches.
+    const affectedIds = sessions.filter((s) => s.project_path === from).map((s) => s.id);
+    if (affectedIds.length === 0) {
+      console.debug(
+        `[CwdMissingBanner] skip — no sessions match project_path === "${from}" (sessions cache size: ${sessions.length})`,
+      );
+      return;
+    }
+    const fingerprint = fingerprintIds(affectedIds);
+    const lastAttempt = autoFixLastAttempt.get(from);
+    if (
+      lastAttempt?.fingerprint === fingerprint &&
+      Date.now() - lastAttempt.attemptedAt < AUTO_FIX_RETRY_COOLDOWN_MS
+    ) {
+      console.debug(
+        `[CwdMissingBanner] skip — same affected-id set was just attempted for ${from}, not retrying yet`,
+      );
+      return;
+    }
+    console.debug(
+      `[CwdMissingBanner] starting auto-fix: ${affectedIds.length} session(s) ${from} → ${origin}`,
+    );
+
+    // Mark in-flight + record this attempt's fingerprint. The fingerprint
+    // gates immediate re-runs at the same id set so a stale post-migration
+    // session refresh can't loop, but it expires so a later panel open can
+    // recover from a previous partial migration.
+    autoFixInFlight.add(from);
+    autoFixLastAttempt.set(from, { fingerprint, attemptedAt: Date.now() });
+    if (mountedRef.current) setAutoFixing(true);
+
+    (async () => {
+      try {
+        const hits = await invoke<{ raw: string; is_dir: boolean }[]>("check_paths_exist", {
+          paths: [origin],
+        });
+        const originOk = hits.some((h) => h.raw === origin && h.is_dir);
+        if (!originOk) {
+          console.warn(`[CwdMissingBanner] origin not found, skipping auto-fix: ${origin}`);
+          return;
+        }
+
+        const result = await migrateScoped(affectedIds, from, origin);
+        if (!result.success) {
+          toast.error(
+            `自动修复失败 — 请用「重定位…」手动选择目录\n${result.stderr || result.stdout || "(no output)"}`,
+          );
+          return;
+        }
+        invalidateCwdValidity();
+        await queryClient.refetchQueries({ queryKey: ["sessions"] });
+        await queryClient.refetchQueries({ queryKey: ["projects"] });
+        toast.success(`已自动修复到 ${origin}`, {
+          ttl: 8000,
+          action: {
+            label: "撤销",
+            onClick: async () => {
+              try {
+                const undo = await migrateScoped(affectedIds, origin, from);
+                if (!undo.success) {
+                  toast.error(`撤销失败: ${undo.stderr || undo.stdout || "(no output)"}`);
+                  return;
+                }
+                // Clear fingerprint so user can re-trigger auto-fix later.
+                autoFixLastAttempt.delete(from);
+                invalidateCwdValidity();
+                await queryClient.refetchQueries({ queryKey: ["sessions"] });
+                await queryClient.refetchQueries({ queryKey: ["projects"] });
+              } catch (err) {
+                const msg = typeof err === "string" ? err : err instanceof Error ? err.message : String(err);
+                toast.error(`撤销失败: ${msg}`);
+              }
+            },
+          },
+        });
+      } catch (err) {
+        const msg = typeof err === "string" ? err : err instanceof Error ? err.message : String(err);
+        console.error("[CwdMissingBanner] auto-fix failed", err);
+        toast.error(`自动修复失败 — 请用「重定位…」手动选择目录: ${msg}`);
+      } finally {
+        autoFixInFlight.delete(from);
+        if (mountedRef.current) setAutoFixing(false);
+      }
+    })();
+  }, [from, queryClient, sessions]);
 
   return (
     <>
@@ -1587,15 +1741,22 @@ function CwdMissingBanner({ from }: { from: string }) {
         <div className="flex items-start gap-2">
           <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1">
-            <div className="font-medium">原工作目录已不存在</div>
+            <div className="font-medium">
+              {autoFixing ? "正在自动修复工作目录…" : "原工作目录已不存在"}
+            </div>
             <div className="opacity-80 break-all font-mono">{from}</div>
-            <div className="opacity-70 mt-0.5">历史可正常查看，但其中的相对路径无法解析、resume 也会失败。可能是项目被移动或重命名。</div>
+            <div className="opacity-70 mt-0.5">
+              {autoFixing
+                ? "检测到 worktree 已被合并/删除，正在改写历史 cwd 到原项目。"
+                : "历史可正常查看，但其中的相对路径无法解析、resume 也会失败。可能是项目被移动或重命名。"}
+            </div>
           </div>
         </div>
         <div className="mt-2 pl-[22px]">
           <button
             onClick={() => setDialogOpen(true)}
-            className="px-2 py-1 rounded border border-amber-400 bg-white/60 hover:bg-white text-amber-900"
+            disabled={autoFixing}
+            className="px-2 py-1 rounded border border-amber-400 bg-white/60 hover:bg-white text-amber-900 disabled:opacity-50"
           >
             重定位…
           </button>
@@ -1698,12 +1859,16 @@ export function SessionDetail({
   highlight,
   composerOverride,
   onFork,
+  displayMode,
+  onDisplayModeChange,
 }: {
   session: Session;
   onClose: () => void;
   highlight?: string;
   composerOverride?: ReactNode;
   onFork?: (payload: SessionForkPayload) => void;
+  displayMode?: SessionDetailDisplayMode;
+  onDisplayModeChange?: (mode: SessionDetailDisplayMode) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
@@ -1712,11 +1877,25 @@ export function SessionDetail({
   const cwdMissing = !!session.project_path && missingCwds.has(session.project_path);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
-  const [originalChat, setOriginalChat] = useAtom(originalChatAtom);
-  const [markdownPreview, setMarkdownPreview] = useAtom(markdownPreviewAtom);
-  const [userPromptsOnly, setUserPromptsOnly] = useAtom(userPromptsOnlyAtom);
-  const [expandMessages, setExpandMessages] = useAtom(expandMessagesAtom);
+  const [originalChat] = useAtom(originalChatAtom);
+  const [markdownPreview] = useAtom(markdownPreviewAtom);
+  const [userPromptsOnly] = useAtom(userPromptsOnlyAtom);
+  const [expandMessages] = useAtom(expandMessagesAtom);
+  const [storedDisplayModes, setStoredDisplayModes] = useAtom(sessionDetailDisplayModesAtom);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
+  const displayModeKey = getSessionDetailDisplayModeKey(session);
+  const effectiveDisplayMode = displayMode ?? storedDisplayModes[displayModeKey] ?? "chat";
+  const setEffectiveDisplayMode = (mode: SessionDetailDisplayMode) => {
+    setStoredDisplayModes((prev) =>
+      prev[displayModeKey] === mode
+        ? prev
+        : {
+            ...prev,
+            [displayModeKey]: mode,
+          },
+    );
+    onDisplayModeChange?.(mode);
+  };
 
   const headerLabel = resolveSessionLabel(session, toReadable);
   const displaySummary = headerLabel.text;
@@ -1732,6 +1911,12 @@ export function SessionDetail({
   const selection = useMaasActiveSelection();
   const messageLoadSeqRef = useRef(0);
   const liveSyncScrollRef = useRef(false);
+  const codexPollInFlightRef = useRef(false);
+  const captureLiveSyncScrollIntent = useCallback(() => {
+    const scroller = scrollRef.current;
+    liveSyncScrollRef.current = !scroller
+      || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+  }, []);
 
   const loadMessages = useCallback((reset: boolean) => {
     const seq = messageLoadSeqRef.current + 1;
@@ -1767,14 +1952,39 @@ export function SessionDetail({
 
   useEffect(() => {
     const unlisten = listen("sessions-changed", () => {
-      const scroller = scrollRef.current;
-      liveSyncScrollRef.current = !scroller
-        || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+      captureLiveSyncScrollIntent();
       queryClient.invalidateQueries({ queryKey: ["session-usage", session.project_id, session.id] });
       void loadMessages(false);
     });
     return () => { unlisten.then((fn) => fn()).catch(() => {}); };
-  }, [loadMessages, queryClient, session.project_id, session.id]);
+  }, [captureLiveSyncScrollIntent, loadMessages, queryClient, session.project_id, session.id]);
+
+  useEffect(() => {
+    if (session.source !== "codex") return;
+
+    const refreshCodexTranscript = () => {
+      if (document.visibilityState === "hidden") return;
+      if (codexPollInFlightRef.current) return;
+      codexPollInFlightRef.current = true;
+      captureLiveSyncScrollIntent();
+      queryClient.invalidateQueries({ queryKey: ["session-usage", session.project_id, session.id] });
+      void loadMessages(false).finally(() => {
+        codexPollInFlightRef.current = false;
+      });
+    };
+
+    const intervalId = window.setInterval(refreshCodexTranscript, 2500);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") refreshCodexTranscript();
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      codexPollInFlightRef.current = false;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [captureLiveSyncScrollIntent, loadMessages, queryClient, session.project_id, session.id, session.source]);
 
   const filteredMessages = useMemo(() => {
     let result = originalChat ? messages.filter((m) => !m.is_meta) : messages;
@@ -1893,145 +2103,171 @@ export function SessionDetail({
     setActiveMatch((prev) => (prev + delta + matchCount) % matchCount);
   };
 
+  const resumeComposer = composerOverride ?? (
+    <Composer
+      cwd={canResume ? session.project_path ?? null : null}
+      resetKey={session.id}
+      defaultTerminalType={session.source === "codex" ? "codex" : "claude"}
+      layout={effectiveDisplayMode === "pty" ? "pane" : "dock"}
+      emptyMessage={
+        canResume
+          ? undefined
+          : session.source === "app-web"
+            ? "This conversation was synced from claude.ai (web). Resume is only available for local CLI sessions."
+            : session.source === "app-cowork"
+              ? "Cowork sessions cannot be resumed locally."
+              : "This session has no project path on disk and cannot be resumed."
+      }
+      placeholder={(t) =>
+        t.type === "terminal"
+          ? "Open a shell in this project (Enter to start)"
+          : `Continue this conversation with ${t.label}...`
+      }
+      buildCommand={(t, prompt) => {
+        if (t.type === "terminal") return { initialInput: prompt || undefined };
+        const agentType = session.source === "codex" ? "codex" : t.type;
+        const extra = agentType === "claude" ? `--resume ${session.id}` : `resume ${session.id}`;
+        return { command: buildAgentCommand(agentType, prompt, extra) };
+      }}
+      trailing={<PlatformModelPicker selection={selection} usage={usage} />}
+    />
+  );
 
   return (
     <div className="h-full flex flex-col min-h-0 min-w-0 overflow-hidden">
-      <header className="shrink-0 z-10 bg-background border-b border-border px-4 py-2.5 flex items-center justify-between gap-4">
-        <div className="min-w-0 flex items-center gap-2 text-sm">
-          {session.project_path ? (
-            <ProjectPathLabel
-              path={session.project_path}
-              className="text-muted-foreground max-w-[40%]"
-            />
-          ) : (
-            <span className="truncate text-muted-foreground">{session.project_id}</span>
-          )}
-          <span className="text-muted-foreground/50 shrink-0">/</span>
+      <SessionDetailHeader
+        projectPath={session.project_path}
+        projectLabel={session.project_path ? undefined : session.project_id}
+        title={
           <EditableSessionTitle
             sessionId={session.id}
             canEdit={session.source === "app-code"}
             value={displaySummary}
-            className="font-serif text-base font-semibold text-ink min-w-0 flex-1"
+            className="min-w-0 flex-1 font-serif text-base font-semibold text-foreground"
           />
-          {headerBadge && (
+        }
+        badges={
+          headerBadge ? (
             <span
               className={`shrink-0 inline-block w-2 h-2 rounded-full ${
                 headerLabel.source === "custom"  ? "bg-foreground" :
                 headerLabel.source === "ai"      ? "bg-primary" :
-                headerLabel.source === "summary" ? "bg-blue-500" :
-                headerLabel.source === "slug"    ? "bg-emerald-500" :
+                headerLabel.source === "summary" ? "bg-muted-foreground" :
+                headerLabel.source === "slug"    ? "bg-primary/60" :
                 headerLabel.source === "prompt"  ? "bg-muted-foreground/40" :
                                                     "bg-muted-foreground/20"
               }`}
               title={`标题来源：${headerBadge}`}
               aria-label={`标题来源：${headerBadge}`}
             />
-          )}
-          <span className="text-xs text-muted-foreground/70 shrink-0">· {roundCount} rounds</span>
-        </div>
-        <div className="flex items-center gap-3 shrink-0">
-          {highlight?.trim() && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-              <span className="tabular-nums">
-                {matchCount === 0 ? "0/0" : `${activeMatch + 1}/${matchCount}`}
-              </span>
-              <button
-                onClick={() => gotoMatch(-1)}
-                disabled={matchCount === 0}
-                className="p-1 rounded hover:bg-card-alt hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent"
-                title="Previous match"
-              >
-                <ChevronUp className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => gotoMatch(1)}
-                disabled={matchCount === 0}
-                className="p-1 rounded hover:bg-card-alt hover:text-ink disabled:opacity-40 disabled:hover:bg-transparent"
-                title="Next match"
-              >
-                <ChevronDown className="w-3.5 h-3.5" />
-              </button>
-            </div>
-          )}
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <button className="p-1.5 rounded-lg text-muted-foreground hover:bg-card-alt">
-                <DotsHorizontalIcon width={16} />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel className="text-xs text-muted-foreground">View</DropdownMenuLabel>
-              <DropdownMenuCheckboxItem checked={userPromptsOnly} onCheckedChange={setUserPromptsOnly}>
-                Prompts only
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={expandMessages} onCheckedChange={setExpandMessages}>
-                Expand messages
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={markdownPreview} onCheckedChange={setMarkdownPreview}>
-                Markdown preview
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-                Readable slash command
-              </DropdownMenuCheckboxItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs text-muted-foreground">Session</DropdownMenuLabel>
-              <SessionDropdownMenuItems
-                projectId={session.project_id}
-                sessionId={session.id}
-                source={session.source}
-                projectPath={session.project_path ?? undefined}
-                onExport={() => setExportDialogOpen(true)}
-              />
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={onClose} className="gap-2">
-                <Cross2Icon width={14} />
-                Close panel
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </header>
+          ) : null
+        }
+        meta={<span className="text-xs text-muted-foreground/70 shrink-0">· {roundCount} rounds</span>}
+        actions={
+          <>
+            {highlight?.trim() && (
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <span className="tabular-nums">
+                  {matchCount === 0 ? "0/0" : `${activeMatch + 1}/${matchCount}`}
+                </span>
+                <button
+                  onClick={() => gotoMatch(-1)}
+                  disabled={matchCount === 0}
+                  className="p-1 rounded hover:bg-card-alt hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                  title="Previous match"
+                >
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => gotoMatch(1)}
+                  disabled={matchCount === 0}
+                  className="p-1 rounded hover:bg-card-alt hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                  title="Next match"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+            <DropdownMenu modal={false}>
+              <DropdownMenuTrigger asChild>
+                <button className="p-1.5 rounded-lg text-muted-foreground hover:bg-card-alt">
+                  <DotsHorizontalIcon width={16} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56">
+                <SessionDetailDropdownMenuItems
+                  projectId={session.project_id}
+                  sessionId={session.id}
+                  title={displaySummary}
+                  source={session.source}
+                  projectPath={session.project_path ?? undefined}
+                  onExport={() => setExportDialogOpen(true)}
+                  onClose={onClose}
+                  displayMode={effectiveDisplayMode}
+                  onDisplayModeChange={setEffectiveDisplayMode}
+                />
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </>
+        }
+      />
 
       {cwdMissing && session.project_path && (
         <CwdMissingBanner from={session.project_path} />
       )}
 
-      <div ref={scrollRef} className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain">
-      <div ref={contentRef}>
-
-
-      {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <p className="text-muted-foreground text-sm">Loading messages...</p>
-        </div>
-      ) : filteredMessages.length === 0 ? (
-        <div className="flex flex-col items-center justify-center py-12 gap-1 text-muted-foreground text-sm">
-          <span>No messages in this session</span>
-          <span className="text-xs opacity-60">{session.id}</span>
-        </div>
+      {effectiveDisplayMode === "chat" ? (
+        <>
+          <div ref={scrollRef} className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain">
+            <div ref={contentRef}>
+              {loading ? (
+                <div className="flex items-center justify-center py-12">
+                  <p className="text-muted-foreground text-sm">Loading messages...</p>
+                </div>
+              ) : filteredMessages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-1 text-muted-foreground text-sm">
+                  <span>No messages in this session</span>
+                  <span className="text-xs opacity-60">{session.id}</span>
+                </div>
+              ) : (
+                <div className="border-t border-border/40">
+                  <StickyPromptList
+                    groupedMessages={groupedMessages}
+                    userPromptsOnly={userPromptsOnly}
+                    originalChat={originalChat}
+                    markdownPreview={markdownPreview}
+                    expandMessages={expandMessages}
+                    highlight={highlight}
+                    toReadable={toReadable}
+                    onCopy={handleCopyContent}
+                    onFork={
+                      onFork
+                        ? ({ message, context }) => onFork({
+                            session,
+                            messageId: message.uuid,
+                            lineNumber: message.line_number,
+                            context,
+                          })
+                        : undefined
+                    }
+                    cwd={session.project_path ?? undefined}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+          {resumeComposer}
+        </>
       ) : (
-        <div className="border-t border-border/40">
-          <StickyPromptList
-            groupedMessages={groupedMessages}
-            userPromptsOnly={userPromptsOnly}
-            originalChat={originalChat}
-            markdownPreview={markdownPreview}
-            expandMessages={expandMessages}
-            highlight={highlight}
-            toReadable={toReadable}
-            onCopy={handleCopyContent}
-            onFork={
-              onFork
-                ? ({ message, context }) => onFork({
-                    session,
-                    messageId: message.uuid,
-                    lineNumber: message.line_number,
-                    context,
-                  })
-                : undefined
-            }
-            cwd={session.project_path ?? undefined}
-          />
+        <div className="flex min-h-0 flex-1 flex-col bg-background">
+          {composerOverride ? (
+            <>
+              <div className="min-h-0 flex-1" />
+              {composerOverride}
+            </>
+          ) : (
+            resumeComposer
+          )}
         </div>
       )}
 
@@ -2043,38 +2279,6 @@ export function SessionDetail({
         onSelectedIdsChange={() => {}}
         defaultName={session.summary?.slice(0, 50).replace(/[/\\?%*:|"<>]/g, "-") || "session"}
       />
-      </div>
-      </div>
-
-      {/* Continue conversation: terminal-style prompt box pinned to the right pane bottom */}
-      {composerOverride ?? (
-      <Composer
-        cwd={canResume ? session.project_path ?? null : null}
-        resetKey={session.id}
-        defaultTerminalType={session.source === "codex" ? "codex" : "claude"}
-        emptyMessage={
-          canResume
-            ? undefined
-            : session.source === "app-web"
-              ? "This conversation was synced from claude.ai (web). Resume is only available for local CLI sessions."
-              : session.source === "app-cowork"
-                ? "Cowork sessions cannot be resumed locally."
-                : "This session has no project path on disk and cannot be resumed."
-        }
-        placeholder={(t) =>
-          t.type === "terminal"
-            ? "Open a shell in this project (Enter to start)"
-            : `Continue this conversation with ${t.label}...`
-        }
-        buildCommand={(t, prompt) => {
-          if (t.type === "terminal") return { initialInput: prompt || undefined };
-          const agentType = session.source === "codex" ? "codex" : t.type;
-          const extra = agentType === "claude" ? `--resume ${session.id}` : `resume ${session.id}`;
-          return { command: buildAgentCommand(agentType, prompt, extra) };
-        }}
-        trailing={<PlatformModelPicker selection={selection} usage={usage} />}
-      />
-      )}
     </div>
   );
 }
@@ -2655,6 +2859,7 @@ function Composer({
   onSpawn,
   resetKey,
   defaultTerminalType = "claude",
+  layout = "dock",
 }: {
   cwd: string | null;
   buildCommand: (
@@ -2673,7 +2878,9 @@ function Composer({
    *  changes (e.g. switching between sessions). */
   resetKey?: string;
   defaultTerminalType?: TerminalOption["type"];
+  layout?: "dock" | "pane";
 }) {
+  const isPane = layout === "pane";
   const defaultTerminal = TERMINAL_OPTIONS.find((o) => o.type === defaultTerminalType) ?? TERMINAL_OPTIONS[0];
   const [terminalOpt, setTerminalOpt] = useState<TerminalOption>(defaultTerminal);
   const [input, setInput] = useState("");
@@ -2737,7 +2944,13 @@ function Composer({
 
   if (emptyMessage) {
     return (
-      <div className="shrink-0 min-w-0 px-6 pb-1 pt-3 border-t border-border bg-background overflow-hidden">
+      <div
+        className={
+          isPane
+            ? "flex min-h-0 flex-1 items-end px-6 py-6 bg-background overflow-hidden"
+            : "shrink-0 min-w-0 px-6 pb-1 pt-3 border-t border-border bg-background overflow-hidden"
+        }
+      >
         <div className="px-4 py-2.5 border border-dashed border-border rounded-xl bg-card/60 text-xs text-muted-foreground">
           {emptyMessage}
         </div>
@@ -2746,17 +2959,29 @@ function Composer({
   }
 
   return (
-    <div className="shrink-0 min-w-0 px-6 pb-3 pt-3 border-t border-border bg-background overflow-hidden">
+    <div
+      className={
+        isPane
+          ? "flex min-h-0 flex-1 flex-col justify-end px-6 py-6 bg-background overflow-hidden"
+          : "shrink-0 min-w-0 px-6 pb-3 pt-3 border-t border-border bg-background overflow-hidden"
+      }
+    >
       {activePty ? (
-        <div className="relative border border-border rounded-xl overflow-hidden bg-terminal shadow-sm">
-          <div
-            onPointerDown={onResizeStart}
-            onPointerMove={onResizeMove}
-            onPointerUp={onResizeEnd}
-            onPointerCancel={onResizeEnd}
-            className="absolute inset-x-0 top-0 h-1.5 cursor-ns-resize z-10 hover:bg-primary/40 active:bg-primary/60 transition-colors"
-            title="Drag to resize"
-          />
+        <div
+          className={`relative border border-border rounded-xl overflow-hidden bg-terminal shadow-sm ${
+            isPane ? "flex min-h-0 flex-1 flex-col" : ""
+          }`}
+        >
+          {!isPane && (
+            <div
+              onPointerDown={onResizeStart}
+              onPointerMove={onResizeMove}
+              onPointerUp={onResizeEnd}
+              onPointerCancel={onResizeEnd}
+              className="absolute inset-x-0 top-0 h-1.5 cursor-ns-resize z-10 hover:bg-primary/40 active:bg-primary/60 transition-colors"
+              title="Drag to resize"
+            />
+          )}
           <div className="flex items-center justify-between px-3 py-1.5 border-b border-border bg-card-alt/40">
             <span className="text-xs text-muted-foreground font-mono truncate">
               {activePty.command ?? "shell"}
@@ -2769,7 +2994,7 @@ function Composer({
               <Cross2Icon className="w-3.5 h-3.5" />
             </button>
           </div>
-          <div style={{ height: ptyHeight }}>
+          <div className={isPane ? "min-h-0 flex-1" : ""} style={isPane ? undefined : { height: ptyHeight }}>
             <TerminalPane
               ptyId={activePty.ptyId}
               cwd={activePty.cwd}
@@ -2782,7 +3007,7 @@ function Composer({
           </div>
         </div>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className={isPane ? "flex min-h-0 flex-1 flex-col justify-end gap-2" : "flex flex-col gap-2"}>
           {leading && <div className="flex items-center gap-2 px-1">{leading}</div>}
           <div className="flex items-start gap-2 px-4 py-2.5 border border-border/60 rounded-xl bg-terminal shadow-sm overflow-hidden">
             <span className="shrink-0 text-sm leading-6 font-mono text-primary/80 select-none">$</span>

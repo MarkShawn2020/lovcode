@@ -1,4 +1,5 @@
 import { RotateCcw, Search } from "lucide-react";
+import { useI18n } from "@/i18n";
 import type { Project } from "../../types";
 
 interface QuickActionsProps {
@@ -8,6 +9,7 @@ interface QuickActionsProps {
 }
 
 export function QuickActions({ lastProject, onContinue, onSearch }: QuickActionsProps) {
+  const { t } = useI18n();
   const getProjectName = (path: string): string => {
     return path.split("/").pop() || path;
   };
@@ -20,7 +22,7 @@ export function QuickActions({ lastProject, onContinue, onSearch }: QuickActions
           className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg hover:bg-primary/90 transition-colors text-sm font-medium"
         >
           <RotateCcw className="w-4 h-4" />
-          <span>Continue: {getProjectName(lastProject.path)}</span>
+          <span>{t("project.continue", { project: getProjectName(lastProject.path) })}</span>
         </button>
       )}
       <button
@@ -28,7 +30,7 @@ export function QuickActions({ lastProject, onContinue, onSearch }: QuickActions
         className="flex items-center gap-2 px-4 py-2 bg-card border border-border rounded-lg hover:border-primary/50 hover:bg-accent/50 transition-colors text-sm text-muted-foreground"
       >
         <Search className="w-4 h-4" />
-        <span>Search...</span>
+        <span>{t("common.search")}</span>
         <kbd className="ml-2 px-1.5 py-0.5 text-[10px] bg-muted rounded">⌘K</kbd>
       </button>
     </div>

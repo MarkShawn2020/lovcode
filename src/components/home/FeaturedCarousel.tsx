@@ -1,10 +1,12 @@
 import { StarFilledIcon, ChevronRightIcon } from "@radix-ui/react-icons";
+import { useI18n } from "@/i18n";
 
 interface FeaturedCarouselProps {
   onOpenAnnualReport: () => void;
 }
 
 export function FeaturedCarousel({ onOpenAnnualReport }: FeaturedCarouselProps) {
+  const { t } = useI18n();
   return (
     <button
       onClick={onOpenAnnualReport}
@@ -22,21 +24,21 @@ export function FeaturedCarousel({ onOpenAnnualReport }: FeaturedCarouselProps) 
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="text-white/60 text-xs font-medium tracking-wide uppercase">
-              Annual Report
+              {t("home.annualReport")}
             </span>
           </div>
           <h3 className="font-serif text-2xl font-bold text-white mb-1">
-            2025 Year in Review
+            {t("home.yearInReview2025")}
           </h3>
           <p className="text-white/80 text-sm">
-            Your coding journey with Claude Code
+            {t("home.codingJourney")}
           </p>
         </div>
 
         <div className="flex flex-col items-center gap-2">
           <StarFilledIcon className="w-10 h-10 text-white/90" />
           <div className="flex items-center gap-1 text-white/70 text-xs">
-            <span>View</span>
+            <span>{t("home.view")}</span>
             <ChevronRightIcon className="w-3 h-3" />
           </div>
         </div>

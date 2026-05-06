@@ -12,8 +12,10 @@ import {
 import { useInvokeQuery, useInvokeMutation } from "../../hooks";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { PluginCard } from "./PluginCard";
+import { useI18n } from "@/i18n";
 
 export function ExtensionsView() {
+  const { t } = useI18n();
   const [activeTab, setActiveTab] = useState<"installed" | "official">("installed");
 
   const {
@@ -83,25 +85,25 @@ export function ExtensionsView() {
   return (
     <ConfigPage>
       <PageHeader
-        title="Extensions"
-        subtitle="Manage Claude Code plugins"
+        title={t("common.extensions")}
+        subtitle={t("extensions.subtitle")}
       />
 
       <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as typeof activeTab)} className="flex-1 flex flex-col">
         <TabsList className="bg-card-alt border border-border">
           <TabsTrigger value="installed">
-            已安装 ({installedPlugins.length})
+            {t("common.installed")} ({installedPlugins.length})
           </TabsTrigger>
-          <TabsTrigger value="official">官方插件</TabsTrigger>
+          <TabsTrigger value="official">{t("extensions.officialPlugins")}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="installed" className="mt-4 space-y-4">
           {loadingInstalled ? (
-            <LoadingState message="Loading installed plugins..." />
+            <LoadingState message={t("extensions.loadingInstalled")} />
           ) : (
             <>
               <SearchInput
-                placeholder="Search installed plugins..."
+                placeholder={t("extensions.searchInstalled")}
                 value={search}
                 onChange={setSearch}
               />
@@ -125,13 +127,13 @@ export function ExtensionsView() {
               {filteredInstalled.length === 0 && !search && (
                 <EmptyState
                   icon={DownloadIcon}
-                  message="No plugins installed"
-                  hint="Browse official plugins to install"
+                  message={t("extensions.noInstalled")}
+                  hint={t("extensions.installHint")}
                 />
               )}
 
               {filteredInstalled.length === 0 && search && (
-                <p className="text-muted-foreground text-sm">No plugins match "{search}"</p>
+                <p className="text-muted-foreground text-sm">{t("extensions.noMatch", { search })}</p>
               )}
             </>
           )}
@@ -139,11 +141,11 @@ export function ExtensionsView() {
 
         <TabsContent value="official" className="mt-4 space-y-4">
           {loadingOfficial || loadingMarketplaces ? (
-            <LoadingState message="Loading official plugins..." />
+            <LoadingState message={t("extensions.loadingOfficial")} />
           ) : (
             <>
               <SearchInput
-                placeholder="Search official plugins..."
+                placeholder={t("extensions.searchOfficial")}
                 value={searchOfficial}
                 onChange={setSearchOfficial}
               />
@@ -170,13 +172,13 @@ export function ExtensionsView() {
               {filteredOfficial.length === 0 && !searchOfficial && (
                 <EmptyState
                   icon={DownloadIcon}
-                  message="No official plugins available"
-                  hint="Check your network connection"
+                  message={t("extensions.noOfficial")}
+                  hint={t("extensions.networkHint")}
                 />
               )}
 
               {filteredOfficial.length === 0 && searchOfficial && (
-                <p className="text-muted-foreground text-sm">No plugins match "{searchOfficial}"</p>
+                <p className="text-muted-foreground text-sm">{t("extensions.noMatch", { search: searchOfficial })}</p>
               )}
             </>
           )}
