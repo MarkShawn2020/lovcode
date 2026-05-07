@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { useAtom } from "jotai";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { expandedPathsAtom } from "@/store";
 import { ChevronRightIcon, ChevronDownIcon, FileIcon, CopyIcon, ExternalLinkIcon } from "@radix-ui/react-icons";
 import { ImageIcon } from "lucide-react";

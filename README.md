@@ -8,7 +8,8 @@
 </h1>
 
 <p align="center">
-  <strong>Desktop companion for AI coding tools</strong><br>
+  <strong>I came, I saw, I conquered. / 我来，我见，我征服。</strong><br>
+  <sub>Campaign command table for Claude Code, Codex, and terminal sessions</sub><br>
   <sub>macOS • Windows • Linux</sub>
 </p>
 
@@ -35,6 +36,10 @@
 
 ## Release Highlights
 
+### v0.37.0 — Runtime Settings, Page Windows, and Backend Modules
+
+Lovcode now has dedicated agent CLI runtime configuration for Claude Code and Codex, including install/version status surfaces and reusable runtime settings under Configuration. Page windows and session navigation gain duplicate-window and resume helpers, plus richer project path menu actions across the workbench. Feedback operations now include an admin dialog, while the Tauri backend has been split into focused app command modules for maintainability.
+
 ### v0.36.0 — Localized Workbench, Session Handoff, and Lab
 
 Lovcode now localizes the main workspace, settings, marketplace, environment, update, and feedback surfaces in English and Chinese, with a language preference in app settings. The agent workbench gains richer conversation management: pinned and archived conversation state, chat/PTY display mode switching, session information dialogs, related-file and trace-context copy actions, and cross-agent handoff prompts for moving context between Claude Code and Codex. This release also adds the Lab and Wish Room entry points, improves Lovstudio-authenticated feedback tickets with tags and account tracking, and makes release history refresh more resilient through GitHub API caching and Atom fallback.
@@ -57,6 +62,7 @@ Local paths in prompts and chat messages now open inside Lovcode with a resizabl
 
 | Version | Highlights |
 |---------|------------|
+| **0.37.0** | Agent CLI runtime configuration for Claude Code and Codex with install/version status cards; duplicate-window and resume helpers for page/session workflows; richer project path menu actions; feedback administration dialog; Tauri backend split into focused app command modules |
 | **0.36.0** | English/Chinese localization reaches the workspace, settings, marketplace, environment, update, and feedback flows; the workbench adds pinned/archived conversations, chat/PTY display modes, session info dialogs, related-file and trace-context copying, and Claude Code/Codex handoff prompts; new Lab and Wish Room routes provide an experimental planning surface; Lovstudio feedback now uses authenticated ticket submission with tags; release history refresh uses GitHub API cache plus Atom fallback |
 | **0.35.0** | General chat sessions can start without a selected project; the agent composer now offers recent project paths and a compact CLI picker; the status bar opens a Lovcode version manager with release history, manual update checks, auto-update controls, and release links; MaaS provider activation can target Claude Code and Codex separately, writing Codex provider settings into `config.toml` |
 | **0.34.0** | Agent Workbench launches Claude Code, Codex, and terminal sessions with persistent state; project/session environment scripts can be saved and run from Lovcode; Claude and Codex hooks track activity; Codex rollout sessions are indexed with filtering, usage extraction, resume support, and live updates; file previews now support tabs, ZIP browsing, unsupported-format fallbacks, and richer Markdown/image rendering |
@@ -88,6 +94,7 @@ Local paths in prompts and chat messages now open inside Lovcode with a resizabl
 - **Lab & Wish Room** — Track wishes, link them to projects or sessions, and keep experimental planning flows under the Lab surface
 - **Localized Interface** — Switch between system language, English, and Chinese across the main workspace, settings, marketplace, feedback, updates, and runtime environment screens
 - **Agent Workbench** — Launch Claude Code, Codex, or a terminal in a selected project or general chat workspace; track pinned/archived sessions, unread/review states, runtime activity, and chat/PTY display mode
+- **Agent Runtime Settings** — Configure Claude Code and Codex CLI runtimes, inspect install/version status, and manage runtime preferences from Configuration
 - **Session Handoff Tools** — Copy session info, related file paths, trace context, and cross-agent handoff prompts for moving work between Claude Code and Codex
 - **Environment Scripts** — Save project/session setup, cleanup, and custom runtime actions, then run them in an embedded terminal dock
 - **Chat History Viewer** — Browse and search Claude and Codex conversation history across all projects with scoped full-text, session ID, and metadata search modes
@@ -105,7 +112,7 @@ Local paths in prompts and chat messages now open inside Lovcode with a resizabl
 - **Commands / MCP / Skills / Hooks / Sub-Agents / Output Styles** — Full configuration surface for the Claude Code ecosystem
 - **Skills Manager** — Sort, rank, filter, preview, and inspect installed skills with vendor/source metadata, install timestamps, and token estimates
 - **Marketplace** — Browse and install community templates with shared Markdown table rendering and smart local-path links
-- **Lovstudio Feedback Tickets** — Submit authenticated feedback tickets with tags, copy ticket IDs, and open Lovstudio account tracking from inside the app
+- **Lovstudio Feedback Tickets** — Submit authenticated feedback tickets with tags, copy ticket IDs, open Lovstudio account tracking, and review tickets from an admin dialog
 - **Customizable Statusbar** — Personalize your statusbar display with scripts and open Lovcode version management from the app version indicator
 
 ## oh-my-lovcode
@@ -134,8 +141,11 @@ cd lovcode
 # Install dependencies
 pnpm install
 
-# Run development
-pnpm tauri dev
+# Run full Tauri development with Rust watcher
+pnpm dev:app
+
+# Frontend-focused development: Vite HMR stays on, Rust changes do not restart the app
+pnpm dev:app:no-watch
 
 # Build for distribution
 pnpm tauri build

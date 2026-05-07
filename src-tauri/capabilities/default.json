@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for all windows",
-  "windows": ["main", "search", "prompt-detail-*"],
+  "windows": ["main", "search", "prompt-detail-*", "page-*"],
   "permissions": [
     "core:default",
     "core:event:default",

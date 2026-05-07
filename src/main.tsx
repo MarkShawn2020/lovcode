@@ -4,7 +4,10 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { AppRouter } from "./router";
 import { Toaster } from "./components/ui/toast";
+import { NativeTitleTooltip } from "./components/ui/native-title-tooltip";
+import { PageWindowMenuListener } from "./components/PageWindowMenuListener";
 import { I18nProvider } from "./i18n";
+import { restoreLocationForDevReload, saveCurrentLocationForDevResume } from "./lib/appResume";
 import "./index.css";
 
 // Disable browser context menu in production (no reload/inspect-element).
@@ -16,6 +19,11 @@ import "./index.css";
 if (import.meta.env.PROD) {
   document.addEventListener("contextmenu", (e) => e.preventDefault());
 }
+
+restoreLocationForDevReload();
+saveCurrentLocationForDevResume();
+window.addEventListener("hashchange", saveCurrentLocationForDevResume);
+window.addEventListener("pagehide", saveCurrentLocationForDevResume);
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -65,7 +73,9 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
         });
       }}
     >
+      <PageWindowMenuListener />
       <AppRouter />
+      <NativeTitleTooltip />
       <Toaster />
     </PersistQueryClientProvider>
   </I18nProvider>,

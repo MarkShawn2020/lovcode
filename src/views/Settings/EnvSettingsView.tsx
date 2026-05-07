@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
 import {
   CheckIcon,
@@ -20,6 +20,13 @@ import {
   ConfigPage,
 } from "../../components/config";
 import { useI18n } from "@/i18n";
+import {
+  deleteSettingsEnv,
+  disableSettingsEnv,
+  enableSettingsEnv,
+  setDisabledSettingsEnv,
+  setSettingsEnv,
+} from "@/lib/settingsApi";
 import type { ClaudeSettings } from "../../types";
 
 export function EnvSettingsView() {
@@ -94,9 +101,9 @@ export function EnvSettingsView() {
   const handleEnvSave = async () => {
     if (!editingEnvKey) return;
     if (editingEnvIsDisabled) {
-      await invoke("update_disabled_settings_env", { envKey: editingEnvKey, envValue: envEditValue });
+      await setDisabledSettingsEnv(editingEnvKey, envEditValue);
     } else {
-      await invoke("update_settings_env", { envKey: editingEnvKey, envValue: envEditValue });
+      await setSettingsEnv(editingEnvKey, envEditValue);
     }
     await refreshSettings();
     setEditingEnvKey(null);
@@ -104,26 +111,26 @@ export function EnvSettingsView() {
   };
 
   const handleEnvDelete = async (key: string) => {
-    await invoke("delete_settings_env", { envKey: key });
+    await deleteSettingsEnv(key);
     await refreshSettings();
     if (editingEnvKey === key) setEditingEnvKey(null);
   };
 
   const handleEnvDisable = async (key: string) => {
-    await invoke("disable_settings_env", { envKey: key });
+    await disableSettingsEnv(key);
     await refreshSettings();
     if (editingEnvKey === key) setEditingEnvKey(null);
   };
 
   const handleEnvEnable = async (key: string) => {
-    await invoke("enable_settings_env", { envKey: key });
+    await enableSettingsEnv(key);
     await refreshSettings();
   };
 
   const handleEnvCreate = async () => {
     const key = newEnvKey.trim();
     if (!key) return;
-    await invoke("update_settings_env", { envKey: key, envValue: newEnvValue, isNew: true });
+    await setSettingsEnv(key, newEnvValue, true);
     await refreshSettings();
     setNewEnvKey("");
     setNewEnvValue("");

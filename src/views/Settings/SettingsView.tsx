@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
 import {
   GearIcon,
@@ -41,6 +41,13 @@ import {
 } from "../../components/config";
 import { MarketplaceContent } from "../Marketplace";
 import { useI18n } from "@/i18n";
+import {
+  addPermissionDirectory,
+  removePermissionDirectory,
+  setPluginEnabled,
+  setSettingsField,
+  setSettingsPermissionField,
+} from "@/lib/settingsApi";
 import type { ClaudeSettings, TemplateComponent } from "../../types";
 
 interface SettingsViewProps {
@@ -136,27 +143,27 @@ export function SettingsView({ onMarketplaceSelect }: SettingsViewProps) {
   };
 
   const updateField = async (field: string, value: unknown) => {
-    await invoke("update_settings_field", { field, value });
+    await setSettingsField(field, value);
     refreshSettings();
   };
 
   const updatePermissionField = async (field: string, value: unknown) => {
-    await invoke("update_settings_permission_field", { field, value });
+    await setSettingsPermissionField(field, value);
     refreshSettings();
   };
 
   const addDirectory = async (path: string) => {
-    await invoke("add_permission_directory", { path });
+    await addPermissionDirectory(path);
     refreshSettings();
   };
 
   const removeDirectory = async (path: string) => {
-    await invoke("remove_permission_directory", { path });
+    await removePermissionDirectory(path);
     refreshSettings();
   };
 
   const togglePlugin = async (pluginId: string, enabled: boolean) => {
-    await invoke("toggle_plugin", { pluginId, enabled });
+    await setPluginEnabled(pluginId, enabled);
     refreshSettings();
   };
 

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { DotsHorizontalIcon } from "@radix-ui/react-icons";
 import { FileCode, Copy } from "lucide-react";
 import {

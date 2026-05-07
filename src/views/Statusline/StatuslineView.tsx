@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { RowsIcon, Pencil1Icon, CheckIcon, Cross1Icon, TrashIcon, ChevronDownIcon, ResetIcon } from "@radix-ui/react-icons";
 import { ConfigPage, PageHeader, EmptyState, LoadingState } from "../../components/config";
 import { CollapsibleCard, CodePreview } from "../../components/shared";

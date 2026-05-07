@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { FileIcon, CopyIcon, ExternalLinkIcon } from "@radix-ui/react-icons";
 import {
   ContextMenu,

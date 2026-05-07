@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { save } from "@tauri-apps/plugin-dialog";
 import { useAtom } from "jotai";
 import { atomWithStorage } from "jotai/utils";

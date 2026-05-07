@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { useAtom } from "jotai";
 import { fileViewModeAtom } from "@/store";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { invoke, convertFileSrc } from "@/lib/tauri";
 import {
   Cross2Icon,
   ExternalLinkIcon,

@@ -185,9 +185,8 @@ pub fn create_session(
     #[cfg(not(windows))]
     let mut cmd = {
         // On Unix, use user's default shell, fallback to zsh (macOS default since Catalina)
-        let shell_cmd = shell.unwrap_or_else(|| {
-            std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string())
-        });
+        let shell_cmd = shell
+            .unwrap_or_else(|| std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string()));
 
         // Build command: either run custom command via login shell, or just start shell
         // Use -ilc (interactive + login) to load user's shell config (~/.zshrc, ~/.bashrc)
@@ -245,7 +244,12 @@ pub fn create_session(
     let running = Arc::new(AtomicBool::new(true));
     {
         let mut controls = PTY_CONTROLS.lock().map_err(|e| e.to_string())?;
-        controls.insert(id.clone(), SessionControl { running: running.clone() });
+        controls.insert(
+            id.clone(),
+            SessionControl {
+                running: running.clone(),
+            },
+        );
     }
 
     // Initialize scrollback buffer - load from disk if exists (for app restart recovery)
@@ -303,9 +307,12 @@ fn read_loop(
 
                         // Check if we should persist to disk (debounced)
                         let now = Instant::now();
-                        let should_save = if let Ok(mut last_save) = PTY_SCROLLBACK_LAST_SAVE.lock() {
+                        let should_save = if let Ok(mut last_save) = PTY_SCROLLBACK_LAST_SAVE.lock()
+                        {
                             if let Some(last) = last_save.get(&id) {
-                                if now.duration_since(*last) >= Duration::from_millis(SCROLLBACK_SAVE_INTERVAL_MS) {
+                                if now.duration_since(*last)
+                                    >= Duration::from_millis(SCROLLBACK_SAVE_INTERVAL_MS)
+                                {
                                     last_save.insert(id.clone(), now);
                                     true
                                 } else {
@@ -344,7 +351,13 @@ fn read_loop(
                     let _ = save_scrollback_to_disk(&id, &buf);
                 }
 
-                let _ = app_handle.emit("pty-data", PtyDataEvent { id: id.clone(), data });
+                let _ = app_handle.emit(
+                    "pty-data",
+                    PtyDataEvent {
+                        id: id.clone(),
+                        data,
+                    },
+                );
             }
             Err(e) => {
                 // Check if we should still be running

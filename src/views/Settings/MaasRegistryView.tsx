@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   PlusIcon,
@@ -30,6 +30,8 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 import { LoadingState, PageHeader, ConfigPage } from "../../components/config";
+import { normalizeClaudeCodeModelName } from "../../lib/agent/models";
+import { patchSettings } from "../../lib/settingsApi";
 import type { MaasProvider, MaasModel, Vendor, ClaudeSettings } from "../../types";
 
 interface FetchParseResult {
@@ -170,6 +172,21 @@ const PROVIDER_API_KEY_URLS: Record<string, string> = {
   zenmux: "https://zenmux.ai/platform/subscription",
 };
 
+const ZENMUX_MODELS_API_URL = "https://zenmux.ai/api/v1/models";
+const ZENMUX_DEFAULT_FETCH_COMMAND = `GET ${ZENMUX_MODELS_API_URL}`;
+
+function isZenmuxProvider(provider: Pick<MaasProvider, "key" | "baseUrl">): boolean {
+  return provider.key.toLowerCase() === "zenmux" || provider.baseUrl.toLowerCase().includes("zenmux.ai");
+}
+
+function getDefaultFetchCommand(provider: MaasProvider): string {
+  return isZenmuxProvider(provider) ? ZENMUX_DEFAULT_FETCH_COMMAND : "";
+}
+
+function getEffectiveFetchCommand(provider: MaasProvider): string {
+  return provider.fetchCommand ?? getDefaultFetchCommand(provider);
+}
+
 /** Lightweight, deterministic, non-reversible fingerprint of a token. Used
  *  only to detect whether the saved token still matches the one that was last
  *  verified. Not a security primitive — the token itself is already plaintext
@@ -185,13 +202,13 @@ function pickVerifyModel(p: MaasProvider): string {
     m.vendor === "anthropic" || /(?:^|\/)claude-/i.test(m.modelName);
   const anthropic = models.filter(isAnthropic);
   const sonnet = anthropic.find((m) => /sonnet/i.test(m.modelName));
-  if (sonnet) return sonnet.modelName.trim();
-  if (anthropic[0]) return anthropic[0].modelName.trim();
+  if (sonnet) return normalizeClaudeCodeModelName(sonnet.modelName);
+  if (anthropic[0]) return normalizeClaudeCodeModelName(anthropic[0].modelName);
   // No Anthropic model in the catalog — fall back to a known-good slug.
   // ZenMux-style providers expect the "anthropic/" prefix; native does not.
   return p.baseUrl.includes("zenmux") || p.models.some((m) => m.modelName.includes("/"))
     ? "anthropic/claude-sonnet-4.6"
-    : "claude-sonnet-4-5";
+    : "claude-sonnet-4-6";
 }
 
 function pickCodexModel(p: MaasProvider): string {
@@ -361,10 +378,7 @@ export function MaasRegistryView() {
   const persistLovcodeSettings = async (patch: Record<string, unknown>) => {
     const latestSettings = await invoke<ClaudeSettings>("get_settings").catch(() => settings);
     const current = getLovcodeSettings(latestSettings?.raw ?? settings?.raw);
-    await invoke("update_settings_field", {
-      field: "lovcode",
-      value: { ...current, ...patch },
-    });
+    await patchSettings({ type: "setField", field: "lovcode", value: { ...current, ...patch } });
     refreshSettings();
   };
 
@@ -503,9 +517,9 @@ export function MaasRegistryView() {
 
   const handleFetchAndParse = async () => {
     if (!draft) return;
-    const cmd = (draft.fetchCommand ?? "").trim();
+    const cmd = getEffectiveFetchCommand(draft).trim();
     if (!cmd) {
-      setFetchError("Paste a curl command first");
+      setFetchError("Paste a request or command first");
       return;
     }
     setIsFetching(true);
@@ -687,24 +701,19 @@ export function MaasRegistryView() {
         if (isOAuthProvider(draft)) {
           // OAuth flow: only switch local Claude Code settings. Login remains
           // an independent Claude Code interaction via `/login` in the session.
-          await invoke("update_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" });
-          await invoke("delete_settings_env", { envKey: "ANTHROPIC_AUTH_TOKEN" }).catch(() => {});
-          await invoke("delete_settings_env", { envKey: "ANTHROPIC_BASE_URL" }).catch(() => {});
-          await invoke("delete_settings_env", { envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL" }).catch(() => {});
+          await patchSettings([
+            { type: "setEnv", envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" },
+            { type: "deleteEnv", envKey: "ANTHROPIC_AUTH_TOKEN" },
+            { type: "deleteEnv", envKey: "ANTHROPIC_BASE_URL" },
+            { type: "deleteEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL" },
+          ]);
         } else {
-          await invoke("update_settings_env", {
-            envKey: "ANTHROPIC_BASE_URL",
-            envValue: draft.baseUrl.trim(),
-          });
-          await invoke("update_settings_env", {
-            envKey: "ANTHROPIC_AUTH_TOKEN",
-            envValue: draft.authToken.trim(),
-          });
-          await invoke("update_settings_env", {
-            envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            envValue: pickVerifyModel(draft),
-          });
-          await invoke("delete_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH" }).catch(() => {});
+          await patchSettings([
+            { type: "setEnv", envKey: "ANTHROPIC_BASE_URL", envValue: draft.baseUrl.trim() },
+            { type: "setEnv", envKey: "ANTHROPIC_AUTH_TOKEN", envValue: draft.authToken.trim() },
+            { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: pickVerifyModel(draft) },
+            { type: "deleteEnv", envKey: "CLAUDE_CODE_USE_OAUTH" },
+          ]);
         }
       }
 
@@ -715,9 +724,22 @@ export function MaasRegistryView() {
         nextActiveProviders[runtimeId] = draft.key;
       }
       const runtimeIdsToPersist = getRuntimeIdsToPersist(draft, selectedRuntimeIds);
+      const currentLovcodeSettings = getLovcodeSettings(settings?.raw);
+      const currentActiveModels =
+        currentLovcodeSettings.activeModels &&
+        typeof currentLovcodeSettings.activeModels === "object" &&
+        !Array.isArray(currentLovcodeSettings.activeModels)
+          ? (currentLovcodeSettings.activeModels as Record<string, unknown>)
+          : {};
       await persistLovcodeSettings({
         activeProvider: nextActiveProviders["claude-code"] ?? getLegacyActiveProvider(settings?.raw),
         activeProviders: nextActiveProviders,
+        activeModels: shouldApplyClaudeCode
+          ? {
+              ...currentActiveModels,
+              "claude-code": pickVerifyModel(draft),
+            }
+          : currentActiveModels,
         maasEnableRuntimes: runtimeIdsToPersist,
       });
       setSelectedRuntimeIds(runtimeIdsToPersist);
@@ -750,6 +772,8 @@ export function MaasRegistryView() {
     setError(null);
     await persistDraft(next);
   };
+
+  const fetchCommandValue = draft ? getEffectiveFetchCommand(draft) : "";
 
   return (
     <ConfigPage>
@@ -1321,7 +1345,7 @@ export function MaasRegistryView() {
                         />
                         <Input
                           value={m.modelName}
-                          placeholder="claude-sonnet-4-6-20251001"
+                          placeholder="claude-sonnet-4-6"
                           className="h-8 border-transparent bg-transparent hover:bg-background focus-visible:bg-background font-mono text-xs"
                           onChange={(e) => updateModel(idx, { modelName: e.target.value })}
                           onBlur={handleFieldBlur}
@@ -1480,7 +1504,7 @@ export function MaasRegistryView() {
                           <Input
                             id="manual-modelname"
                             value={manualModel.modelName}
-                            placeholder="claude-sonnet-4-6-20251001"
+                            placeholder="claude-sonnet-4-6"
                             onChange={(e) =>
                               setManualModel((m) => ({ ...m, modelName: e.target.value }))
                             }
@@ -1492,13 +1516,13 @@ export function MaasRegistryView() {
                     <TabsContent value="auto" className="pt-3 flex flex-col gap-2">
                       <div className="flex items-center justify-between">
                         <p className="text-xs text-muted-foreground">
-                          Paste the platform's models-listing curl command.
+                          Paste the platform's models-listing request or command.
                         </p>
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={handleFetchAndParse}
-                          disabled={isFetching || !(draft.fetchCommand ?? "").trim()}
+                          disabled={isFetching || !fetchCommandValue.trim()}
                         >
                           {isFetching ? (
                             <ReloadIcon className="w-4 h-4 mr-1.5 animate-spin" />
@@ -1509,7 +1533,7 @@ export function MaasRegistryView() {
                         </Button>
                       </div>
                       <textarea
-                        value={draft.fetchCommand ?? ""}
+                        value={fetchCommandValue}
                         onChange={(e) => updateDraft({ fetchCommand: e.target.value })}
                         onBlur={() => {
                           if (isNew || !draft) return;
@@ -1518,7 +1542,7 @@ export function MaasRegistryView() {
                             void persistDraft(draft);
                           }
                         }}
-                        placeholder={`curl 'https://example.com/api/models' -H 'authorization: Bearer ...' -b 'session=...'`}
+                        placeholder="GET https://example.com/api/models"
                         rows={4}
                         spellCheck={false}
                         className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-mono ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"

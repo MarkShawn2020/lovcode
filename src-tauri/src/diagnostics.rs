@@ -256,13 +256,37 @@ fn scan_for_leaked_secrets(project_path: &Path) -> Vec<LeakedSecret> {
 
     // 要排除的目录（包括构建产物）
     let exclude_dirs = [
-        "node_modules", "target", ".git", "dist", "build", "__pycache__", ".venv", "venv",
-        ".next", ".nuxt", ".output", "out", ".turbo", ".vercel", ".netlify",
-        "coverage", ".nyc_output", ".cache", ".parcel-cache",
-        "chunks", "ssr", "static",  // Next.js 内部目录
+        "node_modules",
+        "target",
+        ".git",
+        "dist",
+        "build",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".next",
+        ".nuxt",
+        ".output",
+        "out",
+        ".turbo",
+        ".vercel",
+        ".netlify",
+        "coverage",
+        ".nyc_output",
+        ".cache",
+        ".parcel-cache",
+        "chunks",
+        "ssr",
+        "static", // Next.js 内部目录
     ];
 
-    scan_directory(project_path, &secret_pattern, &scan_extensions, &exclude_dirs, &mut secrets);
+    scan_directory(
+        project_path,
+        &secret_pattern,
+        &scan_extensions,
+        &exclude_dirs,
+        &mut secrets,
+    );
 
     secrets
 }
@@ -297,7 +321,10 @@ fn scan_directory(
             }
 
             // 跳过测试文件和配置示例
-            if file_name.contains(".test.") || file_name.contains(".spec.") || file_name.contains(".example") {
+            if file_name.contains(".test.")
+                || file_name.contains(".spec.")
+                || file_name.contains(".example")
+            {
                 continue;
             }
 
@@ -306,7 +333,10 @@ fn scan_directory(
                 for (line_num, line) in content.lines().enumerate() {
                     // 跳过注释行
                     let trimmed = line.trim();
-                    if trimmed.starts_with("//") || trimmed.starts_with("#") || trimmed.starts_with("*") {
+                    if trimmed.starts_with("//")
+                        || trimmed.starts_with("#")
+                        || trimmed.starts_with("*")
+                    {
                         continue;
                     }
 
@@ -315,19 +345,25 @@ fn scan_directory(
                         let value = cap.get(2).map(|m| m.as_str()).unwrap_or("");
 
                         // 过滤掉明显的占位符
-                        if value.contains("your_") || value.contains("xxx") || value.contains("placeholder") || value == "undefined" || value == "null" {
+                        if value.contains("your_")
+                            || value.contains("xxx")
+                            || value.contains("placeholder")
+                            || value == "undefined"
+                            || value == "null"
+                        {
                             continue;
                         }
 
                         // 脱敏预览
                         let preview = if value.len() > 8 {
-                            format!("{}...{}", &value[..4], &value[value.len()-4..])
+                            format!("{}...{}", &value[..4], &value[value.len() - 4..])
                         } else {
                             "****".to_string()
                         };
 
                         secrets.push(LeakedSecret {
-                            file: path.strip_prefix(dir.parent().unwrap_or(dir))
+                            file: path
+                                .strip_prefix(dir.parent().unwrap_or(dir))
                                 .unwrap_or(&path)
                                 .to_string_lossy()
                                 .to_string(),
@@ -350,24 +386,45 @@ pub struct FileLineCount {
 }
 
 /// 扫描项目文件，按行数倒序返回
-pub fn scan_file_lines(project_path: &str, limit: usize, ignored_paths: &[String]) -> Result<Vec<FileLineCount>, String> {
+pub fn scan_file_lines(
+    project_path: &str,
+    limit: usize,
+    ignored_paths: &[String],
+) -> Result<Vec<FileLineCount>, String> {
     let path = Path::new(project_path);
     let mut files: Vec<FileLineCount> = Vec::new();
 
     // 要扫描的文件扩展名
     let scan_extensions = [
-        "ts", "tsx", "js", "jsx", "vue", "svelte",
-        "py", "rs", "go", "java", "rb", "php",
-        "css", "scss", "less",
-        "html", "md", "json", "yaml", "yml", "toml",
+        "ts", "tsx", "js", "jsx", "vue", "svelte", "py", "rs", "go", "java", "rb", "php", "css",
+        "scss", "less", "html", "md", "json", "yaml", "yml", "toml",
     ];
 
     // 要排除的目录
     let exclude_dirs = [
-        "node_modules", "target", ".git", "dist", "build", "__pycache__", ".venv", "venv",
-        ".next", ".nuxt", ".output", "out", ".turbo", ".vercel", ".netlify",
-        "coverage", ".nyc_output", ".cache", ".parcel-cache",
-        "chunks", "ssr", "static", ".svelte-kit",
+        "node_modules",
+        "target",
+        ".git",
+        "dist",
+        "build",
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".next",
+        ".nuxt",
+        ".output",
+        "out",
+        ".turbo",
+        ".vercel",
+        ".netlify",
+        "coverage",
+        ".nyc_output",
+        ".cache",
+        ".parcel-cache",
+        "chunks",
+        "ssr",
+        "static",
+        ".svelte-kit",
     ];
 
     scan_files_recursive(path, path, &scan_extensions, &exclude_dirs, &mut files);
@@ -378,9 +435,9 @@ pub fn scan_file_lines(project_path: &str, limit: usize, ignored_paths: &[String
     // 过滤掉用户忽略的路径（在限制条数之前）
     if !ignored_paths.is_empty() {
         files.retain(|f| {
-            !ignored_paths.iter().any(|ignored| {
-                f.file == *ignored || f.file.starts_with(&format!("{}/", ignored))
-            })
+            !ignored_paths
+                .iter()
+                .any(|ignored| f.file == *ignored || f.file.starts_with(&format!("{}/", ignored)))
         });
     }
 
@@ -419,8 +476,14 @@ fn scan_files_recursive(
 
             // 排除锁文件和自动生成的文件
             let excluded_files = [
-                "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb",
-                "Cargo.lock", "poetry.lock", "Pipfile.lock", "composer.lock",
+                "package-lock.json",
+                "pnpm-lock.yaml",
+                "yarn.lock",
+                "bun.lockb",
+                "Cargo.lock",
+                "poetry.lock",
+                "Pipfile.lock",
+                "composer.lock",
                 ".d.ts", // 类型声明文件
             ];
             if excluded_files.iter().any(|&f| file_name.ends_with(f)) {

@@ -1,20 +1,25 @@
-import { useState, type ReactNode } from "react";
+import { useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   PersonIcon, ChevronLeftIcon, ChevronRightIcon,
   LayersIcon, RocketIcon, DashboardIcon,
 } from "@radix-ui/react-icons";
-import { FlaskConical, Loader2, LogIn, LogOut, MessageSquarePlus, Settings as SettingsIcon } from "lucide-react";
+import { FlaskConical, Loader2, LogIn, LogOut, MessageSquarePlus, PanelTopOpen, Settings as SettingsIcon, ShieldCheck } from "lucide-react";
+import { useAtom } from "jotai";
 import { Avatar, AvatarFallback } from "../ui/avatar";
 import { Popover, PopoverTrigger, PopoverContent } from "../ui/popover";
 import { Button } from "../ui/button";
 import { FeedbackButton } from "../FeedbackButton";
+import { FeedbackAdminDialog } from "../FeedbackAdminDialog";
+import { useDuplicatePageWindow } from "@/hooks/useDuplicatePageWindow";
 import { useLovstudioAuth } from "@/hooks/useLovstudioAuth";
 import { useI18n, type TranslationKey } from "@/i18n";
+import { cn } from "@/lib/utils";
+import { sidebarCollapsedAtom } from "@/store";
 import type { FeatureType } from "@/types";
 
 interface GlobalHeaderProps {
-  currentFeature: FeatureType | null;
+  activeFeature: FeatureType | null;
   canGoBack: boolean;
   canGoForward: boolean;
   onGoBack: () => void;
@@ -23,37 +28,33 @@ interface GlobalHeaderProps {
   onShowSettings: () => void;
 }
 
-// Top-nav features. Active state is derived from currentFeature so the
-// highlight syncs with the URL (back/forward, sidebar links, deep links).
-const MAIN_NAV: { feature: FeatureType; labelKey: TranslationKey; icon: ReactNode; matches: (f: FeatureType | null) => boolean }[] = [
+// Top-nav features. Active state is decided by RootLayout at the app-section level,
+// so child pages can change without coupling the header to every leaf route.
+const MAIN_NAV: { feature: FeatureType; labelKey: TranslationKey; icon: ReactNode }[] = [
   {
     feature: "dashboard",
     labelKey: "common.dashboard",
     icon: <DashboardIcon className="w-4 h-4" />,
-    matches: (f) => f === "dashboard",
   },
   {
     feature: "workbench",
     labelKey: "common.workbench",
     icon: <RocketIcon className="w-4 h-4" />,
-    matches: (f) => f === "workbench" || f === "workspace" || f === "chat",
   },
   {
     feature: "features",
     labelKey: "common.configuration",
     icon: <LayersIcon className="w-4 h-4" />,
-    matches: (f) => f === "features",
   },
   {
     feature: "lab",
     labelKey: "common.lab",
     icon: <FlaskConical className="w-4 h-4" />,
-    matches: (f) => f === "lab" || f === "wish-room" || f === "events" || Boolean(f?.startsWith("kb-")),
   },
 ];
 
 export function GlobalHeader({
-  currentFeature,
+  activeFeature,
   canGoBack,
   canGoForward,
   onGoBack,
@@ -63,34 +64,50 @@ export function GlobalHeader({
 }: GlobalHeaderProps) {
   const lovstudioAuth = useLovstudioAuth();
   const { t } = useI18n();
+  const [sidebarCollapsed, setSidebarCollapsed] = useAtom(sidebarCollapsedAtom);
+  const duplicatePageWindow = useDuplicatePageWindow();
+  const sidebarToggleLabel = sidebarCollapsed ? t("nav.showSidebar") : t("nav.hideSidebar");
 
   return (
     <div data-tauri-drag-region className="h-[52px] shrink-0 flex items-center border-b border-border bg-card">
-      {/* Left: back/forward (offset for traffic-light buttons on macOS) */}
-      <div className="flex items-center gap-0.5 pl-[80px]">
-        <button
+      {/* Left controls: offset for traffic-light buttons on macOS. */}
+      <div className="flex items-center gap-0.5 pl-[88px]">
+        <HeaderIconButton
+          onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+          title={sidebarToggleLabel}
+          aria-label={sidebarToggleLabel}
+          aria-pressed={!sidebarCollapsed}
+        >
+          <SidebarToggleGlyph />
+        </HeaderIconButton>
+        <HeaderIconButton
           onClick={onGoBack}
           disabled={!canGoBack}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
           title={t("nav.goBack")}
         >
           <ChevronLeftIcon className="w-5 h-5" />
-        </button>
-        <button
+        </HeaderIconButton>
+        <HeaderIconButton
           onClick={onGoForward}
           disabled={!canGoForward}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt disabled:opacity-30 disabled:pointer-events-none"
           title={t("nav.goForward")}
         >
           <ChevronRightIcon className="w-5 h-5" />
-        </button>
+        </HeaderIconButton>
+        <HeaderIconButton
+          onClick={duplicatePageWindow}
+          title={t("nav.openPageInNewWindow")}
+          aria-label={t("nav.openPageInNewWindow")}
+        >
+          <PanelTopOpen className="w-4 h-4" />
+        </HeaderIconButton>
       </div>
       {/* Center: nav */}
       <div className="flex-1 flex items-center justify-center gap-0.5" data-tauri-drag-region>
         {MAIN_NAV.map((item) => (
           <NavButton
             key={item.feature}
-            isActive={item.matches(currentFeature)}
+            isActive={activeFeature === item.feature}
             onClick={() => onFeatureClick(item.feature)}
             icon={item.icon}
             label={t(item.labelKey)}
@@ -106,6 +123,41 @@ export function GlobalHeader({
   );
 }
 
+function HeaderIconButton({
+  children,
+  className,
+  type = "button",
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement>) {
+  return (
+    <button
+      type={type}
+      className={cn(
+        "inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card-alt hover:text-ink disabled:pointer-events-none disabled:opacity-30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SidebarToggleGlyph() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-5 w-5"
+      fill="none"
+      viewBox="0 0 16 16"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <rect x="3.5" y="3.5" width="9" height="9" rx="2.25" stroke="currentColor" strokeWidth="1.25" />
+      <path d="M6.5 4.75V11.25" stroke="currentColor" strokeLinecap="round" strokeWidth="1.25" />
+    </svg>
+  );
+}
+
 function ProfileMenu({
   lovstudioAuth,
   onShowSettings,
@@ -116,8 +168,10 @@ function ProfileMenu({
   const { authState, authLoading, loginFlow, loginPolling, startLogin, logout } = lovstudioAuth;
   const { t } = useI18n();
   const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackAdminOpen, setFeedbackAdminOpen] = useState(false);
   const displayName = authState?.user.email || "";
   const fallback = displayName ? displayName.charAt(0).toUpperCase() : <PersonIcon className="w-4 h-4" />;
+  const isAdmin = Boolean(authState?.isAdmin);
 
   return (
     <div className="pr-4">
@@ -184,6 +238,15 @@ function ProfileMenu({
                 <MessageSquarePlus className="w-4 h-4" />
                 {t("feedback.submitFeedback")}
               </button>
+              {isAdmin && (
+                <button
+                  onClick={() => setFeedbackAdminOpen(true)}
+                  className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-md transition-colors"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  {t("feedback.manageFeedback")}
+                </button>
+              )}
               <button
                 onClick={onShowSettings}
                 className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground hover:text-ink hover:bg-card-alt rounded-md transition-colors"
@@ -196,6 +259,9 @@ function ProfileMenu({
         </PopoverContent>
       </Popover>
       <FeedbackButton open={feedbackOpen} onOpenChange={setFeedbackOpen} />
+      {isAdmin && (
+        <FeedbackAdminDialog open={feedbackAdminOpen} onOpenChange={setFeedbackAdminOpen} />
+      )}
     </div>
   );
 }

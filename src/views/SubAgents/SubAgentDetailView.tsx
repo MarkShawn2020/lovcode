@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import type { LocalAgent } from "../../types";
 import { DetailHeader, DetailCard, ContentCard, ConfigPage } from "../../components/config";
 

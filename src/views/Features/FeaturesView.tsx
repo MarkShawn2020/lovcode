@@ -4,7 +4,7 @@ import type { FeatureType, FeatureConfig } from "@/types";
 import { FeaturesLayout } from "./FeaturesLayout";
 import {
   Terminal,
-  GitBranch,
+  Cpu,
   FileText,
   Settings2,
   SquareSlash,
@@ -30,7 +30,7 @@ type Icon = ComponentType<SVGProps<SVGSVGElement>>;
 const ICONS: Partial<Record<FeatureType, Icon>> = {
   "basic-env": Terminal,
   "basic-maas": Network,
-  "basic-version": GitBranch,
+  "basic-version": Cpu,
   "basic-context": FileText,
   settings: Settings2,
   commands: SquareSlash,

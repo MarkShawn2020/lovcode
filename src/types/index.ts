@@ -143,6 +143,20 @@ export interface SessionHandoff {
   truncated: boolean;
 }
 
+export interface SessionRuntimeFork {
+  sourceProvider: "claude" | "codex";
+  targetProvider: "claude" | "codex";
+  sourceSessionId: string;
+  sourceProjectId: string;
+  targetSessionId: string;
+  targetProjectId: string;
+  projectPath: string;
+  sourceTitle?: string | null;
+  targetPath: string;
+  targetSession: Session;
+  messageCount: number;
+}
+
 export interface ChatMessage {
   uuid: string;
   role: string;
@@ -428,6 +442,11 @@ export interface ClaudeCodeVersionInfo {
   current_version: string | null;
   available_versions: VersionWithDownloads[];
   autoupdater_disabled: boolean;
+}
+
+export interface CodexCliVersionInfo {
+  current_version: string | null;
+  available_versions: VersionWithDownloads[];
 }
 
 export interface LovcodeRelease {

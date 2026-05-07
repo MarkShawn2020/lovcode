@@ -22,6 +22,7 @@ export default defineConfig(async () => ({
   plugins: [
     LovinspPlugin({
       bundler: "vite",
+      hideConsole: true,
       injectTo: [
         path.resolve(__dirname, "src/main.tsx"),
       ],

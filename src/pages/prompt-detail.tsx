@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { Copy, X } from "lucide-react";
 import { CollapsibleContent } from "../views/Chat/CollapsibleContent";
 import { ChatFilePreviewProvider } from "../views/Chat/FilePreviewContext";

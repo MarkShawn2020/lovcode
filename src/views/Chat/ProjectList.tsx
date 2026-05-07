@@ -1,10 +1,10 @@
 import { useState, useMemo, useEffect, useRef, useLayoutEffect, useCallback, memo, type ReactNode } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronDownIcon, ChevronRightIcon, DotsHorizontalIcon, ListBulletIcon, MagnifyingGlassIcon, Cross2Icon, DesktopIcon, RocketIcon, CheckIcon } from "@radix-ui/react-icons";
-import { Copy, Upload, ChevronUp, ChevronDown, Pin, RefreshCw, CornerDownLeft, AlertTriangle, Folder, Pencil, ExternalLink, SlidersHorizontal } from "lucide-react";
+import { Copy, Upload, ChevronUp, ChevronDown, Pin, RefreshCw, CornerDownLeft, AlertTriangle, Folder, Pencil, ExternalLink, SlidersHorizontal, LocateFixed } from "lucide-react";
 import { TerminalPane, disposeTerminal } from "../../components/Terminal";
 import { TERMINAL_OPTIONS, type TerminalOption } from "../../components/ui/new-terminal-button";
 import { useAtom } from "jotai";
@@ -24,6 +24,7 @@ import {
   allProjectsGroupedAtom,
   allProjectsDataSourceAtom,
   allProjectsCollapsedGroupsAtom,
+  sidebarCollapsedAtom,
   type ProjectListDataSource,
 } from "../../store";
 import { useAppConfig } from "../../context";
@@ -37,6 +38,8 @@ import { PathAwareText } from "./PathAwareText";
 import { usePathHits } from "./usePathHits";
 import { useCwdValidity, invalidateCwdValidity } from "./useCwdValidity";
 import { RelocateSessionDialog } from "./RelocateSessionDialog";
+import { normalizeClaudeCodeModelName } from "../../lib/agent/models";
+import { patchSettings } from "../../lib/settingsApi";
 import { ProjectLogo } from "../../components/shared/ProjectLogo";
 import { toast } from "../../components/ui/toast";
 import { ActivityCard } from "../../components/home";
@@ -118,7 +121,17 @@ const composerPtyHeightAtom = atomWithStorage<number>(
 );
 
 function getSessionSelectionPath(session: Pick<Session, "project_id" | "id">): string {
-  return `/history?projectId=${encodeURIComponent(session.project_id)}&sessionId=${encodeURIComponent(session.id)}`;
+  return `/workbench?projectId=${encodeURIComponent(session.project_id)}&sessionId=${encodeURIComponent(session.id)}`;
+}
+
+function getDataSourceForSession(session: Pick<Session, "source">): ProjectListDataSource {
+  switch (session.source) {
+    case "cli": return "local";
+    case "codex": return "codex";
+    case "app-code": return "app-code";
+    case "app-web": return "app-web";
+    case "app-cowork": return "app-cowork";
+  }
 }
 
 function rememberLastPath(path: string): void {
@@ -154,11 +167,13 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
   const [recentCollapsed, setRecentCollapsed] = useAtom(recentCollapsedAtom);
   const [importCollapsed, setImportCollapsed] = useAtom(importCollapsedAtom);
   const [collapsedGroupsArr, setCollapsedGroupsArr] = useAtom(allProjectsCollapsedGroupsAtom);
+  const [sidebarCollapsed] = useAtom(sidebarCollapsedAtom);
   const collapsedGroups = useMemo<Set<string> | null>(
     () => (collapsedGroupsArr === null ? null : new Set(collapsedGroupsArr)),
     [collapsedGroupsArr],
   );
   const [selectedSessionRaw, setSelectedSessionRaw] = useState<Session | null>(null);
+  const [selectedSessionRowVisible, setSelectedSessionRowVisible] = useState(false);
   const defaultSelectionDoneRef = useRef(false);
   const setSelectedSession = useCallback((session: Session | null) => {
     if (session) defaultSelectionDoneRef.current = true;
@@ -185,8 +200,34 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
   const selectSessionHintId = (location.state as { selectSessionId?: string } | null)
     ?.selectSessionId;
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
+  const sidebarHeaderRef = useRef<HTMLDivElement | null>(null);
   const pendingScrollToSessionRef = useRef<string | null>(null);
   const urlSelectedSessionRef = useRef<string | null>(selectedSessionIdFromUrl);
+  const getSidebarSessionRow = useCallback((sessionId: string) => {
+    const scroller = sidebarScrollRef.current;
+    if (!scroller) return null;
+    return scroller.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(sessionId)}"]`);
+  }, []);
+  const scrollSidebarSessionIntoView = useCallback((sessionId: string) => {
+    const scroller = sidebarScrollRef.current;
+    const row = getSidebarSessionRow(sessionId);
+    if (!scroller || !row) return false;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const delta = rowRect.top - scrollerRect.top - scrollerRect.height / 2 + rowRect.height / 2;
+    scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: "smooth" });
+    return true;
+  }, [getSidebarSessionRow]);
+  const isSidebarSessionRowVisible = useCallback((sessionId: string) => {
+    const scroller = sidebarScrollRef.current;
+    const row = getSidebarSessionRow(sessionId);
+    if (!scroller || !row) return false;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const headerRect = sidebarHeaderRef.current?.getBoundingClientRect();
+    const visibleTop = headerRect ? Math.max(scrollerRect.top, headerRect.bottom) : scrollerRect.top;
+    return rowRect.bottom > visibleTop && rowRect.top < scrollerRect.bottom;
+  }, [getSidebarSessionRow]);
   const revealSessionInSidebar = useCallback((session: Session) => {
     setRecentCollapsed(false);
     setPinnedCollapsed(false);
@@ -209,8 +250,8 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     defaultSelectionDoneRef.current = true;
     setSelectedSession(null);
     if (selectedSessionIdFromUrl) {
-      rememberLastPath("/history");
-      navigate("/history", { replace: true });
+      rememberLastPath("/workbench");
+      navigate("/workbench", { replace: true });
     }
   }, [navigate, selectedSessionIdFromUrl, setSelectedSession]);
 
@@ -247,7 +288,7 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     if (allSessions.length === 0) {
       if (!streaming) {
         setSelectedSession(null);
-        navigate("/history", { replace: true });
+        navigate("/workbench", { replace: true });
       }
       return;
     }
@@ -259,7 +300,7 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     if (!s) {
       if (!streaming) {
         setSelectedSession(null);
-        navigate("/history", { replace: true });
+        navigate("/workbench", { replace: true });
       }
       return;
     }
@@ -289,15 +330,7 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
   useEffect(() => {
     const id = pendingScrollToSessionRef.current;
     if (!id) return;
-    const scroller = sidebarScrollRef.current;
-    if (!scroller) return;
-    const row = scroller.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(id)}"]`);
-    if (!row) return;
-    const scrollerRect = scroller.getBoundingClientRect();
-    const rowRect = row.getBoundingClientRect();
-    const delta = rowRect.top - scrollerRect.top - scrollerRect.height / 2 + rowRect.height / 2;
-    scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: "smooth" });
-    pendingScrollToSessionRef.current = null;
+    if (scrollSidebarSessionIntoView(id)) pendingScrollToSessionRef.current = null;
   });
 
   // Always re-derive the selected session from the live `allSessions` array so that
@@ -623,6 +656,54 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
       });
   }, [allSessions, sortBy, hideEmptySessions, grouped, dataSource, effectivePinnedSet]);
 
+  useEffect(() => {
+    if (!selectedSession || sidebarCollapsed) {
+      setSelectedSessionRowVisible(false);
+      return;
+    }
+
+    const scroller = sidebarScrollRef.current;
+    if (!scroller) {
+      setSelectedSessionRowVisible(false);
+      return;
+    }
+
+    let frame: number | null = null;
+    const sessionId = selectedSession.id;
+    const updateVisibility = () => {
+      frame = null;
+      const visible = isSidebarSessionRowVisible(sessionId);
+      setSelectedSessionRowVisible((prev) => (prev === visible ? prev : visible));
+    };
+    const scheduleUpdate = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(updateVisibility);
+    };
+
+    scheduleUpdate();
+    scroller.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      scroller.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [
+    selectedSession?.id,
+    sidebarCollapsed,
+    isSidebarSessionRowVisible,
+    dataSource,
+    grouped,
+    hideEmptySessions,
+    sortBy,
+    pinnedCollapsed,
+    recentCollapsed,
+    collapsedGroupsArr,
+    pinnedSessions.length,
+    flatSessions.length,
+    sortedProjects.length,
+  ]);
+
   const latestSelectableSession = useMemo(() => {
     const candidates = new Map<string, Session>();
     const add = (session: Session) => candidates.set(session.id, session);
@@ -704,6 +785,31 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     });
   };
 
+  const locateSelectedSession = () => {
+    if (!selectedSession) return;
+    revealSessionInSidebar(selectedSession);
+    pendingScrollToSessionRef.current = selectedSession.id;
+    if (scrollSidebarSessionIntoView(selectedSession.id)) {
+      pendingScrollToSessionRef.current = null;
+      return;
+    }
+    const targetDataSource = getDataSourceForSession(selectedSession);
+    if (dataSource !== "all" && dataSource !== targetDataSource) setDataSource(targetDataSource);
+    if (hideEmptySessions && selectedSession.rounds === 0) setHideEmptySessions(false);
+    requestAnimationFrame(() => {
+      if (scrollSidebarSessionIntoView(selectedSession.id)) {
+        pendingScrollToSessionRef.current = null;
+      }
+    });
+  };
+  const locateButtonSubtle = Boolean(selectedSession && selectedSessionRowVisible);
+  const locateButtonTitle = locateButtonSubtle ? "Current session is visible" : "Locate current session";
+  const locateButtonClass = `flex h-7 w-7 items-center justify-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+    locateButtonSubtle
+      ? "text-muted-foreground/40 hover:bg-card-alt/60 hover:text-muted-foreground"
+      : "text-primary hover:bg-primary/10 hover:text-primary"
+  }`;
+
   if (loading) {
     const what = loadingSessions && loadingProjects
       ? "sessions and projects"
@@ -713,7 +819,7 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     return (
       <div className="flex flex-col items-center justify-center h-full gap-2">
         <p className="text-muted-foreground">Reading {what}…</p>
-        <p className="text-xs text-muted-foreground/60">~/.claude/projects + ~/.codex/sessions</p>
+        <p className="text-xs text-muted-foreground/60">~/.claude/projects + ~/.codex/sessions + archived</p>
       </div>
     );
   }
@@ -721,26 +827,40 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
   return (
     <div className="flex h-full">
       {/* Left Panel: Project Tree */}
-      <div ref={sidebarScrollRef} className="w-80 shrink-0 border-r border-border overflow-y-auto overscroll-contain">
-        <div className="px-4 py-4">
-          <div className="flex items-center justify-between mb-1">
-            <h2 className="font-serif text-lg font-semibold text-ink">History</h2>
-            <button
-              onClick={() => setSearchOpen(true)}
-              className="flex items-center gap-1.5 p-1.5 rounded-md text-muted-foreground hover:text-ink hover:bg-card-alt transition-colors"
-              title="Search conversations (⌘K)"
-            >
-              <MagnifyingGlassIcon className="w-3.5 h-3.5" />
-              <kbd className="text-[10px] font-mono px-1 rounded border border-border bg-card-alt/60 text-muted-foreground/80">⌘K</kbd>
-            </button>
-          </div>
-          <p className="text-xs text-muted-foreground mb-3">
-            {sortedProjects.length} projects · {visibleSessions.length} sessions
-          </p>
+      {!sidebarCollapsed && (
+        <div ref={sidebarScrollRef} className="w-80 shrink-0 border-r border-border overflow-y-auto overscroll-contain">
+          <div ref={sidebarHeaderRef} className="sticky top-0 z-20 border-b border-border bg-background/95 px-4 py-4 backdrop-blur">
+            <div className="flex items-center justify-between mb-1">
+              <h2 className="font-serif text-lg font-semibold text-ink">History</h2>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={locateSelectedSession}
+                  disabled={!selectedSession}
+                  className={locateButtonClass}
+                  title={locateButtonTitle}
+                  aria-label={locateButtonTitle}
+                >
+                  <LocateFixed className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSearchOpen(true)}
+                  className="flex items-center gap-1.5 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
+                  title="Search conversations (⌘K)"
+                >
+                  <MagnifyingGlassIcon className="w-3.5 h-3.5" />
+                  <kbd className="text-[10px] font-mono px-1 rounded border border-border bg-card-alt/60 text-muted-foreground/80">⌘K</kbd>
+                </button>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mb-3">
+              {sortedProjects.length} projects · {visibleSessions.length} sessions
+            </p>
 
-          {/* Top-level source tabs: All / Local / Codex / App.
-              When App is active, a sub-tab row appears below for Code / Web / Cowork. */}
-          <div className="flex gap-0.5 mb-2 p-0.5 rounded-lg bg-card-alt">
+            {/* Top-level source tabs: All / Local / Codex / App.
+                When App is active, a sub-tab row appears below for Code / Web / Cowork. */}
+            <div className="flex gap-0.5 mb-2 p-0.5 rounded-lg bg-card-alt">
             {([
               { key: "all", label: "All" },
               { key: "local", label: "Local" },
@@ -1002,7 +1122,8 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
             </div>
           )}
         </div>
-      </div>
+        </div>
+      )}
 
       {/* Right Panel: Session Detail */}
       <div className="flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
@@ -1858,6 +1979,8 @@ export function SessionDetail({
   onClose,
   highlight,
   composerOverride,
+  projectPath,
+  projectPathMenuItems,
   onFork,
   displayMode,
   onDisplayModeChange,
@@ -1866,6 +1989,8 @@ export function SessionDetail({
   onClose: () => void;
   highlight?: string;
   composerOverride?: ReactNode;
+  projectPath?: string | null;
+  projectPathMenuItems?: ReactNode;
   onFork?: (payload: SessionForkPayload) => void;
   displayMode?: SessionDetailDisplayMode;
   onDisplayModeChange?: (mode: SessionDetailDisplayMode) => void;
@@ -1877,6 +2002,7 @@ export function SessionDetail({
   const cwdMissing = !!session.project_path && missingCwds.has(session.project_path);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
+  const [messageLoadError, setMessageLoadError] = useState<string | null>(null);
   const [originalChat] = useAtom(originalChatAtom);
   const [markdownPreview] = useAtom(markdownPreviewAtom);
   const [userPromptsOnly] = useAtom(userPromptsOnlyAtom);
@@ -1900,6 +2026,7 @@ export function SessionDetail({
   const headerLabel = resolveSessionLabel(session, toReadable);
   const displaySummary = headerLabel.text;
   const headerBadge = titleSourceBadge(headerLabel.source);
+  const headerProjectPath = projectPath ?? session.project_path;
 
   const { data: liveUsage } = useInvokeQuery<import("../../types").SessionUsage>(
     ["session-usage", session.project_id, session.id],
@@ -1925,6 +2052,7 @@ export function SessionDetail({
     if (reset) {
       setLoading(true);
       setMessages([]);
+      setMessageLoadError(null);
     }
 
     return invoke<Message[]>("get_session_messages", {
@@ -1932,10 +2060,16 @@ export function SessionDetail({
       sessionId: session.id,
     })
       .then((m) => {
-        if (messageLoadSeqRef.current === seq) setMessages(m);
+        if (messageLoadSeqRef.current === seq) {
+          setMessages(m);
+          setMessageLoadError(null);
+        }
       })
-      .catch(() => {
-        if (messageLoadSeqRef.current === seq) setMessages([]);
+      .catch((error) => {
+        if (messageLoadSeqRef.current === seq) {
+          setMessages([]);
+          setMessageLoadError(error instanceof Error ? error.message : String(error));
+        }
       })
       .finally(() => {
         if (messageLoadSeqRef.current === seq) setLoading(false);
@@ -2136,8 +2270,9 @@ export function SessionDetail({
   return (
     <div className="h-full flex flex-col min-h-0 min-w-0 overflow-hidden">
       <SessionDetailHeader
-        projectPath={session.project_path}
-        projectLabel={session.project_path ? undefined : session.project_id}
+        projectPath={headerProjectPath}
+        projectLabel={headerProjectPath ? undefined : session.project_id}
+        projectPathMenuItems={projectPathMenuItems}
         title={
           <EditableSessionTitle
             sessionId={session.id}
@@ -2223,6 +2358,12 @@ export function SessionDetail({
               {loading ? (
                 <div className="flex items-center justify-center py-12">
                   <p className="text-muted-foreground text-sm">Loading messages...</p>
+                </div>
+              ) : messageLoadError ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-1 text-muted-foreground text-sm">
+                  <span>Could not load messages</span>
+                  <span className="max-w-[36rem] truncate text-xs opacity-60">{messageLoadError}</span>
+                  <span className="text-xs opacity-60">{session.id}</span>
                 </div>
               ) : filteredMessages.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 gap-1 text-muted-foreground text-sm">
@@ -2338,6 +2479,10 @@ function getActiveProviderKeysByRuntime(
   return result;
 }
 
+function claudeModelNamesMatch(left: string, right: string): boolean {
+  return left === right || normalizeClaudeCodeModelName(left) === normalizeClaudeCodeModelName(right);
+}
+
 /** Owns the global Platform/Model selection. Reads from MaaS Registry +
  *  ~/.claude/settings.json; writes flow back through Tauri. Hook so both
  *  composers can drop in the picker without duplicating state. */
@@ -2361,14 +2506,14 @@ function useMaasActiveSelection() {
     const env = (raw as Record<string, unknown>).env;
     if (!env || typeof env !== "object") return null;
     const v = (env as Record<string, unknown>).ANTHROPIC_DEFAULT_SONNET_MODEL;
-    return typeof v === "string" && v ? v : null;
+    return typeof v === "string" && v ? normalizeClaudeCodeModelName(v) : null;
   })();
   const activeProvider = activeProviderKey
     ? maasRegistry.find((p) => p.key === activeProviderKey) ?? null
     : null;
   const activeModel =
     activeProvider && activeModelName
-      ? activeProvider.models.find((m) => m.modelName === activeModelName) ?? null
+      ? activeProvider.models.find((m) => claudeModelNamesMatch(m.modelName, activeModelName)) ?? null
       : null;
   const activeVendor =
     activeProvider && activeModel?.vendor
@@ -2379,43 +2524,48 @@ function useMaasActiveSelection() {
     provider: import("../../types").MaasProvider,
     modelName: string,
   ) => {
+    const normalizedModelName = normalizeClaudeCodeModelName(modelName);
     try {
       if (provider.key === "anthropic-subscription") {
-        await invoke("update_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" });
-        await invoke("update_settings_env", {
-          envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
-          envValue: modelName,
-        });
-        await invoke("delete_settings_env", { envKey: "ANTHROPIC_AUTH_TOKEN" }).catch(() => {});
-        await invoke("delete_settings_env", { envKey: "ANTHROPIC_BASE_URL" }).catch(() => {});
+        await patchSettings([
+          { type: "setEnv", envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" },
+          { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: normalizedModelName },
+          { type: "deleteEnv", envKey: "ANTHROPIC_AUTH_TOKEN" },
+          { type: "deleteEnv", envKey: "ANTHROPIC_BASE_URL" },
+        ]);
       } else {
-        await invoke("update_settings_env", {
-          envKey: "ANTHROPIC_BASE_URL",
-          envValue: provider.baseUrl.trim(),
-        });
-        await invoke("update_settings_env", {
-          envKey: "ANTHROPIC_AUTH_TOKEN",
-          envValue: provider.authToken.trim(),
-        });
-        await invoke("update_settings_env", {
-          envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
-          envValue: modelName,
-        });
-        await invoke("delete_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH" }).catch(() => {});
+        await patchSettings([
+          { type: "setEnv", envKey: "ANTHROPIC_BASE_URL", envValue: provider.baseUrl.trim() },
+          { type: "setEnv", envKey: "ANTHROPIC_AUTH_TOKEN", envValue: provider.authToken.trim() },
+          { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: normalizedModelName },
+          { type: "deleteEnv", envKey: "CLAUDE_CODE_USE_OAUTH" },
+        ]);
       }
       const latestSettings = await invoke<import("../../types").ClaudeSettings>("get_settings").catch(
         () => claudeSettings,
       );
       const latestRaw = latestSettings?.raw ?? claudeSettings?.raw;
       const latestActiveProviderKeys = getActiveProviderKeysByRuntime(latestRaw);
-      await invoke("update_settings_field", {
+      const latestLovcodeSettings = getLovcodeSettings(latestRaw);
+      const activeModels =
+        latestLovcodeSettings.activeModels &&
+        typeof latestLovcodeSettings.activeModels === "object" &&
+        !Array.isArray(latestLovcodeSettings.activeModels)
+          ? (latestLovcodeSettings.activeModels as Record<string, unknown>)
+          : {};
+      await patchSettings({
+        type: "setField",
         field: "lovcode",
         value: {
-          ...getLovcodeSettings(latestRaw),
+          ...latestLovcodeSettings,
           activeProvider: provider.key,
           activeProviders: {
             ...latestActiveProviderKeys,
             "claude-code": provider.key,
+          },
+          activeModels: {
+            ...activeModels,
+            "claude-code": normalizedModelName,
           },
         },
       });
@@ -2423,9 +2573,9 @@ function useMaasActiveSelection() {
 
       setRecentModels((prev) => {
         const next: RecentModelEntry[] = [
-          { providerKey: provider.key, modelName, at: Date.now() },
+          { providerKey: provider.key, modelName: normalizedModelName, at: Date.now() },
           ...prev.filter(
-            (r) => !(r.providerKey === provider.key && r.modelName === modelName),
+            (r) => !(r.providerKey === provider.key && claudeModelNamesMatch(r.modelName, normalizedModelName)),
           ),
         ];
         return next.slice(0, MAX_RECENT_MODELS);
@@ -2441,7 +2591,7 @@ function useMaasActiveSelection() {
       return;
     }
     const keepCurrent =
-      activeModelName && provider.models.some((m) => m.modelName === activeModelName)
+      activeModelName && provider.models.some((m) => claudeModelNamesMatch(m.modelName, activeModelName))
         ? activeModelName
         : provider.models[0].modelName;
     await switchActiveModel(provider, keepCurrent);
@@ -2626,7 +2776,7 @@ function PlatformModelPicker({
                   const vendor = m.vendor
                     ? activeProvider.vendors?.find((v) => v.id === m.vendor) ?? null
                     : null;
-                  const isCurrent = m.modelName === activeModelName;
+                  const isCurrent = Boolean(activeModelName && claudeModelNamesMatch(m.modelName, activeModelName));
                   return (
                     <DropdownMenuItem
                       key={`${keyPrefix}${m.id}`}
@@ -2679,7 +2829,7 @@ function PlatformModelPicker({
 
                 const recentForProvider = recentModels
                   .filter((r) => r.providerKey === activeProvider.key)
-                  .map((r) => activeProvider.models.find((m) => m.modelName === r.modelName))
+                  .map((r) => activeProvider.models.find((m) => claudeModelNamesMatch(m.modelName, r.modelName)))
                   .filter((m): m is import("../../types").MaasModel => !!m);
 
                 return (

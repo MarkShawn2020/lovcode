@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { Cross2Icon, ChevronDownIcon, DownloadIcon } from "@radix-ui/react-icons";
 import { domToCanvas } from "modern-screenshot";
 import { save } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { AnnualReport2025 as AnnualReportData } from "../../types";
 import { useInvokeQuery } from "../../hooks";

@@ -1,11 +1,14 @@
 {
   "name": "lovcode",
   "private": true,
-  "version": "0.36.0",
+  "version": "0.37.0",
   "type": "module",
   "packageManager": "pnpm@10.18.1",
   "scripts": {
     "dev": "vite",
+    "dev:web": "vite",
+    "dev:app": "tauri dev",
+    "dev:app:no-watch": "tauri dev --no-watch",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",

@@ -1,5 +1,5 @@
 import { FormEvent, KeyboardEvent, useMemo, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { CheckCircle2, Copy, ExternalLink, Loader2, LogIn, Mail, Send } from "lucide-react";
 import { version as APP_VERSION } from "../../package.json";

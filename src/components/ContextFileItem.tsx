@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import Markdown from "react-markdown";
 import { Collapsible, CollapsibleTrigger, CollapsibleContent, useCollapsible } from "./ui/collapsible";
 // Radix icons

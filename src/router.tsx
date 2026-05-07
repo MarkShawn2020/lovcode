@@ -14,9 +14,9 @@ import RootLayout from "./pages/_layout";
 // Router Configuration
 // ============================================================================
 
-// Routes that bypass RootLayout — used by secondary windows (search overlay,
-// future auxiliary panels) that render bare UI without the app shell.
-const STANDALONE_PATHS = new Set(["/search-overlay", "/prompt-detail"]);
+// Routes that bypass RootLayout — used by secondary windows and public-facing
+// pages that render bare UI without the desktop app shell.
+const STANDALONE_PATHS = new Set(["/search-overlay", "/prompt-detail", "/landing"]);
 const standaloneRoutes = routes.filter((r) =>
   r && typeof r === "object" && "path" in r && STANDALONE_PATHS.has(`/${(r as { path?: string }).path ?? ""}`)
 );

@@ -30,8 +30,8 @@ export const FEATURES: FeatureConfig[] = [
   },
   {
     type: "basic-version",
-    label: "CC Version",
-    description: "Claude Code version management",
+    label: "Agent Runtime",
+    description: "Agent runtime management",
     available: true,
     group: "basic",
   },
@@ -138,4 +138,3 @@ export const TEMPLATE_CATEGORIES: {
   { key: "output-styles", label: "Output Styles" },
   { key: "statuslines", label: "Status Line" },
 ];
-

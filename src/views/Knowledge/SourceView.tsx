@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { useInvokeQuery } from "../../hooks";
 import { ChevronRightIcon, FileTextIcon } from "@radix-ui/react-icons";
 import { useAtom } from "jotai";

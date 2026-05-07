@@ -1,12 +1,11 @@
+use std::collections::HashSet;
 use std::sync::LazyLock;
 use std::sync::Mutex;
-use std::collections::HashSet;
 use tauri::{AppHandle, Emitter};
 
 /// Tracks which features are currently being monitored for completion
-static MONITORED_FEATURES: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| {
-    Mutex::new(HashSet::new())
-});
+static MONITORED_FEATURES: LazyLock<Mutex<HashSet<String>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
 
 /// Event payload for feature completion
 #[derive(Clone, serde::Serialize)]

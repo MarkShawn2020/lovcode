@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "@/components/ui/toast";
@@ -14,6 +14,7 @@ export interface LovstudioAuthUser {
 
 export interface LovstudioAuthState {
   expiresAt: number;
+  isAdmin: boolean;
   user: LovstudioAuthUser;
 }
 

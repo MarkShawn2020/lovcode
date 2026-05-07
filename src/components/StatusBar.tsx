@@ -8,7 +8,7 @@
  */
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useAtomValue } from "jotai";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import {
   FolderIcon,
   CodeIcon,

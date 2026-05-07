@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Component1Icon, ExternalLinkIcon, TrashIcon } from "@radix-ui/react-icons";
 import type { McpServer, ClaudeSettings, TemplateComponent } from "../../types";

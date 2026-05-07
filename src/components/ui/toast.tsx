@@ -78,8 +78,8 @@ export const toast = {
 };
 
 const variantClasses: Record<Variant, string> = {
-  error: "border-destructive/30 bg-destructive/10 text-foreground",
-  success: "border-primary/30 bg-primary/10 text-foreground",
+  error: "border-destructive/30 bg-card text-foreground",
+  success: "border-primary/30 bg-card text-foreground",
   info: "border-border bg-card text-foreground",
 };
 
@@ -157,7 +157,7 @@ function ToastRow({ group }: { group: ToastGroup }) {
       )}
       role={group.variant === "error" ? "alert" : "status"}
     >
-      <span className={cn("mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-background/70", variantIconClasses[group.variant])}>
+      <span className={cn("mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-background", variantIconClasses[group.variant])}>
         <Icon size={14} />
       </span>
       <span className="min-w-0 break-words whitespace-pre-wrap leading-5">{message}</span>
@@ -252,8 +252,8 @@ function ToastStack({
 
   return (
     <div className="pointer-events-auto relative w-[min(420px,calc(100vw-2rem))] pb-3 pt-8">
-      <div className="absolute inset-x-6 bottom-0 top-8 rounded-xl border border-border bg-card/40 shadow-sm" />
-      <div className="absolute inset-x-3 bottom-1.5 top-6 rounded-xl border border-border bg-card/70 shadow-md" />
+      <div className="absolute inset-x-6 bottom-0 top-8 rounded-xl border border-border bg-card shadow-sm" />
+      <div className="absolute inset-x-3 bottom-1.5 top-6 rounded-xl border border-border bg-card shadow-md" />
       <button
         type="button"
         className="absolute right-2 top-0 z-20 inline-flex h-7 items-center gap-1 rounded-lg border border-border bg-card px-2 text-xs font-medium text-muted-foreground shadow-md transition hover:bg-accent hover:text-foreground"

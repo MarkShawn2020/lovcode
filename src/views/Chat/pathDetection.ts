@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 
 // Match POSIX-style paths embedded in text. Three strategies:
 // 1. Wrapped paths: opener + path-with-spaces + matching closer (backticks, quotes, CJK 「」 etc.)

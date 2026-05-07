@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { LightningBoltIcon, PlusIcon, FileTextIcon, GitHubLogoIcon, EyeNoneIcon, EyeOpenIcon, Pencil1Icon, TrashIcon, DotsHorizontalIcon } from "@radix-ui/react-icons";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { useInvokeQuery, useQueryClient } from "../../hooks";
 import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator } from "../../components/ui/dropdown-menu";
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger, ContextMenuSeparator } from "../../components/ui/context-menu";

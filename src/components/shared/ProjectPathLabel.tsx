@@ -1,12 +1,11 @@
-import { invoke } from "@tauri-apps/api/core";
-import { FolderOpen, Copy, ExternalLink } from "lucide-react";
+import type { ReactNode } from "react";
+import { FolderOpen } from "lucide-react";
 import {
   ContextMenu,
   ContextMenuContent,
-  ContextMenuItem,
-  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "../ui/context-menu";
+import { ProjectPathMenuItems } from "./ProjectPathMenuItems";
 
 /** Strip Claude worktree suffix (`.../.claude/worktrees/<slug>`) from a path.
  *  Returns {origin, worktreeName} when detected, otherwise {origin: path, worktreeName: null}. */
@@ -27,16 +26,12 @@ export function formatProjectPathLabel(path: string): { text: string; tooltip: s
 interface ProjectPathLabelProps {
   path: string;
   className?: string;
+  menuItems?: ReactNode;
 }
 
-/** Single-line project-path label with a right-click menu aligned for folder paths.
- *  Reuses backend commands `reveal_path`, `open_path`, `copy_to_clipboard`. */
-export function ProjectPathLabel({ path, className = "" }: ProjectPathLabelProps) {
+/** Single-line project-path label with a right-click menu aligned for folder paths. */
+export function ProjectPathLabel({ path, className = "", menuItems }: ProjectPathLabelProps) {
   const { text, tooltip } = formatProjectPathLabel(path);
-
-  const reveal = () => invoke("reveal_path", { path }).catch((e) => console.error("reveal", e));
-  const openFolder = () => invoke("open_path", { path }).catch((e) => console.error("open", e));
-  const copy = () => invoke("copy_to_clipboard", { text: path }).catch((e) => console.error("copy", e));
 
   return (
     <ContextMenu modal={false}>
@@ -49,20 +44,8 @@ export function ProjectPathLabel({ path, className = "" }: ProjectPathLabelProps
           <span className="truncate min-w-0">{text}</span>
         </span>
       </ContextMenuTrigger>
-      <ContextMenuContent onCloseAutoFocus={(e) => e.preventDefault()}>
-        <ContextMenuItem onSelect={reveal} className="gap-2">
-          <FolderOpen className="w-3.5 h-3.5" />
-          Reveal in Finder
-        </ContextMenuItem>
-        <ContextMenuItem onSelect={openFolder} className="gap-2">
-          <ExternalLink className="w-3.5 h-3.5" />
-          Open Folder
-        </ContextMenuItem>
-        <ContextMenuSeparator />
-        <ContextMenuItem onSelect={copy} className="gap-2">
-          <Copy className="w-3.5 h-3.5" />
-          Copy Path
-        </ContextMenuItem>
+      <ContextMenuContent className="w-56" onCloseAutoFocus={(e) => e.preventDefault()}>
+        {menuItems ?? <ProjectPathMenuItems path={path} variant="context" />}
       </ContextMenuContent>
     </ContextMenu>
   );

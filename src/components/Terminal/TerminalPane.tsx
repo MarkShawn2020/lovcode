@@ -1,5 +1,5 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import {
   CrossCircledIcon,
@@ -17,6 +17,7 @@ import {
 } from "../ui/dialog";
 import { Button } from "../ui/button";
 import type { ClaudeSettings } from "@/types";
+import type { AgentRuntimeStatus } from "@/types/agent";
 import "@xterm/xterm/css/xterm.css";
 import {
   getOrCreateTerminal,
@@ -88,7 +89,7 @@ const isTruthyEnv = (value: string) => {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 };
 
-async function runCommandDiagnostics(command: string, cwd: string): Promise<CommandDiagnostics | null> {
+async function runCommandDiagnostics(command: string): Promise<CommandDiagnostics | null> {
   const commandKind = getCommandKind(command);
   if (!commandKind) return null;
 
@@ -97,18 +98,27 @@ async function runCommandDiagnostics(command: string, cwd: string): Promise<Comm
   let cliPath: string | undefined;
 
   try {
-    const output = await invoke<string>("exec_shell_command", {
-      command: `command -v ${commandKind} 2>/dev/null`,
-      cwd,
+    const status = await invoke<AgentRuntimeStatus>("get_agent_runtime_status", {
+      provider: commandKind,
     });
-    const trimmed = output.trim();
-    cliPath = trimmed || undefined;
-    if (!cliPath) {
+    cliPath = status.path ?? undefined;
+    if (!status.installed) {
       issues.push({
         code: "cli-not-found",
         severity: "error",
         title: `${commandLabel} CLI not found in PATH`,
-        detail: `Install ${commandKind} and ensure your shell PATH includes it.`,
+        detail: cliPath
+          ? `${cliPath} does not exist. Update the CLI path in Settings.`
+          : `Install ${commandKind} or set its CLI path in Settings.`,
+      });
+    } else if (status.runnable === false) {
+      issues.push({
+        code: "command-failed",
+        severity: "error",
+        title: `${commandLabel} CLI is not runnable`,
+        detail: cliPath
+          ? `${cliPath} exists but failed the version check.`
+          : `Update the ${commandKind} CLI path in Settings.`,
       });
     }
   } catch {
@@ -404,7 +414,7 @@ export function TerminalPane({
             commandStartRef.current = Date.now();
             hadOutputRef.current = false;
             commandExitHandledRef.current = false;
-            const diagnostics = await runCommandDiagnostics(commandText, cwdRef.current);
+            const diagnostics = await runCommandDiagnostics(commandText);
             if (!mountState.isMounted) return;
             if (diagnostics) {
               preflightRef.current = diagnostics;
@@ -882,7 +892,7 @@ export function TerminalPane({
                 variant="outline"
                 onClick={() => {
                   setDiagnosticOpen(false);
-                  navigate("/settings/version");
+                  navigate("/settings/runtime");
                 }}
               >
                 Open CC Version

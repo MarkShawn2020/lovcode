@@ -5,6 +5,7 @@ import { ProjectPathLabel } from "./ProjectPathLabel";
 interface SessionDetailHeaderProps {
   projectPath?: string | null;
   projectLabel?: ReactNode;
+  projectPathMenuItems?: ReactNode;
   title: ReactNode;
   titlePrefix?: ReactNode;
   badges?: ReactNode;
@@ -17,6 +18,7 @@ interface SessionDetailHeaderProps {
 export function SessionDetailHeader({
   projectPath,
   projectLabel,
+  projectPathMenuItems,
   title,
   titlePrefix,
   badges,
@@ -38,6 +40,7 @@ export function SessionDetailHeader({
         {projectPath ? (
           <ProjectPathLabel
             path={projectPath}
+            menuItems={projectPathMenuItems}
             className={cn("max-w-[40%] text-muted-foreground", projectClassName)}
           />
         ) : projectLabel ? (

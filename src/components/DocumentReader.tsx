@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { convertFileSrc, invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@/lib/tauri";
 import { useAtom } from "jotai";
 import { docReaderCollapsedGroupsAtom } from "../store";
 import Markdown from "react-markdown";

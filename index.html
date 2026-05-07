@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/lovcode.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Lovcode - Vibe Coding Assistant</title>
+    <title>Lovcode</title>
     <style>
       /* Splash screen — paints on the very first frame, before React mounts.
          Removed by main.tsx once <RouterProvider> renders. */
@@ -77,7 +77,7 @@
       // app shell and the beige background would paint a giant block.
       (function () {
         var hash = location.hash || "";
-        if (hash.indexOf("/search-overlay") !== -1 || hash.indexOf("/prompt-detail") !== -1) {
+        if (hash.indexOf("/search-overlay") !== -1 || hash.indexOf("/prompt-detail") !== -1 || hash.indexOf("/landing") !== -1) {
           var s = document.getElementById("splash");
           if (s) s.remove();
         }

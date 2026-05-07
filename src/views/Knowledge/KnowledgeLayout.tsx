@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { SidebarLayout } from "@/components/shared";
 import { KnowledgeSidebar } from "./KnowledgeSidebar";
 import type { FeatureType } from "@/types";
 
@@ -18,16 +19,17 @@ export function KnowledgeLayout({
   onSourceClick,
 }: KnowledgeLayoutProps) {
   return (
-    <div className="flex h-full">
-      <KnowledgeSidebar
-        currentFeature={currentFeature}
-        currentSourceId={currentSourceId}
-        onFeatureClick={onFeatureClick}
-        onSourceClick={onSourceClick}
-      />
-      <main className="flex-1 overflow-auto">
-        {children}
-      </main>
-    </div>
+    <SidebarLayout
+      sidebar={
+        <KnowledgeSidebar
+          currentFeature={currentFeature}
+          currentSourceId={currentSourceId}
+          onFeatureClick={onFeatureClick}
+          onSourceClick={onSourceClick}
+        />
+      }
+    >
+      {children}
+    </SidebarLayout>
   );
 }

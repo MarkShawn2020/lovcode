@@ -13,7 +13,7 @@ const KEY_TO_ROUTE: Record<SidebarKey, string> = {
   introduction: "/features",
   "basic-env": "/settings/env",
   "basic-maas": "/settings/maas",
-  "basic-version": "/settings/version",
+  "basic-version": "/settings/runtime",
   "basic-context": "/settings/context",
   settings: "/settings",
   commands: "/commands",
@@ -68,7 +68,7 @@ export function FeaturesLayout({ children, feature, currentFeature, onFeatureCli
       title: t("features.basic"),
       items: [
         { key: "basic-env", label: t("common.environment") },
-        { key: "basic-version", label: t("feature.ccVersion") },
+        { key: "basic-version", label: t("feature.agentRuntime") },
         { key: "basic-context", label: t("feature.context") },
       ],
     },

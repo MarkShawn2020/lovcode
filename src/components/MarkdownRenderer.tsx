@@ -2,7 +2,7 @@ import { useMemo, type HTMLAttributes, type ReactNode } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { convertFileSrc } from "@/lib/tauri";
 import { PathLink } from "../views/Chat/PathLink";
 import { makeRehypePaths } from "../views/Chat/markdownPathPlugins";
 import { usePathHits } from "../views/Chat/usePathHits";

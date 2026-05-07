@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { Pencil1Icon, TrashIcon, ExternalLinkIcon, DotsHorizontalIcon, FileIcon, CopyIcon } from "@radix-ui/react-icons";
 import type { TemplateComponent, TemplateCategory } from "../../types";
 import { TEMPLATE_CATEGORIES } from "../../constants";

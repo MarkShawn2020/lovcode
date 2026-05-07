@@ -8,7 +8,8 @@
   "windows": [
     "main",
     "search",
-    "prompt-detail-*"
+    "prompt-detail-*",
+    "page-*"
   ],
   "permissions": []
 }

@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { useEffect, useState } from "react";
+import { invoke, Channel } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { Session } from "../types";
 
 type SessionStreamEvent =
@@ -10,105 +10,249 @@ type SessionStreamEvent =
 
 interface UseStreamedSessions {
   sessions: Session[];
-  /** True until the first batch arrives — splash should stay up until this is false. */
+  /** True until the first batch arrives. */
   initialLoading: boolean;
-  /** True until the final "done" event — list keeps growing during this period. */
+  /** True while a backend refresh is running. */
   streaming: boolean;
+  /** True when sessions represents a complete snapshot, either from cache or from the finished stream. */
+  hasCompleteSnapshot: boolean;
+}
+
+const SESSIONS_QUERY_KEY = ["sessions"] as const;
+const SESSION_STREAM_DEBUG_STORAGE_KEY = "lovcode.debug.sessions";
+
+let sessionSnapshot: UseStreamedSessions = {
+  sessions: [],
+  initialLoading: true,
+  streaming: false,
+  hasCompleteSnapshot: false,
+};
+let streamSeq = 0;
+let activeStreamId: string | null = null;
+let pendingRefresh = false;
+let currentQueryClient: QueryClient | null = null;
+let sessionsChangedListenerStarted = false;
+
+const subscribers = new Set<(snapshot: UseStreamedSessions) => void>();
+
+function isSessionStreamDebugEnabled() {
+  if (!import.meta.env.DEV) return false;
+  try {
+    return window.localStorage.getItem(SESSION_STREAM_DEBUG_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function debugSessionStream(message: string) {
+  if (isSessionStreamDebugEnabled()) console.debug(`[sessions-stream] ${message}`);
+}
+
+function getCachedSessions(queryClient: QueryClient) {
+  return queryClient.getQueryData<Session[]>(SESSIONS_QUERY_KEY) ?? [];
+}
+
+function publishSessionSnapshot(next: UseStreamedSessions) {
+  sessionSnapshot = next;
+  subscribers.forEach((subscriber) => subscriber(sessionSnapshot));
+}
+
+function patchSessionSnapshot(patch: Partial<UseStreamedSessions>) {
+  publishSessionSnapshot({ ...sessionSnapshot, ...patch });
+}
+
+function hydrateSessionSnapshotFromCache(queryClient: QueryClient) {
+  currentQueryClient = queryClient;
+  const cached = getCachedSessions(queryClient);
+  if (cached.length > 0 && !sessionSnapshot.hasCompleteSnapshot && sessionSnapshot.sessions.length === 0) {
+    patchSessionSnapshot({
+      sessions: cached,
+      initialLoading: false,
+      hasCompleteSnapshot: true,
+    });
+  }
+  return sessionSnapshot;
+}
+
+function maybeRunPendingRefresh(queryClient: QueryClient) {
+  if (!pendingRefresh) return;
+  pendingRefresh = false;
+  startSessionStream("refresh", queryClient);
+}
+
+function createSessionStreamId(seq: number) {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${seq}-${Math.random().toString(36).slice(2)}`;
+}
+
+function cancelSessionStream(streamId: string, reason: string) {
+  debugSessionStream(`cancel ${streamId} (${reason})`);
+  invoke("cancel_session_stream", { streamId }).catch(() => {});
+}
+
+function stopActiveSessionStream(reason: string) {
+  const streamId = activeStreamId;
+  if (!streamId) return;
+  activeStreamId = null;
+  streamSeq += 1;
+  pendingRefresh = false;
+  cancelSessionStream(streamId, reason);
+  patchSessionSnapshot({
+    initialLoading: false,
+    streaming: false,
+    hasCompleteSnapshot: sessionSnapshot.hasCompleteSnapshot || sessionSnapshot.sessions.length > 0,
+  });
+}
+
+function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClient) {
+  currentQueryClient = queryClient;
+
+  if (mode === "initial" && sessionSnapshot.hasCompleteSnapshot) return;
+  if (sessionSnapshot.streaming) {
+    if (mode === "refresh") pendingRefresh = true;
+    return;
+  }
+
+  const cachedSessions = getCachedSessions(queryClient);
+  const hasUsableSnapshot = sessionSnapshot.hasCompleteSnapshot || cachedSessions.length > 0;
+  const publishBatches = mode === "initial" && !hasUsableSnapshot;
+  const seq = streamSeq + 1;
+  const streamId = createSessionStreamId(seq);
+  const accumulated: Session[] = [];
+  const t0 = performance.now();
+  const channel = new Channel<SessionStreamEvent>();
+  streamSeq = seq;
+  activeStreamId = streamId;
+
+  if (mode === "initial") {
+    if (cachedSessions.length > 0 && !sessionSnapshot.hasCompleteSnapshot) {
+      patchSessionSnapshot({
+        sessions: cachedSessions,
+        initialLoading: false,
+        hasCompleteSnapshot: true,
+      });
+    } else if (!hasUsableSnapshot) {
+      patchSessionSnapshot({
+        initialLoading: true,
+        hasCompleteSnapshot: false,
+      });
+    }
+  }
+
+  patchSessionSnapshot({ streaming: true });
+  debugSessionStream(`invoke list_all_sessions_streamed ${streamId} at ${performance.now().toFixed(0)}`);
+
+  channel.onmessage = (event) => {
+    if (streamSeq !== seq || activeStreamId !== streamId) return;
+
+    if (event.kind === "batch") {
+      accumulated.push(...event.sessions);
+      if (publishBatches) {
+        patchSessionSnapshot({
+          sessions: [...accumulated],
+          initialLoading: false,
+          hasCompleteSnapshot: false,
+        });
+      } else if (sessionSnapshot.initialLoading) {
+        patchSessionSnapshot({ initialLoading: false });
+      }
+      debugSessionStream(`batch n=${event.sessions.length}, total=${accumulated.length} at +${(performance.now() - t0).toFixed(0)}ms`);
+      return;
+    }
+
+    const completeSessions = [...accumulated];
+    activeStreamId = null;
+    queryClient.setQueryData<Session[]>(SESSIONS_QUERY_KEY, completeSessions);
+    publishSessionSnapshot({
+      sessions: completeSessions,
+      initialLoading: false,
+      streaming: false,
+      hasCompleteSnapshot: true,
+    });
+    debugSessionStream(`done total=${event.total} at +${(performance.now() - t0).toFixed(0)}ms`);
+    maybeRunPendingRefresh(queryClient);
+  };
+
+  invoke("list_all_sessions_streamed", { streamId, onEvent: channel })
+    .catch((err) => {
+      console.warn("[sessions-stream] failed:", err);
+      if (streamSeq !== seq || activeStreamId !== streamId) return;
+      activeStreamId = null;
+      patchSessionSnapshot({
+        initialLoading: false,
+        streaming: false,
+        hasCompleteSnapshot: true,
+      });
+      maybeRunPendingRefresh(queryClient);
+    });
+}
+
+function ensureSessionsChangedListener(queryClient: QueryClient) {
+  currentQueryClient = queryClient;
+  if (sessionsChangedListenerStarted) return;
+  sessionsChangedListenerStarted = true;
+  listen("sessions-changed", () => {
+    startSessionStream("refresh", currentQueryClient ?? queryClient);
+  }).catch(() => {
+    sessionsChangedListenerStarted = false;
+  });
+}
+
+function subscribeToSessionSnapshot(subscriber: (snapshot: UseStreamedSessions) => void) {
+  subscribers.add(subscriber);
+  return () => {
+    subscribers.delete(subscriber);
+    if (subscribers.size === 0) stopActiveSessionStream("no-subscribers");
+  };
+}
+
+const handleSessionStreamPageHide = () => {
+  stopActiveSessionStream("pagehide");
+};
+
+if (typeof window !== "undefined") {
+  window.addEventListener("pagehide", handleSessionStreamPageHide);
+}
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    if (typeof window !== "undefined") {
+      window.removeEventListener("pagehide", handleSessionStreamPageHide);
+    }
+    stopActiveSessionStream("hmr-dispose");
+  });
 }
 
 /**
- * Streamed replacement for `useInvokeQuery(["sessions"], "list_all_sessions")`.
- * Subscribes to `list_all_sessions_streamed`, accumulates batches as they
- * arrive (200 sessions each), and writes the full set into react-query's
- * `["sessions"]` cache when streaming completes — so other consumers
- * (`useInvokeQuery(["sessions"])`) get the same data for free.
+ * Shared session-list subscription. The backend scan is tied to the app runtime,
+ * not to whichever route currently renders, so top-nav changes reuse the in-memory
+ * snapshot and only refresh when the file watcher emits `sessions-changed`.
  */
 export function useStreamedSessions(): UseStreamedSessions {
-  const [sessions, setSessions] = useState<Session[]>([]);
-  const [initialLoading, setInitialLoading] = useState(true);
-  const [streaming, setStreaming] = useState(true);
   const queryClient = useQueryClient();
-  const streamSeqRef = useRef(0);
-  const streamCleanupRef = useRef<(() => void) | null>(null);
+  const [snapshot, setSnapshot] = useState<UseStreamedSessions>(() => hydrateSessionSnapshotFromCache(queryClient));
 
-  const streamSessions = useCallback((mode: "initial" | "refresh") => {
-    streamCleanupRef.current?.();
-    let cancelled = false;
-    const seq = streamSeqRef.current + 1;
-    streamSeqRef.current = seq;
-    const accumulated: Session[] = [];
-    const t0 = performance.now();
-    const channel = new Channel<SessionStreamEvent>();
-
-    if (mode === "initial") setInitialLoading(true);
-    setStreaming(true);
-    console.log(`[DEBUG][STREAM] invoke list_all_sessions_streamed at ${performance.now().toFixed(0)}`);
-
-    channel.onmessage = (event) => {
-      if (cancelled || streamSeqRef.current !== seq) return;
-
-      if (event.kind === "batch") {
-        accumulated.push(...event.sessions);
-        if (mode === "initial") setSessions([...accumulated]);
-        setInitialLoading(false);
-        console.log(`[DEBUG][STREAM] batch n=${event.sessions.length}, total=${accumulated.length} at +${(performance.now() - t0).toFixed(0)}ms`);
-        return;
-      }
-
-      setSessions([...accumulated]);
-      setInitialLoading(false);
-      setStreaming(false);
-      queryClient.setQueryData<Session[]>(["sessions"], accumulated);
-      console.log(`[DEBUG][STREAM] done total=${event.total} at +${(performance.now() - t0).toFixed(0)}ms`);
-    };
-
-    const cleanup = () => {
-      cancelled = true;
-      if (streamCleanupRef.current === cleanup) streamCleanupRef.current = null;
-    };
-    streamCleanupRef.current = cleanup;
-
-    invoke("list_all_sessions_streamed", { onEvent: channel })
-      .catch((err) => {
-        console.error("[DEBUG][STREAM] failed:", err);
-        if (cancelled || streamSeqRef.current !== seq) return;
-        setInitialLoading(false);
-        setStreaming(false);
-      });
-
-    return cleanup;
+  useEffect(() => {
+    const unsubscribe = subscribeToSessionSnapshot(setSnapshot);
+    setSnapshot(hydrateSessionSnapshotFromCache(queryClient));
+    ensureSessionsChangedListener(queryClient);
+    startSessionStream("initial", queryClient);
+    return unsubscribe;
   }, [queryClient]);
 
-  useEffect(() => {
-    const cleanup = streamSessions("initial");
-    return () => {
-      cleanup();
-      streamCleanupRef.current?.();
-      streamCleanupRef.current = null;
-    };
-  }, [streamSessions]);
-
-  useEffect(() => {
-    const unlisten = listen("sessions-changed", () => {
-      streamSessions("refresh");
-    });
-    return () => {
-      unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, [streamSessions]);
-
-  return { sessions, initialLoading, streaming };
+  return snapshot;
 }
 
 /**
  * Read-only consumer of the ["sessions"] cache populated by useStreamedSessions.
  * Use in always-mounted siblings (GlobalChatSearch, ActivityCard) so they
- * don't trigger their own non-streamed `list_all_sessions` IPC on reload — that
- * was racing the streamed call and re-introducing the 6-second JSON.parse stall.
+ * don't trigger their own non-streamed `list_all_sessions` IPC on reload.
  */
 export function useSessionsCache(): Session[] {
   const { data = [] } = useQuery<Session[]>({
-    queryKey: ["sessions"],
+    queryKey: SESSIONS_QUERY_KEY,
     // queryFn is required by react-query v5 even with enabled:false. It will
     // never run because enabled is false; data is populated externally by
     // useStreamedSessions via queryClient.setQueryData(["sessions"], ...).

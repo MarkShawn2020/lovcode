@@ -1,5 +1,6 @@
 import {
   forwardRef,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -9,8 +10,9 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { useAtomValue } from "jotai";
-import { Check, ChevronDown, Cpu, Terminal } from "lucide-react";
-import { invoke } from "@tauri-apps/api/core";
+import { AlertCircle, Check, ChevronDown, Cpu, RefreshCw, Settings, Terminal } from "lucide-react";
+import { invoke } from "@/lib/tauri";
+import { useNavigate } from "react-router-dom";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -24,10 +26,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { ProjectPathPicker, type ProjectPathOption } from "@/components/shared/ProjectPathPicker";
-import { useI18n } from "@/i18n";
-import type { AgentProvider } from "@/types/agent";
+import { useI18n, type TranslationKey, type TranslationValues } from "@/i18n";
+import type { AgentProvider, AgentRuntimeStatus } from "@/types/agent";
 import type { ClaudeSettings, MaasModel, MaasProvider, MaasRealtimeStatus, ZenmuxRealtimeModel } from "@/types";
 import { labelForProvider } from "@/lib/agent/commands";
+import { normalizeClaudeCodeModelName } from "@/lib/agent/models";
+import { patchSettings } from "@/lib/settingsApi";
 import { cn } from "@/lib/utils";
 import { composerSubmitShortcutAtom, type ComposerSubmitShortcut } from "@/store";
 
@@ -54,6 +58,15 @@ const PICKER_TRIGGER_SIZE_CLASS = {
 };
 const PICKER_ICON_CLASS =
   "agent-composer-picker-icon flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/70";
+const CLI_PROVIDERS = new Set<AgentProvider>(["claude", "codex"]);
+
+async function fetchAgentRuntimeStatus(provider: AgentProvider): Promise<AgentRuntimeStatus | null> {
+  try {
+    return await invoke<AgentRuntimeStatus>("get_agent_runtime_status", { provider });
+  } catch {
+    return null;
+  }
+}
 
 export type AgentComposerPathOption = ProjectPathOption;
 
@@ -93,6 +106,7 @@ export function AgentComposer({
   onCreate,
 }: AgentComposerProps) {
   const { t, translate } = useI18n();
+  const navigate = useNavigate();
   const [provider, setProvider] = useState<AgentProvider>(defaultProvider);
   const [prompt, setPrompt] = useState("");
   const [maasRegistry, setMaasRegistry] = useState<MaasProvider[]>([]);
@@ -100,6 +114,10 @@ export function AgentComposer({
   const [maasRealtimeLoaded, setMaasRealtimeLoaded] = useState(false);
   const [settingsRaw, setSettingsRaw] = useState<ClaudeSettings["raw"] | undefined>(undefined);
   const [maasLoaded, setMaasLoaded] = useState(false);
+  const [runtimeStatuses, setRuntimeStatuses] = useState<Partial<Record<AgentProvider, AgentRuntimeStatus>>>({});
+  const [runtimeStatusLoaded, setRuntimeStatusLoaded] = useState(false);
+  const [checkingRuntimeProvider, setCheckingRuntimeProvider] = useState<AgentProvider | null>(null);
+  const [blockedProvider, setBlockedProvider] = useState<AgentProvider | null>(null);
   const submitShortcut = useAtomValue(composerSubmitShortcutAtom);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const composingRef = useRef(false);
@@ -110,6 +128,13 @@ export function AgentComposer({
   const displayCwdLabel = cwdLabel ?? (cwd ? undefined : allowNoProject ? t("composer.generalChat") : undefined);
   const providerResetKey = providerContextKey ?? defaultProvider;
   const providerLabel = translate(labelForProvider(provider));
+  const selectedRuntimeStatus = runtimeStatuses[provider] ?? null;
+  const selectedRuntimeMissing = CLI_PROVIDERS.has(provider) && (
+    selectedRuntimeStatus?.installed === false ||
+    selectedRuntimeStatus?.runnable === false
+  );
+  const selectedRuntimeChecking = checkingRuntimeProvider === provider || (!runtimeStatusLoaded && !selectedRuntimeStatus);
+  const showRuntimeInstallNotice = selectedRuntimeMissing || blockedProvider === provider;
   const placeholderText =
     placeholder ? translate(placeholder) :
     (cwd
@@ -129,6 +154,63 @@ export function AgentComposer({
   useEffect(() => {
     setProvider(defaultProvider);
   }, [defaultProvider, providerResetKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all(PROVIDERS.map(fetchAgentRuntimeStatus))
+      .then((statuses) => {
+        if (cancelled) return;
+        setRuntimeStatuses(
+          Object.fromEntries(
+            statuses
+              .filter((status): status is AgentRuntimeStatus => Boolean(status))
+              .map((status) => [status.provider, status]),
+          ) as Partial<Record<AgentProvider, AgentRuntimeStatus>>,
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setRuntimeStatusLoaded(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const refreshRuntimeStatus = useCallback(async (item: AgentProvider) => {
+    setCheckingRuntimeProvider(item);
+    try {
+      const status = await fetchAgentRuntimeStatus(item);
+      if (status) {
+        setRuntimeStatuses((current) => ({
+          ...current,
+          [item]: status,
+        }));
+        if (status.installed && status.runnable !== false) {
+          setBlockedProvider((current) => (current === item ? null : current));
+        }
+      }
+      return status;
+    } finally {
+      setCheckingRuntimeProvider((current) => (current === item ? null : current));
+    }
+  }, []);
+
+  const openProviderRuntimeSetup = useCallback((item: AgentProvider, status: AgentRuntimeStatus | null) => {
+    if (item === "claude" || item === "codex") {
+      const route = status?.install_route ?? "/settings/runtime";
+      const separator = route.includes("?") ? "&" : "?";
+      navigate(route.includes("runtime=") ? route : `${route}${separator}runtime=${item}`);
+    }
+  }, [navigate]);
+
+  const openRuntimeSetup = useCallback(() => {
+    openProviderRuntimeSetup(provider, selectedRuntimeStatus);
+  }, [openProviderRuntimeSetup, provider, selectedRuntimeStatus]);
+
+  const openRuntimeSetupForProvider = useCallback((item: AgentProvider) => {
+    openProviderRuntimeSetup(item, runtimeStatuses[item] ?? null);
+  }, [openProviderRuntimeSetup, runtimeStatuses]);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,9 +262,19 @@ export function AgentComposer({
     );
   };
 
-  const submit = () => {
+  const submit = async () => {
     if (!canSubmit) return;
+    if (CLI_PROVIDERS.has(provider)) {
+      if (checkingRuntimeProvider === provider) return;
+      const status = runtimeStatuses[provider] ?? (await refreshRuntimeStatus(provider));
+      if (status?.installed === false || status?.runnable === false) {
+        setBlockedProvider(provider);
+        focusPrompt();
+        return;
+      }
+    }
     onCreate(provider, prompt);
+    setBlockedProvider(null);
     setPrompt("");
     requestAnimationFrame(() => {
       if (textareaRef.current) resizeTextarea(textareaRef.current, textareaBounds.min, textareaBounds.max);
@@ -195,6 +287,7 @@ export function AgentComposer({
 
   const handleProviderChange = (item: AgentProvider) => {
     setProvider(item);
+    setBlockedProvider(null);
     focusPrompt();
   };
 
@@ -207,13 +300,16 @@ export function AgentComposer({
     if (event.key === "Process" || isImeConfirming(event)) return;
     if (!shouldSubmitFromKeyDown(event, submitShortcut)) return;
     event.preventDefault();
-    submit();
+    void submit();
   };
 
   const panelProviderPicker = (
     <CliPicker
       provider={provider}
+      runtimeStatuses={runtimeStatuses}
+      runtimeStatusLoaded={runtimeStatusLoaded}
       onProviderChange={handleProviderChange}
+      onOpenRuntimeSetup={openRuntimeSetupForProvider}
       className="w-full max-w-full"
     />
   );
@@ -272,6 +368,18 @@ export function AgentComposer({
               onKeyDown={handlePromptKeyDown}
             />
           </ComposerInputFrame>
+          {showRuntimeInstallNotice && (
+            <RuntimeInstallNotice
+              provider={provider}
+              providerLabel={providerLabel}
+              status={selectedRuntimeStatus}
+              checking={selectedRuntimeChecking}
+              onOpenSettings={openRuntimeSetup}
+              onRefresh={() => {
+                void refreshRuntimeStatus(provider);
+              }}
+            />
+          )}
 
           <div className="agent-composer-panel-controls mt-4">
             <div className="agent-composer-panel-picker-grid">
@@ -299,7 +407,13 @@ export function AgentComposer({
     <div className="shrink-0 border-t border-border bg-background px-5 py-3">
       <div className="mx-auto flex w-full flex-col gap-2">
         <ComposerInputFrame compact>
-          <CompactCliPicker provider={provider} onProviderChange={handleProviderChange} />
+          <CompactCliPicker
+            provider={provider}
+            runtimeStatuses={runtimeStatuses}
+            runtimeStatusLoaded={runtimeStatusLoaded}
+            onProviderChange={handleProviderChange}
+            onOpenRuntimeSetup={openRuntimeSetupForProvider}
+          />
           <PromptTextarea
             ref={textareaRef}
             rows={1}
@@ -320,6 +434,19 @@ export function AgentComposer({
             onKeyDown={handlePromptKeyDown}
           />
         </ComposerInputFrame>
+        {showRuntimeInstallNotice && (
+          <RuntimeInstallNotice
+            provider={provider}
+            providerLabel={providerLabel}
+            status={selectedRuntimeStatus}
+            checking={selectedRuntimeChecking}
+            compact
+            onOpenSettings={openRuntimeSetup}
+            onRefresh={() => {
+              void refreshRuntimeStatus(provider);
+            }}
+          />
+        )}
       </div>
     </div>
   );
@@ -343,13 +470,42 @@ function shouldSubmitFromKeyDown(
   return !event.shiftKey && !event.metaKey && !event.ctrlKey;
 }
 
+function getRuntimeStatusLabel(
+  provider: AgentProvider,
+  status: AgentRuntimeStatus | undefined,
+  loaded: boolean,
+  t: (key: TranslationKey, values?: TranslationValues) => string,
+) {
+  if (provider === "terminal") return t("composer.runtimeAvailable");
+  if (!status) return loaded ? t("composer.runtimeUnknown") : t("composer.runtimeChecking");
+  return status.installed && status.runnable !== false ? t("common.installed") : t("composer.runtimeMissing");
+}
+
+function getRuntimeStatusDetail(
+  provider: AgentProvider,
+  status: AgentRuntimeStatus | undefined,
+  loaded: boolean,
+  t: (key: TranslationKey, values?: TranslationValues) => string,
+) {
+  if (provider === "terminal") return status?.path ?? t("composer.systemShell");
+  if (!status) return loaded ? t("composer.runtimeUnknownDetail") : t("composer.runtimeCheckingDetail");
+  if (!status.installed || status.runnable === false) return t("composer.cliRequired");
+  return status.version ?? status.path ?? t("common.installed");
+}
+
 function CliPicker({
   provider,
+  runtimeStatuses,
+  runtimeStatusLoaded,
   onProviderChange,
+  onOpenRuntimeSetup,
   className,
 }: {
   provider: AgentProvider;
+  runtimeStatuses: Partial<Record<AgentProvider, AgentRuntimeStatus>>;
+  runtimeStatusLoaded: boolean;
   onProviderChange: (provider: AgentProvider) => void;
+  onOpenRuntimeSetup: (provider: AgentProvider) => void;
   className?: string;
 }) {
   const { t, translate } = useI18n();
@@ -366,10 +522,15 @@ function CliPicker({
           )}
           aria-label={t("composer.switchCli")}
         >
-          <PickerTriggerContent icon={<ProviderMark provider={provider} active />} label={translate(labelForProvider(provider))} hasMenu />
+          <PickerTriggerContent
+            icon={<ProviderMark provider={provider} active />}
+            label={translate(labelForProvider(provider))}
+            eyebrow={getRuntimeStatusLabel(provider, runtimeStatuses[provider], runtimeStatusLoaded, t)}
+            hasMenu
+          />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={6} className="w-56 rounded-xl p-1.5">
+      <DropdownMenuContent align="start" sideOffset={6} className="w-60 rounded-xl p-1.5">
         <DropdownMenuLabel className="px-2 py-1 text-xs font-medium text-muted-foreground">CLI</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={provider}
@@ -378,10 +539,14 @@ function CliPicker({
           }}
         >
           {PROVIDERS.map((item) => (
-            <DropdownMenuRadioItem key={item} value={item} className="gap-2 rounded-lg py-2 pr-2">
-              <ProviderMark provider={item} active={item === provider} />
-              <span className="min-w-0 flex-1 truncate">{translate(labelForProvider(item))}</span>
-            </DropdownMenuRadioItem>
+            <RuntimeProviderRadioItem
+              key={item}
+              provider={item}
+              active={item === provider}
+              status={runtimeStatuses[item]}
+              runtimeStatusLoaded={runtimeStatusLoaded}
+              onOpenRuntimeSetup={onOpenRuntimeSetup}
+            />
           ))}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
@@ -391,10 +556,16 @@ function CliPicker({
 
 function CompactCliPicker({
   provider,
+  runtimeStatuses,
+  runtimeStatusLoaded,
   onProviderChange,
+  onOpenRuntimeSetup,
 }: {
   provider: AgentProvider;
+  runtimeStatuses: Partial<Record<AgentProvider, AgentRuntimeStatus>>;
+  runtimeStatusLoaded: boolean;
   onProviderChange: (provider: AgentProvider) => void;
+  onOpenRuntimeSetup: (provider: AgentProvider) => void;
 }) {
   const { t, translate } = useI18n();
 
@@ -408,10 +579,11 @@ function CompactCliPicker({
           aria-label={t("composer.switchRuntime")}
         >
           <ProviderMark provider={provider} active />
+          <RuntimeStatusDot provider={provider} status={runtimeStatuses[provider]} loaded={runtimeStatusLoaded} compact />
           <ChevronDown className="h-3 w-3 shrink-0" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" sideOffset={8} className="w-56 rounded-xl p-1.5">
+      <DropdownMenuContent align="start" sideOffset={8} className="w-60 rounded-xl p-1.5">
         <DropdownMenuLabel className="px-2 py-1 text-xs font-medium text-muted-foreground">{t("common.runtime")}</DropdownMenuLabel>
         <DropdownMenuRadioGroup
           value={provider}
@@ -420,14 +592,179 @@ function CompactCliPicker({
           }}
         >
           {PROVIDERS.map((item) => (
-            <DropdownMenuRadioItem key={item} value={item} className="gap-2 rounded-lg py-2 pr-2">
-              <ProviderMark provider={item} active={item === provider} />
-              <span className="min-w-0 flex-1 truncate">{translate(labelForProvider(item))}</span>
-            </DropdownMenuRadioItem>
+            <RuntimeProviderRadioItem
+              key={item}
+              provider={item}
+              active={item === provider}
+              status={runtimeStatuses[item]}
+              runtimeStatusLoaded={runtimeStatusLoaded}
+              onOpenRuntimeSetup={onOpenRuntimeSetup}
+            />
           ))}
         </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+function RuntimeProviderRadioItem({
+  provider,
+  active,
+  status,
+  runtimeStatusLoaded,
+  onOpenRuntimeSetup,
+}: {
+  provider: AgentProvider;
+  active: boolean;
+  status?: AgentRuntimeStatus;
+  runtimeStatusLoaded: boolean;
+  onOpenRuntimeSetup: (provider: AgentProvider) => void;
+}) {
+  const { t, translate } = useI18n();
+  const hasSetupButton = provider !== "terminal";
+  const itemContent = (
+    <>
+      <ProviderMark provider={provider} active={active} />
+      <span className="grid min-w-0 flex-1">
+        <span className="truncate text-sm">{translate(labelForProvider(provider))}</span>
+        <span className="truncate text-xs text-muted-foreground">
+          {getRuntimeStatusDetail(provider, status, runtimeStatusLoaded, t)}
+        </span>
+      </span>
+      <RuntimeStatusDot provider={provider} status={status} loaded={runtimeStatusLoaded} />
+    </>
+  );
+
+  if (hasSetupButton) {
+    return (
+      <div className="flex overflow-hidden rounded-lg">
+        <DropdownMenuRadioItem
+          value={provider}
+          className="min-w-0 flex-1 gap-2 rounded-none py-2 pr-2"
+        >
+          {itemContent}
+        </DropdownMenuRadioItem>
+        <DropdownMenuItem
+          onSelect={() => onOpenRuntimeSetup(provider)}
+          title={t("composer.openRuntimeSetup")}
+          aria-label={t("composer.openRuntimeSetup")}
+          className="flex min-h-10 w-9 shrink-0 justify-center rounded-none border-l border-border/80 px-0 py-0 text-muted-foreground focus:bg-card focus:text-foreground"
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </DropdownMenuItem>
+      </div>
+    );
+  }
+
+  return (
+    <DropdownMenuRadioItem
+      value={provider}
+      className="gap-2 rounded-lg py-2 pr-2"
+    >
+      {itemContent}
+    </DropdownMenuRadioItem>
+  );
+}
+
+function RuntimeStatusDot({
+  provider,
+  status,
+  loaded,
+  compact = false,
+}: {
+  provider: AgentProvider;
+  status?: AgentRuntimeStatus;
+  loaded: boolean;
+  compact?: boolean;
+}) {
+  const missing = CLI_PROVIDERS.has(provider) && (status?.installed === false || status?.runnable === false);
+  const available = provider === "terminal" || (status?.installed === true && status.runnable !== false);
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full",
+        compact ? "h-1.5 w-1.5" : "h-2 w-2",
+        available
+          ? "bg-primary"
+          : missing
+          ? "bg-destructive"
+          : loaded
+          ? "bg-muted-foreground/45"
+          : "bg-muted-foreground/25",
+      )}
+    />
+  );
+}
+
+function RuntimeInstallNotice({
+  provider,
+  providerLabel,
+  status,
+  checking,
+  compact = false,
+  onOpenSettings,
+  onRefresh,
+}: {
+  provider: AgentProvider;
+  providerLabel: string;
+  status: AgentRuntimeStatus | null;
+  checking: boolean;
+  compact?: boolean;
+  onOpenSettings: () => void;
+  onRefresh: () => void;
+}) {
+  const { t } = useI18n();
+  const actionLabel = provider === "claude" ? t("composer.openClaudeInstaller") : t("composer.openRuntimeSetup");
+  const description =
+    provider === "claude"
+      ? t("composer.cliMissingClaudeDescription")
+      : t("composer.cliMissingCodexDescription");
+
+  return (
+    <div
+      className={cn(
+        "mt-2 rounded-xl border border-destructive/25 bg-destructive/5 px-3 py-2.5",
+        compact && "px-3 py-2",
+      )}
+      role="alert"
+    >
+      <div className="flex flex-wrap items-start gap-2">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold text-foreground">
+            {t("composer.cliMissingTitle", { provider: providerLabel })}
+          </div>
+          <div className="mt-0.5 text-xs leading-5 text-muted-foreground">
+            {description}
+            {status?.command && (
+              <>
+                {" "}
+                <span className="font-mono text-foreground">{status.command}</span>
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={checking}
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg border border-border bg-background px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", checking && "animate-spin")} />
+            {t("composer.refreshRuntime")}
+          </button>
+          <button
+            type="button"
+            onClick={onOpenSettings}
+            className="inline-flex h-7 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            {actionLabel}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -494,7 +831,7 @@ function ModelPicker({
         .sort((a, b) => getModelDisplayLabel(a).localeCompare(getModelDisplayLabel(b)))
     : [];
   const defaultSelectedModelName =
-    selectedProviderModelName && selectedModels.some((model) => model.modelName === selectedProviderModelName)
+    selectedProviderModelName && selectedModels.some((model) => modelNamesMatch(model.modelName, selectedProviderModelName))
       ? selectedProviderModelName
       : selectedModels[0]?.modelName ?? null;
   const effectiveSelectedModelName =
@@ -505,7 +842,7 @@ function ModelPicker({
     ? selectedModels.find((model) => model.modelName === effectiveSelectedModelName) ?? null
     : null;
   const selectedModelActive = Boolean(
-    selectedProviderModelName && selectedModel?.modelName === selectedProviderModelName,
+    selectedProviderModelName && selectedModel && modelNamesMatch(selectedModel.modelName, selectedProviderModelName),
   );
   const selectedModelVendorName =
     selectedProvider && selectedModel ? getModelVendorName(selectedProvider, selectedModel) : null;
@@ -549,7 +886,8 @@ function ModelPicker({
 
   const switchActiveModel = async (provider: MaasProvider, modelName: string) => {
     if (!runtimeId) return;
-    const trimmedModelName = modelName.trim();
+    const trimmedModelName =
+      runtimeId === "claude-code" ? normalizeClaudeCodeModelName(modelName) : modelName.trim();
     if (!trimmedModelName) return;
 
     const unavailableReason = getModelSwitchUnavailableReason(provider, runtimeId);
@@ -579,27 +917,19 @@ function ModelPicker({
         }
 
         if (isOAuthProvider(provider)) {
-          await invoke("update_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" });
-          await invoke("update_settings_env", {
-            envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            envValue: trimmedModelName,
-          });
-          await invoke("delete_settings_env", { envKey: "ANTHROPIC_AUTH_TOKEN" }).catch(() => {});
-          await invoke("delete_settings_env", { envKey: "ANTHROPIC_BASE_URL" }).catch(() => {});
+          await patchSettings([
+            { type: "setEnv", envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" },
+            { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: trimmedModelName },
+            { type: "deleteEnv", envKey: "ANTHROPIC_AUTH_TOKEN" },
+            { type: "deleteEnv", envKey: "ANTHROPIC_BASE_URL" },
+          ]);
         } else {
-          await invoke("update_settings_env", {
-            envKey: "ANTHROPIC_BASE_URL",
-            envValue: provider.baseUrl.trim(),
-          });
-          await invoke("update_settings_env", {
-            envKey: "ANTHROPIC_AUTH_TOKEN",
-            envValue: provider.authToken.trim(),
-          });
-          await invoke("update_settings_env", {
-            envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
-            envValue: trimmedModelName,
-          });
-          await invoke("delete_settings_env", { envKey: "CLAUDE_CODE_USE_OAUTH" }).catch(() => {});
+          await patchSettings([
+            { type: "setEnv", envKey: "ANTHROPIC_BASE_URL", envValue: provider.baseUrl.trim() },
+            { type: "setEnv", envKey: "ANTHROPIC_AUTH_TOKEN", envValue: provider.authToken.trim() },
+            { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: trimmedModelName },
+            { type: "deleteEnv", envKey: "CLAUDE_CODE_USE_OAUTH" },
+          ]);
         }
       }
 
@@ -624,10 +954,7 @@ function ModelPicker({
         },
       };
 
-      await invoke("update_settings_field", {
-        field: "lovcode",
-        value: nextLovcodeSettings,
-      });
+      await patchSettings({ type: "setField", field: "lovcode", value: nextLovcodeSettings });
 
       const nextRaw = withLovcodeSettings(latestRaw, nextLovcodeSettings);
       onSettingsRawChange?.(nextRaw);
@@ -744,8 +1071,8 @@ function ModelPicker({
                         </div>
                       ) : (
                         visibleModels.map((model) => {
-                          const active = Boolean(selectedProviderModelName && model.modelName === selectedProviderModelName);
-                          const selected = model.modelName === selectedModel?.modelName;
+                          const active = Boolean(selectedProviderModelName && modelNamesMatch(model.modelName, selectedProviderModelName));
+                          const selected = Boolean(selectedModel && modelNamesMatch(model.modelName, selectedModel.modelName));
                           return (
                             <button
                               key={`${selectedProvider.key}:${model.id}:${model.modelName}`}
@@ -920,7 +1247,11 @@ function ProviderMenuSub({
         />
         <span className="min-w-0 truncate">{selectedProvider.label || selectedProvider.key}</span>
       </DropdownMenuSubTrigger>
-      <DropdownMenuSubContent sideOffset={8} alignOffset={-4} className="w-64 rounded-xl p-1.5">
+      <DropdownMenuSubContent
+        sideOffset={2}
+        alignOffset={-2}
+        className="flex w-72 flex-col gap-1 rounded-xl p-1.5"
+      >
         <DropdownMenuLabel className="px-2 py-1 text-xs font-medium text-muted-foreground">{t("common.provider")}</DropdownMenuLabel>
         {providers.map((provider) => {
           const selected = provider.key === selectedProvider.key;
@@ -1204,11 +1535,13 @@ function getActiveModelNamesByRuntime(
 
   for (const runtimeId of Object.keys(MAAS_RUNTIME_LABELS) as MaasRuntimeId[]) {
     const value = activeModels[runtimeId];
-    if (typeof value === "string" && value) result[runtimeId] = value;
+    if (typeof value === "string" && value) {
+      result[runtimeId] = runtimeId === "claude-code" ? normalizeClaudeCodeModelName(value) : value;
+    }
   }
 
   const claudeModel = getSettingsEnvValue(raw, "ANTHROPIC_DEFAULT_SONNET_MODEL");
-  if (claudeModel) result["claude-code"] = claudeModel;
+  if (claudeModel) result["claude-code"] = normalizeClaudeCodeModelName(claudeModel);
   return result;
 }
 
@@ -1273,11 +1606,11 @@ function pickClaudeModel(provider: MaasProvider): string {
     model.vendor === "anthropic" || /(?:^|\/)claude-/i.test(model.modelName);
   const anthropic = models.filter(isAnthropic);
   const sonnet = anthropic.find((model) => /sonnet/i.test(model.modelName));
-  if (sonnet) return sonnet.modelName.trim();
-  if (anthropic[0]) return anthropic[0].modelName.trim();
+  if (sonnet) return normalizeClaudeCodeModelName(sonnet.modelName);
+  if (anthropic[0]) return normalizeClaudeCodeModelName(anthropic[0].modelName);
   return provider.baseUrl.includes("zenmux") || provider.models.some((model) => model.modelName.includes("/"))
     ? "anthropic/claude-sonnet-4.6"
-    : "claude-sonnet-4-5";
+    : "claude-sonnet-4-6";
 }
 
 function pickCodexModel(provider: MaasProvider): string {
@@ -1579,8 +1912,12 @@ function formatTokenCount(count: number): string {
   return `${count.toLocaleString()} tokens`;
 }
 
+function modelNamesMatch(left: string, right: string): boolean {
+  return left === right || normalizeClaudeCodeModelName(left) === normalizeClaudeCodeModelName(right);
+}
+
 function findModelByName(models: MaasModel[], modelName: string): MaasModel | null {
-  return models.find((model) => model.modelName === modelName || model.id === modelName) ?? null;
+  return models.find((model) => modelNamesMatch(model.modelName, modelName) || model.id === modelName) ?? null;
 }
 
 function ProviderMark({ provider, active }: { provider: AgentProvider; active: boolean }) {

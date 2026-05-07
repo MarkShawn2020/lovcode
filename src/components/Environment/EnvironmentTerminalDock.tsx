@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { PanelBottomClose, Square, Terminal, X } from "lucide-react";
 import { TerminalPane } from "@/components/Terminal";

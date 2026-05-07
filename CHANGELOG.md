@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.37.0
+
+### Minor Changes
+
+- Add agent runtime configuration, page window session controls, feedback administration, and modularize the Tauri backend app commands.
+
 ## 0.36.0
 
 ### Minor Changes

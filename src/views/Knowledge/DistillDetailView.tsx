@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import type { DistillDocument, Session } from "../../types";
 import { useAppConfig } from "../../context";
 import {

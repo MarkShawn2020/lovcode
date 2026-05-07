@@ -150,7 +150,11 @@ export default function DashboardPage() {
   const latestDocument = [...documents].sort((a, b) => b.date.localeCompare(a.date))[0];
 
   const openSession = (session: Session) => {
-    navigate(`/history/${encodeURIComponent(session.project_id)}/${encodeURIComponent(session.id)}`);
+    const search = new URLSearchParams({
+      projectId: session.project_id,
+      sessionId: session.id,
+    });
+    navigate(`/workbench?${search.toString()}`);
   };
 
   const number = (value: number) => formatNumber(value, locale);

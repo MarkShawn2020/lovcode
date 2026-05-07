@@ -1,5 +1,6 @@
 export const queryKeys = {
   claudeCodeVersionInfo: ["claudeCodeVersionInfo"] as const,
+  codexCliVersionInfo: ["codexCliVersionInfo"] as const,
   commands: ["commands"] as const,
   distillDocuments: ["distillDocuments"] as const,
   distillWatchEnabled: ["distillWatchEnabled"] as const,

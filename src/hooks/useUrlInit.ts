@@ -11,7 +11,7 @@
  */
 import { useEffect, useRef } from "react";
 import { useSetAtom } from "jotai";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { navigationStateAtom } from "../store";
 import type { LocalSkill, LocalCommand } from "../types";
 import { skillToTemplate } from "../views/Skills/skillTemplates";

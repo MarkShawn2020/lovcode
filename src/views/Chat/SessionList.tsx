@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { save } from "@tauri-apps/plugin-dialog";
 import { FileIcon, GlobeIcon, ChatBubbleIcon } from "@radix-ui/react-icons";
 import { Switch } from "../../components/ui/switch";

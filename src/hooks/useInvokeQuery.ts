@@ -6,7 +6,7 @@ import {
   type UseMutationOptions,
   type UseQueryOptions,
 } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 
 type InvokeQueryOptions<TQueryFnData, TData> = Omit<
   UseQueryOptions<TQueryFnData, Error, TData, QueryKey>,

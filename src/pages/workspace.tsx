@@ -1,7 +1,8 @@
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { invoke } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { useAtomValue } from "jotai";
 import { useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
@@ -10,13 +11,13 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
-  Eye,
   FolderOpen,
   ListFilter,
+  LocateFixed,
   LoaderCircle,
   MessageSquare,
   MoreHorizontal,
-  Pin,
+  Pencil,
   Play,
   Plus,
   RotateCcw,
@@ -33,13 +34,12 @@ import {
 } from "@/components/Environment/EnvironmentTerminalDock";
 import { TerminalPane, disposeTerminal } from "@/components/Terminal";
 import { SessionDetailHeader } from "@/components/shared/SessionDetailHeader";
+import { ProjectPathMenuItems, type ProjectPathMenuVariant } from "@/components/shared/ProjectPathMenuItems";
 import { SessionDetailContextMenuItems, SessionDetailDropdownMenuItems } from "@/components/shared/SessionMenuItems";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuSeparator,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -59,6 +59,7 @@ import {
 import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildAgentCommand, labelForProvider, makeSessionTitle, prefixCommandEnv, runtimeForProvider } from "@/lib/agent/commands";
+import { readDevResumeState, writeWorkspaceDevResumeState } from "@/lib/appResume";
 import {
   buildEnvironmentCommand,
   getDefaultSessionEnvironmentKey,
@@ -70,9 +71,12 @@ import {
 } from "@/lib/agent/environment";
 import { useInvokeQuery, usePtyStatus, useStreamedSessions } from "@/hooks";
 import { useResize } from "@/hooks/useResize";
+import { useI18n } from "@/i18n";
+import { sidebarCollapsedAtom } from "@/store";
 import { SessionDetail, type SessionDetailDisplayMode, type SessionForkPayload } from "@/views/Chat/ProjectList";
 import { ExportDialog } from "@/views/Chat/ExportDialog";
 import type {
+  AgentHistoryLinkStatus,
   AgentProvider,
   AgentSession,
   AgentWorkspaceSidebarState,
@@ -83,9 +87,11 @@ import type {
   Message,
   Project,
   Session,
-  SessionHandoff,
+  SessionRuntimeFork,
   WorkbenchConversationMeta,
 } from "@/types";
+
+type TranslateFn = ReturnType<typeof useI18n>["t"];
 
 interface PtyDataEvent {
   id: string;
@@ -131,6 +137,10 @@ interface EnvironmentDialogTarget {
 const AGENT_OUTPUT_IDLE_MS = 3500;
 const AGENT_SUBMIT_IDLE_FALLBACK_MS = 120000;
 const WATCH_AGENT_RUNNING_MS = 45000;
+const RUNTIME_HISTORY_LINK_GRACE_MS = 120000;
+const LINK_DEBUG_HISTORY_LOOKBACK_MS = 60_000;
+const LINK_DEBUG_RECENT_HISTORY_LIMIT = 10;
+const HISTORY_LINK_NOT_FOUND_REASON = "complete history snapshot did not contain a matching transcript";
 const SESSION_ACTIVITY_POLL_MS = 2500;
 const SESSION_ACTIVITY_POLL_LIMIT = 600;
 const SESSIONS_SIDEBAR_MIN_WIDTH = 300;
@@ -139,7 +149,6 @@ const DEFAULT_SESSIONS_SIDEBAR_WIDTH = 360;
 const PROJECT_GROUP_INLINE_LIMIT = 8;
 const MENU_ITEM_TOOLTIP_DELAY_MS = 650;
 const LOVCODE_HOOK_ENV_RE = /^(?:LOVCODE_AGENT_SESSION_ID|LOVCODE_AGENT_HOOK_FILE)=(?:'[^']*'|"[^"]*"|\S+)\s*/;
-const GENERAL_CHAT_LABEL = "General chat";
 const AGENT_WORKSPACE_STATE_UPDATED_EVENT = "agent-workspace-state-updated";
 type SessionListMode = "active" | "archived";
 type WorkbenchOutlineMode = "project" | "recent";
@@ -227,6 +236,12 @@ const emptyWorkspace = (): AgentWorkspaceState => ({
   activeSessionId: null,
 });
 
+let cachedAgentWorkspaceState: AgentWorkspaceState | null = null;
+let cachedAgentWorkspaceFilePath: string | null = null;
+let cachedPlainChatWorkspacePath: string | null = null;
+let cachedExternalAgentRuns: Record<string, ExternalAgentRun> = {};
+let cachedSessionActivitySnapshot = new Map<string, Pick<SessionFileActivity, "modifiedAt" | "size">>();
+
 function clampSessionsSidebarWidth(value?: number | null) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return DEFAULT_SESSIONS_SIDEBAR_WIDTH;
@@ -268,8 +283,24 @@ function normalizeSidebarState(sidebar?: AgentWorkspaceSidebarState | null): Per
   };
 }
 
+function sidebarStatesEqual(a: PersistedSidebarState, b: PersistedSidebarState) {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
 function now() {
   return Date.now();
+}
+
+function pruneExternalAgentRuns(runs: Record<string, ExternalAgentRun>, timestamp = now()) {
+  let changed = false;
+  const next = { ...runs };
+  Object.entries(next).forEach(([conversationId, run]) => {
+    if (run.expiresAt && run.expiresAt <= timestamp) {
+      delete next[conversationId];
+      changed = true;
+    }
+  });
+  return changed ? next : runs;
 }
 
 function getProjectName(path: string) {
@@ -296,8 +327,8 @@ function getProjectGroupKey(path: string | null | undefined, mergeWorktrees: boo
   return path ? normalizeProjectPath(getProjectGroupPath(path, mergeWorktrees)) : "";
 }
 
-function getHistorySessionTitle(session: Session) {
-  return session.title || session.summary || session.last_prompt || "Untitled conversation";
+function getHistorySessionTitle(session: Session, fallback = "Untitled conversation") {
+  return session.title || session.summary || session.last_prompt || fallback || "Untitled conversation";
 }
 
 function getHistoryConversationId(session: Session) {
@@ -320,12 +351,12 @@ function getConversationDisplayMode(row: Pick<WorkbenchConversation, "displayMod
   return row.displayMode ?? (row.runtime ? "pty" : "chat");
 }
 
-function getConversationTitle(row: WorkbenchConversation) {
+function getConversationTitle(row: WorkbenchConversation, labels?: { untitledConversation?: string; shell?: string; newSession?: string }) {
   return row.transcript
-    ? getHistorySessionTitle(row.transcript)
+    ? getHistorySessionTitle(row.transcript, labels?.untitledConversation)
     : row.runtime
-      ? getSessionDisplayTitle(row.runtime)
-      : "Untitled conversation";
+      ? getSessionDisplayTitle(row.runtime, labels)
+      : labels?.untitledConversation ?? "Untitled conversation";
 }
 
 function compareText(a: string, b: string) {
@@ -348,21 +379,21 @@ function canResumeTranscriptLocally(session: Session) {
   );
 }
 
-function formatRelativeTime(timestamp?: number | null) {
-  if (!timestamp) return "No activity";
+function formatRelativeTime(timestamp?: number | null, t?: TranslateFn) {
+  if (!timestamp) return t ? t("common.noActivity") : "No activity";
   const diffSeconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
-  if (diffSeconds < 10) return "now";
-  if (diffSeconds < 60) return `${diffSeconds}s ago`;
+  if (diffSeconds < 10) return t ? t("relative.justNow") : "now";
+  if (diffSeconds < 60) return t ? t("relative.secondsAgo", { count: diffSeconds }) : `${diffSeconds}s ago`;
   const diffMinutes = Math.floor(diffSeconds / 60);
-  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+  if (diffMinutes < 60) return t ? t("relative.minutesAgo", { count: diffMinutes }) : `${diffMinutes}m ago`;
   const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours}h ago`;
+  if (diffHours < 24) return t ? t("relative.hoursAgo", { count: diffHours }) : `${diffHours}h ago`;
   const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d ago`;
+  return t ? t("relative.daysAgo", { count: diffDays }) : `${diffDays}d ago`;
 }
 
-function formatDateTime(timestamp?: number | null) {
-  if (!timestamp) return "No activity";
+function formatDateTime(timestamp?: number | null, t?: TranslateFn) {
+  if (!timestamp) return t ? t("common.noActivity") : "No activity";
   return new Intl.DateTimeFormat(undefined, {
     dateStyle: "medium",
     timeStyle: "short",
@@ -427,12 +458,12 @@ function hasReusableAgentPrompt(session: AgentSession) {
   return isAgentProvider(session.provider) && Boolean(command) && command !== session.provider;
 }
 
-function getSessionDisplayTitle(session: AgentSession) {
+function getSessionDisplayTitle(session: AgentSession, labels?: { shell?: string; newSession?: string }) {
   const providerLabel = labelForProvider(session.provider);
   const trimmed = session.title.trim();
   const prefixedTitle = `${providerLabel}: `;
   if (trimmed.startsWith(prefixedTitle)) return trimmed.slice(prefixedTitle.length).trim() || providerLabel;
-  return trimmed || (session.provider === "terminal" ? "Shell" : "New session");
+  return trimmed || (session.provider === "terminal" ? labels?.shell ?? "Shell" : labels?.newSession ?? "New session");
 }
 
 function stripLovcodeHookEnvPrefix(command: string) {
@@ -491,37 +522,125 @@ function findLikelyTranscriptForRuntimeSession(
     [0];
 }
 
+function normalizeHistoryLinkStatus(status?: string | null): AgentHistoryLinkStatus | null {
+  return status === "pending" || status === "linked" || status === "not-found" ? status : null;
+}
+
+function shouldAttemptHistoryLink(session: AgentSession) {
+  if (session.linkedHistorySessionId) return false;
+  if (!isAgentProvider(session.provider)) return false;
+  if (!getSessionSubmittedPrompt(session)) return false;
+  return normalizeHistoryLinkStatus(session.historyLinkStatus) !== "not-found";
+}
+
+function isPastHistoryLinkGrace(session: AgentSession, timestamp: number) {
+  const lastKnownActivity = Math.max(session.createdAt, session.updatedAt, session.lastActivityAt ?? 0);
+  return timestamp - lastKnownActivity >= RUNTIME_HISTORY_LINK_GRACE_MS;
+}
+
+function shouldMarkHistoryLinkNotFound(session: AgentSession, timestamp: number) {
+  return !isAgentRunning(session) && isPastHistoryLinkGrace(session, timestamp);
+}
+
+function getRuntimeLinkDebugSignature(sessions: AgentSession[], recentHistory: Session[]) {
+  return JSON.stringify({
+    runtime: sessions.map((session) => ({
+      id: session.id,
+      provider: session.provider,
+      cwd: normalizeProjectPath(session.cwd),
+      prompt: getSessionSubmittedPrompt(session)?.slice(0, 160),
+      status: session.status,
+      updatedAt: session.updatedAt,
+    })),
+    history: recentHistory.map((session) => ({
+      id: session.id,
+      projectId: session.project_id,
+      source: session.source,
+      lastModified: session.last_modified,
+      lastPrompt: session.last_prompt?.slice(0, 160),
+    })),
+  });
+}
+
+function logLinkDebug(label: string, payload: unknown) {
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(payload);
+  } catch {
+    serialized = String(payload);
+  }
+  console.log(`[link-debug] ${label}: ${serialized}`);
+}
+
 export default function AgentWorkspacePage() {
-  const [searchParams] = useSearchParams();
+  const { activeLanguage, t } = useI18n();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const routeSessionListMode: SessionListMode = searchParams.get("view") === "archived" ? "archived" : "active";
+  const routeHasSessionListMode = searchParams.has("view");
+  const routeProjectId = searchParams.get("projectId");
+  const routeSessionId = searchParams.get("sessionId");
+  const routeSelectionKey = routeSessionId ? `${routeProjectId ?? ""}:${routeSessionId}` : null;
   const { data: projects = [] } = useInvokeQuery<Project[]>(["projects"], "list_projects");
-  const { sessions: historySessions, initialLoading: loadingHistorySessions, streaming: historyStreaming } = useStreamedSessions();
-  const [workspacePath, setWorkspacePath] = useState<string | null>(null);
-  const [plainChatWorkspacePath, setPlainChatWorkspacePath] = useState<string | null>(null);
-  const [state, setState] = useState<AgentWorkspaceState>(() => emptyWorkspace());
+  const {
+    sessions: streamedHistorySessions,
+    initialLoading: loadingHistorySessions,
+    streaming: historyStreaming,
+    hasCompleteSnapshot: historySessionsComplete,
+  } = useStreamedSessions();
+  const hasCachedWorkspaceState = Boolean(cachedAgentWorkspaceState);
+  const cachedInitialSidebar = normalizeSidebarState({
+    ...(cachedAgentWorkspaceState?.sidebar ?? {}),
+    sessionListMode: routeSessionListMode,
+  });
+  const cachedInitialWorkspaceState: AgentWorkspaceState = cachedAgentWorkspaceState
+    ? {
+        ...emptyWorkspace(),
+        ...cachedAgentWorkspaceState,
+        conversationMeta: cachedAgentWorkspaceState.conversationMeta ?? {},
+        globalEnvironment: cachedAgentWorkspaceState.globalEnvironment ?? null,
+        projectEnvironments: cachedAgentWorkspaceState.projectEnvironments ?? {},
+        sessionEnvironments: cachedAgentWorkspaceState.sessionEnvironments ?? {},
+        sidebar: cachedInitialSidebar,
+      }
+    : emptyWorkspace();
+  const cachedActiveSession =
+    cachedInitialWorkspaceState.sessions.find((session) => session.id === cachedInitialWorkspaceState.activeSessionId && !session.archived) ??
+    cachedInitialWorkspaceState.sessions.find((session) => !session.archived) ??
+    cachedInitialWorkspaceState.sessions[0];
+  const [workspacePath, setWorkspacePath] = useState<string | null>(cachedAgentWorkspaceFilePath);
+  const [plainChatWorkspacePath, setPlainChatWorkspacePath] = useState<string | null>(cachedPlainChatWorkspacePath);
+  const [state, setState] = useState<AgentWorkspaceState>(() => cachedInitialWorkspaceState);
   const [selectedHistorySession, setSelectedHistorySession] = useState<Session | null>(null);
-  const [selectedCwd, setSelectedCwd] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  const [pendingRuntimeForkSessions, setPendingRuntimeForkSessions] = useState<Record<string, Session>>({});
+  const [selectedCwd, setSelectedCwd] = useState<string | null>(cachedActiveSession?.cwd ?? cachedInitialWorkspaceState.sessions[0]?.cwd ?? null);
+  const [loaded, setLoaded] = useState(hasCachedWorkspaceState);
   const [saving, setSaving] = useState(false);
   const [launchingIds, setLaunchingIds] = useState<Set<string>>(() => new Set());
   const [attachedPtyIds, setAttachedPtyIds] = useState<Set<string>>(() => new Set());
   const [hookEventsDir, setHookEventsDir] = useState<string | null>(null);
-  const [sessionListMode, setSessionListMode] = useState<SessionListMode>("active");
+  const [sessionListMode, setSessionListMode] = useState<SessionListMode>(cachedInitialSidebar.sessionListMode);
   const [creatingSession, setCreatingSession] = useState(false);
   const [mainPanelClosed, setMainPanelClosed] = useState(false);
   const [selectedProjectDetailsPath, setSelectedProjectDetailsPath] = useState<string | null>(null);
-  const [outlineMode, setOutlineMode] = useState<WorkbenchOutlineMode>("recent");
-  const [displayFilter, setDisplayFilter] = useState<WorkbenchDisplayFilter>("all");
-  const [sortMode, setSortMode] = useState<WorkbenchSortMode>("last-modified");
-  const [reorderGroups, setReorderGroups] = useState(false);
-  const [mergeWorktrees, setMergeWorktrees] = useState(true);
-  const [showProjectNewConversation, setShowProjectNewConversation] = useState(false);
-  const [expandedProjectPaths, setExpandedProjectPaths] = useState<Set<string>>(() => new Set());
+  const [currentConversationRowVisible, setCurrentConversationRowVisible] = useState(false);
+  const [locatedConversationHighlight, setLocatedConversationHighlight] = useState<{ conversationId: string; key: number } | null>(null);
+  const [outlineMode, setOutlineMode] = useState<WorkbenchOutlineMode>(cachedInitialSidebar.outlineMode);
+  const [displayFilter, setDisplayFilter] = useState<WorkbenchDisplayFilter>(cachedInitialSidebar.displayFilter);
+  const [sortMode, setSortMode] = useState<WorkbenchSortMode>(cachedInitialSidebar.sortMode);
+  const [reorderGroups, setReorderGroups] = useState(cachedInitialSidebar.reorderGroups);
+  const [mergeWorktrees, setMergeWorktrees] = useState(cachedInitialSidebar.mergeWorktrees);
+  const [showProjectNewConversation, setShowProjectNewConversation] = useState(cachedInitialSidebar.showProjectNewConversation);
+  const [expandedProjectPaths, setExpandedProjectPaths] = useState<Set<string>>(() => new Set(cachedInitialSidebar.expandedProjectPaths));
   const [environmentDialogOpen, setEnvironmentDialogOpen] = useState(false);
   const [environmentDefaultScope, setEnvironmentDefaultScope] = useState<EnvironmentScope>("project");
   const [environmentDialogTarget, setEnvironmentDialogTarget] = useState<EnvironmentDialogTarget | null>(null);
   const [environmentTerminal, setEnvironmentTerminal] = useState<EnvironmentTerminalSession | null>(null);
-  const [externalAgentRuns, setExternalAgentRuns] = useState<Record<string, ExternalAgentRun>>({});
+  const [externalAgentRuns, setExternalAgentRuns] = useState<Record<string, ExternalAgentRun>>(() => {
+    const initial = pruneExternalAgentRuns(cachedExternalAgentRuns);
+    cachedExternalAgentRuns = initial;
+    return initial;
+  });
   const [exportTargetSession, setExportTargetSession] = useState<Session | null>(null);
   const [exportMessages, setExportMessages] = useState<Message[]>([]);
   const {
@@ -531,19 +650,127 @@ export default function AgentWorkspacePage() {
   } = useResize({
     direction: "horizontal",
     storageKey: "lovcode.agentWorkspace.sessionsSidebarWidth",
-    defaultValue: DEFAULT_SESSIONS_SIDEBAR_WIDTH,
+    defaultValue: cachedInitialSidebar.sessionsSidebarWidth,
     min: SESSIONS_SIDEBAR_MIN_WIDTH,
     max: SESSIONS_SIDEBAR_MAX_WIDTH,
   });
+  const historySessions = useMemo(() => {
+    const streamedIds = new Set(streamedHistorySessions.map(getHistoryConversationId));
+    const pending = Object.values(pendingRuntimeForkSessions).filter(
+      (session) => !streamedIds.has(getHistoryConversationId(session)),
+    );
+    return pending.length > 0
+      ? [...pending, ...streamedHistorySessions].sort((a, b) => b.last_modified - a.last_modified)
+      : streamedHistorySessions;
+  }, [pendingRuntimeForkSessions, streamedHistorySessions]);
   const latestStateRef = useRef(state);
   const historySessionsRef = useRef(historySessions);
+  const conversationListScrollRef = useRef<HTMLDivElement | null>(null);
+  const pendingScrollToConversationRef = useRef<string | null>(null);
+  const locateArrivalFrameRef = useRef<number | null>(null);
+  const locateArrivalTokenRef = useRef(0);
+  const locateHighlightKeyRef = useRef(0);
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const savingIndicatorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveInFlightCountRef = useRef(0);
   const agentIdleTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const hookLineCountsRef = useRef<Map<string, number>>(new Map());
-  const sessionActivitySnapshotRef = useRef<Map<string, Pick<SessionFileActivity, "modifiedAt" | "size">>>(new Map());
+  const sessionActivitySnapshotRef = useRef<Map<string, Pick<SessionFileActivity, "modifiedAt" | "size">>>(
+    new Map(cachedSessionActivitySnapshot),
+  );
   const restoredConversationIdRef = useRef<string | null>(null);
+  const routeSelectionRestoredRef = useRef<string | null>(null);
+  const projectDetailsOpenRef = useRef(false);
   const routeSessionListModeRef = useRef(routeSessionListMode);
   const exportLoadSeqRef = useRef(0);
+  const linkDebugSignatureRef = useRef<string | null>(null);
+  const getConversationRowElement = useCallback((conversationId: string) => {
+    const scroller = conversationListScrollRef.current;
+    if (!scroller) return null;
+    return scroller.querySelector<HTMLElement>(`[data-conversation-id="${CSS.escape(conversationId)}"]`);
+  }, []);
+  const scrollConversationRowIntoView = useCallback((conversationId: string) => {
+    const scroller = conversationListScrollRef.current;
+    const row = getConversationRowElement(conversationId);
+    if (!scroller || !row) return false;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const delta = rowRect.top - scrollerRect.top - scrollerRect.height / 2 + rowRect.height / 2;
+    scroller.scrollTo({ top: scroller.scrollTop + delta, behavior: "smooth" });
+    return true;
+  }, [getConversationRowElement]);
+  const isConversationRowVisible = useCallback((conversationId: string) => {
+    const scroller = conversationListScrollRef.current;
+    const row = getConversationRowElement(conversationId);
+    if (!scroller || !row) return false;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    const stickyHeaderOffset = outlineMode === "project" ? 32 : 0;
+    return rowRect.bottom > scrollerRect.top + stickyHeaderOffset && rowRect.top < scrollerRect.bottom;
+  }, [getConversationRowElement, outlineMode]);
+  const pulseLocatedConversation = useCallback((conversationId: string) => {
+    locateHighlightKeyRef.current += 1;
+    setLocatedConversationHighlight({
+      conversationId,
+      key: locateHighlightKeyRef.current,
+    });
+  }, []);
+  const clearLocatedConversationHighlight = useCallback((key: number) => {
+    setLocatedConversationHighlight((current) => (current?.key === key ? null : current));
+  }, []);
+  const highlightConversationOnArrival = useCallback((conversationId: string) => {
+    if (locateArrivalFrameRef.current !== null) {
+      cancelAnimationFrame(locateArrivalFrameRef.current);
+      locateArrivalFrameRef.current = null;
+    }
+
+    const token = locateArrivalTokenRef.current + 1;
+    locateArrivalTokenRef.current = token;
+    let frameCount = 0;
+    let stableFrames = 0;
+    let lastScrollTop = conversationListScrollRef.current?.scrollTop ?? 0;
+
+    const tick = () => {
+      if (token !== locateArrivalTokenRef.current) return;
+
+      const scroller = conversationListScrollRef.current;
+      const row = getConversationRowElement(conversationId);
+      frameCount += 1;
+
+      if (!scroller || !row) {
+        if (frameCount < 90) {
+          locateArrivalFrameRef.current = requestAnimationFrame(tick);
+        } else {
+          locateArrivalFrameRef.current = null;
+        }
+        return;
+      }
+
+      const scrollerRect = scroller.getBoundingClientRect();
+      const rowRect = row.getBoundingClientRect();
+      const centerDelta = rowRect.top - scrollerRect.top - scrollerRect.height / 2 + rowRect.height / 2;
+      const scrollDelta = Math.abs(scroller.scrollTop - lastScrollTop);
+      const visible = isConversationRowVisible(conversationId);
+      stableFrames = scrollDelta < 0.5 ? stableFrames + 1 : 0;
+      lastScrollTop = scroller.scrollTop;
+
+      if (visible && (Math.abs(centerDelta) <= 2 || stableFrames >= 2 || frameCount >= 45)) {
+        locateArrivalFrameRef.current = null;
+        pulseLocatedConversation(conversationId);
+        return;
+      }
+
+      if (frameCount >= 90) {
+        locateArrivalFrameRef.current = null;
+        if (visible) pulseLocatedConversation(conversationId);
+        return;
+      }
+
+      locateArrivalFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    locateArrivalFrameRef.current = requestAnimationFrame(tick);
+  }, [getConversationRowElement, isConversationRowVisible, pulseLocatedConversation]);
 
   const openSessionExportDialog = useCallback((session: Session) => {
     const seq = exportLoadSeqRef.current + 1;
@@ -578,6 +805,21 @@ export default function AgentWorkspacePage() {
   }, [historySessions]);
 
   useEffect(() => {
+    if (Object.keys(pendingRuntimeForkSessions).length === 0) return;
+    const streamedIds = new Set(streamedHistorySessions.map(getHistoryConversationId));
+    setPendingRuntimeForkSessions((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      Object.keys(next).forEach((conversationId) => {
+        if (!streamedIds.has(conversationId)) return;
+        delete next[conversationId];
+        changed = true;
+      });
+      return changed ? next : prev;
+    });
+  }, [pendingRuntimeForkSessions, streamedHistorySessions]);
+
+  useEffect(() => {
     routeSessionListModeRef.current = routeSessionListMode;
   }, [routeSessionListMode]);
 
@@ -589,35 +831,62 @@ export default function AgentWorkspacePage() {
     });
     const claimedThisPass = new Set<string>();
     const updates: Array<{ runtimeId: string; transcript: Session }> = [];
-    const unlinked = state.sessions.filter((s) => !s.linkedHistorySessionId && getSessionSubmittedPrompt(s));
-    if (unlinked.length > 0) {
-      console.log("[link-debug] unlinked runtime sessions:", unlinked.map((s) => ({
+    const linkCandidates = state.sessions.filter(shouldAttemptHistoryLink);
+    if (linkCandidates.length === 0) {
+      linkDebugSignatureRef.current = null;
+      return;
+    }
+    const recentHistory = historySessions
+      .filter((h) => h.created_at * 1000 >= Math.min(...linkCandidates.map((s) => s.createdAt)) - LINK_DEBUG_HISTORY_LOOKBACK_MS)
+      .slice(0, LINK_DEBUG_RECENT_HISTORY_LIMIT);
+    const debugSignature = getRuntimeLinkDebugSignature(linkCandidates, recentHistory);
+    if (linkDebugSignatureRef.current !== debugSignature) {
+      linkDebugSignatureRef.current = debugSignature;
+      logLinkDebug("unlinked runtime sessions", linkCandidates.map((s) => ({
         id: s.id,
         cwd: s.cwd,
         createdAt: s.createdAt,
         prompt: getSessionSubmittedPrompt(s)?.slice(0, 80),
       })));
-      const recentHistory = historySessions
-        .filter((h) => h.created_at * 1000 >= Math.min(...unlinked.map((s) => s.createdAt)) - 60_000)
-        .slice(0, 10);
-      console.log("[link-debug] recent history candidates:", recentHistory.map((h) => ({
+      logLinkDebug("recent history candidates", recentHistory.map((h) => ({
         id: h.id,
         project_path: h.project_path,
         created_at_ms: h.created_at * 1000,
         last_prompt: h.last_prompt?.slice(0, 80),
       })));
     }
-    for (const session of state.sessions) {
-      if (session.linkedHistorySessionId) continue;
+    for (const session of linkCandidates) {
       const match = findLikelyTranscriptForRuntimeSession(session, historySessions, new Set([...linkedIds, ...claimedThisPass]));
       if (match) {
         claimedThisPass.add(match.id);
         updates.push({ runtimeId: session.id, transcript: match });
       }
     }
-    if (updates.length === 0) return;
-    console.log("[link-debug] linking:", updates);
+    const timestamp = now();
     const linkMap = new Map(updates.map((u) => [u.runtimeId, u.transcript.id]));
+    const notFound = historySessionsComplete && !historyStreaming
+      ? linkCandidates.filter((session) => !linkMap.has(session.id) && shouldMarkHistoryLinkNotFound(session, timestamp))
+      : [];
+    if (updates.length === 0 && notFound.length === 0) return;
+    if (updates.length > 0) {
+      logLinkDebug("linking", updates.map((update) => ({
+        runtimeId: update.runtimeId,
+        transcriptId: update.transcript.id,
+        projectPath: update.transcript.project_path,
+        createdAtMs: update.transcript.created_at * 1000,
+        lastPrompt: update.transcript.last_prompt?.slice(0, 80),
+      })));
+    }
+    if (notFound.length > 0) {
+      logLinkDebug("unresolved runtime sessions marked not-found", notFound.map((s) => ({
+        id: s.id,
+        cwd: s.cwd,
+        createdAt: s.createdAt,
+        prompt: getSessionSubmittedPrompt(s)?.slice(0, 80),
+        reason: HISTORY_LINK_NOT_FOUND_REASON,
+      })));
+    }
+    const notFoundIds = new Set(notFound.map((session) => session.id));
     const base = latestStateRef.current;
     const conversationMeta = { ...(base.conversationMeta ?? {}) };
     const sidebar = normalizeSidebarState(base.sidebar);
@@ -645,13 +914,30 @@ export default function AgentWorkspacePage() {
       ...base,
       sessions: base.sessions.map((session) => {
         const transcriptId = linkMap.get(session.id);
-        return transcriptId ? { ...session, linkedHistorySessionId: transcriptId } : session;
+        if (transcriptId) {
+          return {
+            ...session,
+            linkedHistorySessionId: transcriptId,
+            historyLinkStatus: "linked",
+            historyLinkLastTriedAt: timestamp,
+            historyLinkLastReason: null,
+          };
+        }
+        if (notFoundIds.has(session.id)) {
+          return {
+            ...session,
+            historyLinkStatus: "not-found",
+            historyLinkLastTriedAt: timestamp,
+            historyLinkLastReason: HISTORY_LINK_NOT_FOUND_REASON,
+          };
+        }
+        return session;
       }),
       conversationMeta,
       sidebar: sidebarChanged ? { ...sidebar, activeConversationId } : base.sidebar,
     };
     persist(next).catch(console.error);
-  }, [historySessions, state.sessions, loaded]);
+  }, [historySessions, historySessionsComplete, historyStreaming, state.sessions, loaded]);
 
   useEffect(() => {
     let cancelled = false;
@@ -662,9 +948,17 @@ export default function AgentWorkspacePage() {
       .then(([loadedState, path]) => {
         if (cancelled) return;
         const sidebar = normalizeSidebarState(loadedState.sidebar);
+        const resumeWorkspace = routeSessionId ? null : readDevResumeState()?.workspace;
+        const resumeActiveConversationId =
+          resumeWorkspace && "activeConversationId" in resumeWorkspace
+            ? resumeWorkspace.activeConversationId ?? null
+            : sidebar.activeConversationId;
         const initialSidebar = normalizeSidebarState({
           ...sidebar,
-          sessionListMode: routeSessionListModeRef.current,
+          sessionListMode: routeHasSessionListMode
+            ? routeSessionListModeRef.current
+            : resumeWorkspace?.sessionListMode ?? routeSessionListModeRef.current,
+          activeConversationId: routeSessionId ? sidebar.activeConversationId : resumeActiveConversationId,
         });
         const next = {
           ...emptyWorkspace(),
@@ -675,6 +969,8 @@ export default function AgentWorkspacePage() {
           sessionEnvironments: loadedState.sessionEnvironments ?? {},
           sidebar: initialSidebar,
         };
+        cachedAgentWorkspaceState = next;
+        cachedAgentWorkspaceFilePath = path;
         setState(next);
         setSessionListMode(initialSidebar.sessionListMode);
         setOutlineMode(initialSidebar.outlineMode);
@@ -702,12 +998,15 @@ export default function AgentWorkspacePage() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    invoke<string>("get_agent_plain_chat_workspace_path")
-      .then((path) => {
-        if (!cancelled) setPlainChatWorkspacePath(path);
-      })
+	  useEffect(() => {
+	    let cancelled = false;
+	    invoke<string>("get_agent_plain_chat_workspace_path")
+	      .then((path) => {
+	        if (!cancelled) {
+	          cachedPlainChatWorkspacePath = path;
+	          setPlainChatWorkspacePath(path);
+	        }
+	      })
       .catch((error) => {
         console.error("Failed to prepare general chat workspace:", error);
       });
@@ -735,9 +1034,10 @@ export default function AgentWorkspacePage() {
 
   const activeSession = useMemo(
     () => {
+      if (!state.activeSessionId) return null;
       const selected = state.sessions.find((session) => session.id === state.activeSessionId);
       if (selected && !selected.archived) return selected;
-      return state.sessions.find((session) => !session.archived) ?? null;
+      return null;
     },
     [state.activeSessionId, state.sessions],
   );
@@ -749,10 +1049,11 @@ export default function AgentWorkspacePage() {
   const ptyStatus = usePtyStatus(ptyIds);
   const isPlainChatWorkspace = (path?: string | null) =>
     Boolean(path && plainChatWorkspacePath && normalizeProjectPath(path) === normalizeProjectPath(plainChatWorkspacePath));
-  const getWorkbenchProjectName = (path: string) => (isPlainChatWorkspace(path) ? GENERAL_CHAT_LABEL : getProjectName(path));
-  const getWorkbenchProjectTitle = (path: string) => (isPlainChatWorkspace(path) ? GENERAL_CHAT_LABEL : path);
+  const generalChatLabel = t("composer.generalChat");
+  const getWorkbenchProjectName = (path: string) => (isPlainChatWorkspace(path) ? generalChatLabel : getProjectName(path));
+  const getWorkbenchProjectTitle = (path: string) => (isPlainChatWorkspace(path) ? generalChatLabel : path);
   const getComposerCwdLabel = (path?: string | null) =>
-    path ? (isPlainChatWorkspace(path) ? GENERAL_CHAT_LABEL : getProjectName(path)) : GENERAL_CHAT_LABEL;
+    path ? (isPlainChatWorkspace(path) ? generalChatLabel : getProjectName(path)) : generalChatLabel;
   const ensurePlainChatWorkspace = async () => {
     if (plainChatWorkspacePath) return plainChatWorkspacePath;
     const path = await invoke<string>("get_agent_plain_chat_workspace_path");
@@ -771,6 +1072,9 @@ export default function AgentWorkspacePage() {
     if (next) setSelectedHistorySession(next);
     else if (!historyStreaming) setSelectedHistorySession(null);
   }, [historySessions, historyStreaming, selectedHistorySession]);
+  useEffect(() => {
+    projectDetailsOpenRef.current = Boolean(selectedProjectDetailsPath);
+  }, [selectedProjectDetailsPath]);
 
   const markExternalAgentRunning = useCallback((
     conversationIds: Iterable<string>,
@@ -803,6 +1107,7 @@ export default function AgentWorkspacePage() {
         next[conversationId] = value;
         changed = true;
       });
+      if (changed) cachedExternalAgentRuns = next;
       return changed ? next : prev;
     });
   }, []);
@@ -819,6 +1124,7 @@ export default function AgentWorkspacePage() {
           changed = true;
         }
       });
+      if (changed) cachedExternalAgentRuns = next;
       return changed ? next : prev;
     });
   }, []);
@@ -893,7 +1199,9 @@ export default function AgentWorkspacePage() {
     state.sessions.forEach((session) => {
       const linkedTranscript = session.linkedHistorySessionId
         ? historyById.get(session.linkedHistorySessionId)
-        : findLikelyTranscriptForRuntimeSession(session, historySessions, claimedRuntimeTranscriptIds);
+        : shouldAttemptHistoryLink(session)
+          ? findLikelyTranscriptForRuntimeSession(session, historySessions, claimedRuntimeTranscriptIds)
+          : undefined;
       if (linkedTranscript) claimedRuntimeTranscriptIds.add(linkedTranscript.id);
       const conversationId = getRuntimeConversationId(session, linkedTranscript);
       const current = rowsById.get(conversationId);
@@ -967,6 +1275,7 @@ export default function AgentWorkspacePage() {
             changed = true;
           }
         });
+        if (changed) cachedExternalAgentRuns = next;
         return changed ? next : prev;
       });
     }, 1000);
@@ -1009,6 +1318,7 @@ export default function AgentWorkspacePage() {
           });
 
           sessionActivitySnapshotRef.current = next;
+          cachedSessionActivitySnapshot = next;
           if (changedConversationIds.length > 0) {
             markExternalAgentRunning(changedConversationIds, "watch", { ttlMs: WATCH_AGENT_RUNNING_MS, timestamp });
           }
@@ -1202,6 +1512,7 @@ export default function AgentWorkspacePage() {
         sessionEnvironments: updatedState.sessionEnvironments ?? latestStateRef.current.sessionEnvironments,
       }, "latest");
       latestStateRef.current = nextState;
+      cachedAgentWorkspaceState = nextState;
       setState(nextState);
     };
 
@@ -1211,42 +1522,74 @@ export default function AgentWorkspacePage() {
     };
   }, []);
 
+  const beginSaving = () => {
+    saveInFlightCountRef.current += 1;
+    if (saveInFlightCountRef.current !== 1 || savingIndicatorTimerRef.current) return;
+    savingIndicatorTimerRef.current = setTimeout(() => {
+      savingIndicatorTimerRef.current = null;
+      if (saveInFlightCountRef.current > 0) setSaving(true);
+    }, 250);
+  };
+
+  const endSaving = () => {
+    saveInFlightCountRef.current = Math.max(0, saveInFlightCountRef.current - 1);
+    if (saveInFlightCountRef.current > 0) return;
+    if (savingIndicatorTimerRef.current) {
+      clearTimeout(savingIndicatorTimerRef.current);
+      savingIndicatorTimerRef.current = null;
+    }
+    setSaving(false);
+  };
+
   const persist = async (next: AgentWorkspaceState) => {
     const nextState = normalizeWorkspaceState(next, "latest");
     setState(nextState);
     latestStateRef.current = nextState;
-    setSaving(true);
+    cachedAgentWorkspaceState = nextState;
+    beginSaving();
     try {
       const saved = await invoke<AgentWorkspaceState>("save_agent_workspace_state", { state: nextState });
       const savedState = normalizeWorkspaceState(saved, "next");
       latestStateRef.current = savedState;
+      cachedAgentWorkspaceState = savedState;
       setState(savedState);
     } finally {
-      setSaving(false);
+      endSaving();
     }
   };
 
   const schedulePersist = (next: AgentWorkspaceState) => {
     const nextState = normalizeWorkspaceState(next, "next");
     latestStateRef.current = nextState;
+    cachedAgentWorkspaceState = nextState;
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      setSaving(true);
+      beginSaving();
       invoke<AgentWorkspaceState>("save_agent_workspace_state", { state: latestStateRef.current })
         .then((saved) => {
           latestStateRef.current = normalizeWorkspaceState(saved, "next");
+          cachedAgentWorkspaceState = latestStateRef.current;
         })
         .finally(() => {
-          setSaving(false);
+          endSaving();
         });
     }, 1000);
   };
 
+  const flushPendingWorkspaceSave = useCallback(() => {
+    if (!saveTimerRef.current) return;
+    clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = null;
+    invoke<AgentWorkspaceState>("save_agent_workspace_state", { state: latestStateRef.current }).catch(() => {});
+  }, []);
+
   const updateSidebarState = (patch: Partial<AgentWorkspaceSidebarState>, options?: { immediate?: boolean }) => {
+    const currentSidebar = normalizeSidebarState(latestStateRef.current.sidebar);
     const nextSidebar = normalizeSidebarState({
-      ...(latestStateRef.current.sidebar ?? {}),
+      ...currentSidebar,
       ...patch,
     });
+    if (sidebarStatesEqual(currentSidebar, nextSidebar)) return nextSidebar;
     const nextState = {
       ...latestStateRef.current,
       sidebar: nextSidebar,
@@ -1315,9 +1658,34 @@ export default function AgentWorkspacePage() {
   };
 
   useEffect(() => {
-    if (!loaded || sessionListMode === routeSessionListMode) return;
+    const handlePageHide = () => flushPendingWorkspaceSave();
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") flushPendingWorkspaceSave();
+    };
+    window.addEventListener("pagehide", handlePageHide);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    if (import.meta.hot) {
+      import.meta.hot.dispose(flushPendingWorkspaceSave);
+    }
+    return () => {
+      window.removeEventListener("pagehide", handlePageHide);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [flushPendingWorkspaceSave]);
+
+  useEffect(() => {
+    if (!loaded) return;
+    const sidebar = normalizeSidebarState(state.sidebar);
+    writeWorkspaceDevResumeState({
+      activeConversationId: sidebar.activeConversationId,
+      sessionListMode: sidebar.sessionListMode,
+    });
+  }, [loaded, state.sidebar?.activeConversationId, state.sidebar?.sessionListMode]);
+
+  useEffect(() => {
+    if (!loaded || routeSessionId || sessionListMode === routeSessionListMode) return;
     setPersistedSessionListMode(routeSessionListMode);
-  }, [loaded, routeSessionListMode, sessionListMode]);
+  }, [loaded, routeSessionId, routeSessionListMode, sessionListMode]);
 
   useEffect(() => {
     if (!loaded) return;
@@ -1400,6 +1768,9 @@ export default function AgentWorkspacePage() {
           lastActivityAt: timestamp,
           lastViewedAt: session.id === prev.activeSessionId ? timestamp : session.lastViewedAt ?? null,
           updatedAt: timestamp,
+          historyLinkStatus: session.linkedHistorySessionId ? session.historyLinkStatus ?? "linked" : "pending",
+          historyLinkLastTriedAt: session.linkedHistorySessionId ? session.historyLinkLastTriedAt ?? null : null,
+          historyLinkLastReason: session.linkedHistorySessionId ? session.historyLinkLastReason ?? null : null,
         };
       });
       if (!changed) return prev;
@@ -1458,6 +1829,8 @@ export default function AgentWorkspacePage() {
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (savingIndicatorTimerRef.current) clearTimeout(savingIndicatorTimerRef.current);
+      saveInFlightCountRef.current = 0;
       agentIdleTimersRef.current.forEach((timer) => clearTimeout(timer));
       agentIdleTimersRef.current.clear();
     };
@@ -1667,11 +2040,11 @@ export default function AgentWorkspacePage() {
       ? selectedSpecificSessionEnvKey
       : selectedDefaultSessionEnvKey;
   const selectedEnvironmentSessionTitle = selectedHistorySession
-    ? getHistorySessionTitle(selectedHistorySession)
+    ? getHistorySessionTitle(selectedHistorySession, t("common.untitledConversation"))
     : activeSession
-      ? getSessionDisplayTitle(activeSession)
+      ? getSessionDisplayTitle(activeSession, { shell: t("chat.shell"), newSession: t("chat.newSession") })
       : selectedProjectPath
-        ? `${getEnvironmentProjectName(selectedProjectPath)} sessions`
+        ? t("environment.projectSessions", { project: getEnvironmentProjectName(selectedProjectPath) })
       : null;
   const selectedGlobalEnvironment = state.globalEnvironment ?? null;
   const selectedProjectEnvironment = selectedProjectEnvKey
@@ -1696,7 +2069,7 @@ export default function AgentWorkspacePage() {
   const environmentSessionTitle =
     environmentDialogTarget?.sessionTitle ??
     selectedEnvironmentSessionTitle ??
-    (environmentProjectPath ? `${getEnvironmentProjectName(environmentProjectPath)} sessions` : null);
+    (environmentProjectPath ? t("environment.projectSessions", { project: getEnvironmentProjectName(environmentProjectPath) }) : null);
   const environmentProjectConfig = environmentProjectEnvKey
     ? state.projectEnvironments?.[environmentProjectEnvKey] ?? null
     : null;
@@ -1747,10 +2120,10 @@ export default function AgentWorkspacePage() {
 
   const openConversationEnvironmentDialog = (row: WorkbenchConversation) => {
     const title = row.transcript
-      ? getHistorySessionTitle(row.transcript)
+      ? getHistorySessionTitle(row.transcript, t("common.untitledConversation"))
       : row.runtime
-        ? getSessionDisplayTitle(row.runtime)
-        : "Untitled conversation";
+        ? getSessionDisplayTitle(row.runtime, { shell: t("chat.shell"), newSession: t("chat.newSession") })
+        : t("common.untitledConversation");
     setEnvironmentDialogTarget({
       projectPath: row.projectPath,
       sessionKey: row.conversationId,
@@ -1840,12 +2213,12 @@ export default function AgentWorkspacePage() {
     const sessionLabel = scope === "session" && environmentSessionTitle
       ? environmentSessionTitle
       : scope === "global"
-        ? "Global runtime"
+        ? t("environment.globalRuntime")
       : config.name;
     const title =
       kind === "action"
-        ? `${action?.name || "Action"} · ${sessionLabel}`
-        : `${kind === "setup" ? "Setup" : "Cleanup"} · ${sessionLabel}`;
+        ? `${action?.name || t("environment.actionFallback")} · ${sessionLabel}`
+        : `${kind === "setup" ? t("environment.setup") : t("environment.cleanup")} · ${sessionLabel}`;
     const command = buildEnvironmentCommand(script, cwd, {
       CODEX_SOURCE_TREE_PATH: cwd,
       CODEX_WORKTREE_PATH: cwd,
@@ -1916,6 +2289,7 @@ export default function AgentWorkspacePage() {
         fromMessageId: string;
         fromTitle: string;
       };
+      focusRuntime?: boolean;
     },
   ) => {
     setSelectedProjectDetailsPath(null);
@@ -1929,7 +2303,7 @@ export default function AgentWorkspacePage() {
         return;
       }
     }
-    if (options?.resumeHistorySession) {
+    if (options?.resumeHistorySession && !options.focusRuntime) {
       setSelectedHistorySession(options.resumeHistorySession);
     } else {
       setSelectedHistorySession(null);
@@ -1960,6 +2334,9 @@ export default function AgentWorkspacePage() {
       ptyId,
       title: options?.title ?? makeSessionTitle(provider, prompt),
       linkedHistorySessionId: options?.resumeHistorySession?.id ?? null,
+      historyLinkStatus: options?.resumeHistorySession ? "linked" : isAgentProvider(provider) && prompt.trim() ? "pending" : null,
+      historyLinkLastTriedAt: null,
+      historyLinkLastReason: null,
       forkParentSessionId: options?.fork?.parentSessionId ?? null,
       forkFromMessageId: options?.fork?.fromMessageId ?? null,
       forkedFromTitle: options?.fork?.fromTitle ?? null,
@@ -1983,6 +2360,7 @@ export default function AgentWorkspacePage() {
       conversationMeta: withConversationMeta(linkedConversationId, {
         archived: false,
         archivedAt: null,
+        ...(options?.focusRuntime ? { displayMode: "pty" as const } : {}),
       }),
       activeSessionId: id,
     }).catch(console.error);
@@ -2034,6 +2412,8 @@ export default function AgentWorkspacePage() {
                 unread: false,
                 lastViewedAt: timestamp,
                 updatedAt: timestamp,
+                historyLinkStatus: "linked",
+                historyLinkLastReason: null,
               }
             : item,
         ),
@@ -2064,8 +2444,11 @@ export default function AgentWorkspacePage() {
       status: "idle",
       workState: "idle",
       ptyId,
-      title: getHistorySessionTitle(historySession),
+      title: getHistorySessionTitle(historySession, t("common.untitledConversation")),
       linkedHistorySessionId: historySession.id,
+      historyLinkStatus: "linked",
+      historyLinkLastTriedAt: null,
+      historyLinkLastReason: null,
       forkParentSessionId: null,
       forkFromMessageId: null,
       forkedFromTitle: null,
@@ -2359,30 +2742,26 @@ export default function AgentWorkspacePage() {
   };
 
   const openProjectDetails = (path: string) => {
+    projectDetailsOpenRef.current = true;
     setSelectedCwd(path);
     setSelectedProjectDetailsPath(path);
     setSelectedHistorySession(null);
     setMainPanelClosed(false);
     setCreatingSession(false);
     restoredConversationIdRef.current = null;
-    setPersistedActiveConversation(null);
-  };
-
-  const selectProjectScope = (path: string) => {
-    setSelectedCwd(path);
-    setSelectedProjectDetailsPath(null);
-    setSelectedHistorySession(null);
-    setMainPanelClosed(false);
-    const groupKey = getProjectGroupKey(path, mergeWorktrees);
-    const rowsForProject = allWorkbenchRows.filter((row) => getProjectGroupKey(row.projectPath, mergeWorktrees) === groupKey && !row.archived);
-    const nextConversation = rowsForProject[0];
-    if (nextConversation) {
-      selectConversation(nextConversation);
-      setCreatingSession(false);
-      return;
-    }
-    setPersistedActiveConversation(null);
-    setCreatingSession(true);
+    const base = latestStateRef.current;
+    const nextState = normalizeWorkspaceState({
+      ...base,
+      activeSessionId: null,
+      sidebar: normalizeSidebarState({
+        ...(base.sidebar ?? {}),
+        sessionListMode: "active",
+        activeConversationId: null,
+      }),
+    }, "next");
+    latestStateRef.current = nextState;
+    setState(nextState);
+    persist(nextState).catch(console.error);
   };
 
   const activePtyId = activeSession?.ptyId ?? null;
@@ -2393,29 +2772,20 @@ export default function AgentWorkspacePage() {
   const activeConnected = activePtyExists || activePtyAttached || activeLaunching;
   const shouldMountTerminal = Boolean(activeSession?.ptyId && activeConnected);
   const terminalRestoreOnly = Boolean(activeSession?.ptyId) && !activeConnected;
-  const showProjectDetailsView = Boolean(selectedProjectDetailsPath) && !mainPanelClosed && !creatingSession && !selectedHistorySession;
+  const showProjectDetailsView = Boolean(selectedProjectDetailsPath) && !mainPanelClosed && !creatingSession;
   const showNewSessionView = !showProjectDetailsView && !selectedHistorySession && (creatingSession || mainPanelClosed || !activeSession);
 
   const getSessionConnected = (session: AgentSession) =>
     session.ptyId ? Boolean(ptyStatus.get(session.ptyId)) || attachedPtyIds.has(session.ptyId) || launchingIds.has(session.id) : false;
   const activeConversationCount = allWorkbenchRows.filter((row) => !row.archived).length;
   const archivedConversationCount = allWorkbenchRows.filter((row) => row.archived).length;
-  const runningAgentCount = allWorkbenchRows.filter(
-    (row) => !row.archived && isConversationAgentRunning(row),
-  ).length;
-  const unreadAgentCount = allWorkbenchRows.filter((row) => !row.archived && row.unread).length;
-  const sessionsHeaderTitle = sessionListMode === "archived" ? "Archived" : "Conversations";
-  const sessionsHeaderSummary =
-    sessionListMode === "archived"
-      ? `${archivedConversationCount} archived conversations`
-      : [
-          `${workbenchRows.length} conversations`,
-          activeConversationCount !== workbenchRows.length ? `${activeConversationCount} unarchived` : null,
-          runningAgentCount > 0 ? `${runningAgentCount} running` : null,
-          unreadAgentCount > 0 ? `${unreadAgentCount} unread` : null,
-        ]
-          .filter(Boolean)
-          .join(" / ");
+  const conversationListInitialLoading = !loaded || !historySessionsComplete;
+  const sessionsHeaderTitle = sessionListMode === "archived" ? t("common.archived") : activeLanguage === "zh" ? "历史对话" : "Sessions";
+  const sessionsHeaderCount = conversationListInitialLoading
+    ? null
+    : sessionListMode === "archived"
+      ? archivedConversationCount
+      : activeConversationCount;
   const toggleProjectCollapsed = (path: string) => {
     const key = getProjectGroupKey(path, mergeWorktrees);
     const next = new Set(expandedProjectPaths);
@@ -2593,6 +2963,17 @@ export default function AgentWorkspacePage() {
     setSelectedHistorySession(null);
     setCreatingSession(false);
     setMainPanelClosed(true);
+    restoredConversationIdRef.current = null;
+    routeSelectionRestoredRef.current = routeSelectionKey;
+    setPersistedActiveConversationId(null);
+    if (routeProjectId || routeSessionId) {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("projectId");
+        next.delete("sessionId");
+        return next;
+      }, { replace: true });
+    }
   };
   const isConversationActive = (row: WorkbenchConversation) =>
     mainPanelClosed || selectedProjectDetailsPath
@@ -2603,10 +2984,77 @@ export default function AgentWorkspacePage() {
       ? selectedHistorySession?.id === row.transcript.id && selectedHistorySession.project_id === row.transcript.project_id
       : Boolean(row.runtime && !selectedHistorySession && row.runtime.id === activeSession?.id);
 
+  const openRouteConversation = (row: WorkbenchConversation) => {
+    const nextListMode: SessionListMode = row.archived ? "archived" : "active";
+    const groupKey = getProjectGroupKey(row.projectPath, mergeWorktrees);
+    const nextExpandedProjectPaths = new Set(expandedProjectPaths);
+    if (groupKey) nextExpandedProjectPaths.add(groupKey);
+
+    setSessionListMode(nextListMode);
+    setDisplayFilter("all");
+    setExpandedProjectPaths(nextExpandedProjectPaths);
+    updateSidebarState({
+      sessionListMode: nextListMode,
+      displayFilter: "all",
+      activeConversationId: row.conversationId,
+      expandedProjectPaths: [...nextExpandedProjectPaths],
+    }, { immediate: true });
+
+    restoredConversationIdRef.current = row.conversationId;
+    setSelectedProjectDetailsPath(null);
+    setMainPanelClosed(false);
+    setCreatingSession(false);
+
+    if (row.transcript) {
+      setSelectedHistorySession(row.transcript);
+      setSelectedCwd(row.transcript.project_path ?? row.runtime?.cwd ?? row.projectPath);
+      return;
+    }
+
+    if (row.runtime) {
+      setSelectedHistorySession(null);
+      setSelectedCwd(row.runtime.cwd);
+      setState((prev) => ({ ...prev, activeSessionId: row.runtime!.id }));
+      return;
+    }
+  };
+
+  useEffect(() => {
+    if (!routeSelectionKey || !routeSessionId) {
+      routeSelectionRestoredRef.current = null;
+      return;
+    }
+    if (!loaded || loadingHistorySessions) return;
+
+    const row = allWorkbenchRows.find((item) => {
+      if (item.transcript) {
+        return item.transcript.id === routeSessionId &&
+          (!routeProjectId || item.transcript.project_id === routeProjectId);
+      }
+      return item.runtime?.id === routeSessionId;
+    });
+    if (!row) return;
+    if (routeSelectionRestoredRef.current === routeSelectionKey) return;
+
+    routeSelectionRestoredRef.current = routeSelectionKey;
+    openRouteConversation(row);
+  }, [
+    routeSelectionKey,
+    routeProjectId,
+    routeSessionId,
+    loaded,
+    loadingHistorySessions,
+    allWorkbenchRows,
+    expandedProjectPaths,
+    mergeWorktrees,
+    isConversationActive,
+  ]);
+
   useEffect(() => {
     const activeConversationId = state.sidebar?.activeConversationId ?? null;
     if (!loaded || loadingHistorySessions) return;
-    if (selectedProjectDetailsPath) return;
+    if (mainPanelClosed || creatingSession) return;
+    if (selectedProjectDetailsPath || projectDetailsOpenRef.current) return;
     if (!activeConversationId) {
       restoredConversationIdRef.current = null;
       return;
@@ -2620,13 +3068,26 @@ export default function AgentWorkspacePage() {
     if (!isConversationActive(row)) {
       selectConversation(row);
     }
-  }, [loaded, loadingHistorySessions, state.sidebar?.activeConversationId, allWorkbenchRows, selectedProjectDetailsPath]);
+  }, [
+    loaded,
+    loadingHistorySessions,
+    state.sidebar?.activeConversationId,
+    allWorkbenchRows,
+    selectedProjectDetailsPath,
+    mainPanelClosed,
+    creatingSession,
+  ]);
 
   const renderWorkbenchRow = (row: (typeof workbenchRows)[number]) => (
     <ConversationButton
       key={row.id}
       conversation={row}
       active={isConversationActive(row)}
+      locateHighlightKey={
+        locatedConversationHighlight?.conversationId === row.conversationId
+          ? locatedConversationHighlight.key
+          : undefined
+      }
       connected={row.runtime ? getSessionConnected(row.runtime) : false}
       onSelect={() => selectConversation(row)}
       onStart={row.runtime ? () => relaunchSession(row.runtime!) : undefined}
@@ -2641,13 +3102,18 @@ export default function AgentWorkspacePage() {
       onClose={closeCurrentConversation}
       displayMode={getConversationDisplayMode(row)}
       onDisplayModeChange={(mode) => setConversationDisplayMode(row, mode)}
+      onLocateHighlightEnd={clearLocatedConversationHighlight}
     />
   );
   const renderOverflowWorkbenchRow = (row: WorkbenchConversation) => {
     const runtime = row.runtime;
     const transcript = row.transcript;
     const provider = runtime?.provider ?? providerForTranscript(transcript);
-    const displayTitle = transcript ? getHistorySessionTitle(transcript) : runtime ? getSessionDisplayTitle(runtime) : "Untitled conversation";
+    const displayTitle = transcript
+      ? getHistorySessionTitle(transcript, t("common.untitledConversation"))
+      : runtime
+        ? getSessionDisplayTitle(runtime, { shell: t("chat.shell"), newSession: t("chat.newSession") })
+        : t("common.untitledConversation");
     const active = isConversationActive(row);
     const running = isConversationAgentRunning(row);
 
@@ -2680,7 +3146,12 @@ export default function AgentWorkspacePage() {
   const activeSessionRow = activeSession
     ? allWorkbenchRows.find((row) => row.runtime?.id === activeSession.id) ?? null
     : null;
+  const activeSessionProjectPath = activeSession ? getProjectGroupPath(activeSession.cwd, mergeWorktrees) : null;
+  const activeHeaderProjectPath = activeSessionProjectPath ?? activeSession?.cwd ?? null;
   const selectedHistoryConversationId = selectedHistorySession ? getHistoryConversationId(selectedHistorySession) : null;
+  const selectedHistoryProjectPath = selectedHistorySession?.project_path
+    ? getProjectGroupPath(selectedHistorySession.project_path, mergeWorktrees)
+    : null;
   const selectedHistoryRow = selectedHistoryConversationId
     ? allWorkbenchRows.find((row) => row.conversationId === selectedHistoryConversationId)
     : null;
@@ -2689,6 +3160,67 @@ export default function AgentWorkspacePage() {
     (selectedHistoryConversationId
       ? normalizeDisplayMode(state.conversationMeta?.[selectedHistoryConversationId]?.displayMode) ?? "chat"
       : "chat");
+  const currentWorkbenchRow = allWorkbenchRows.find(isConversationActive) ?? null;
+
+  useEffect(() => {
+    const id = pendingScrollToConversationRef.current;
+    if (!id) return;
+    if (scrollConversationRowIntoView(id)) {
+      pendingScrollToConversationRef.current = null;
+      highlightConversationOnArrival(id);
+    }
+  });
+
+  useEffect(() => {
+    return () => {
+      if (locateArrivalFrameRef.current !== null) {
+        cancelAnimationFrame(locateArrivalFrameRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!currentWorkbenchRow || sidebarCollapsed) {
+      setCurrentConversationRowVisible(false);
+      return;
+    }
+
+    const scroller = conversationListScrollRef.current;
+    if (!scroller) {
+      setCurrentConversationRowVisible(false);
+      return;
+    }
+
+    let frame: number | null = null;
+    const conversationId = currentWorkbenchRow.conversationId;
+    const updateVisibility = () => {
+      frame = null;
+      const visible = isConversationRowVisible(conversationId);
+      setCurrentConversationRowVisible((prev) => (prev === visible ? prev : visible));
+    };
+    const scheduleUpdate = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(updateVisibility);
+    };
+
+    scheduleUpdate();
+    scroller.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      scroller.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+    };
+  }, [
+    currentWorkbenchRow?.conversationId,
+    sidebarCollapsed,
+    isConversationRowVisible,
+    sessionListMode,
+    displayFilter,
+    outlineMode,
+    expandedProjectPaths,
+    workbenchRows.length,
+  ]);
 
   useEffect(() => {
     if (!activeSession || selectedHistorySession || mainPanelClosed || creatingSession) return;
@@ -2722,102 +3254,23 @@ export default function AgentWorkspacePage() {
     selectedHistoryRow
       ? getConversationProvider(selectedHistoryRow) ?? "claude"
       : providerForTranscript(selectedHistorySession ?? undefined) ?? "claude";
-  const getProjectGroupMenuSections = (projectPath: string, collapsed: boolean) => {
-    const plainChat = isPlainChatWorkspace(projectPath);
-    return [
-      {
-        title: plainChat ? GENERAL_CHAT_LABEL : "Project",
-        items: [
-          {
-            label: plainChat ? "Open general chat" : "Open project",
-            icon: plainChat ? <MessageSquare className="h-4 w-4" /> : <FolderOpen className="h-4 w-4" />,
-            onSelect: () => selectProjectScope(projectPath),
-          },
-          ...(
-            plainChat
-              ? []
-              : [
-                  {
-                    label: "View details",
-                    icon: <Eye className="h-4 w-4" />,
-                    onSelect: () => openProjectDetails(projectPath),
-                  },
-                ]
-          ),
-        ],
-      },
-      {
-        title: "Conversation",
-        items: [
-          {
-            label: "New conversation",
-            icon: <Plus className="h-4 w-4" />,
-            onSelect: () => openNewSessionForProject(projectPath),
-          },
-        ],
-      },
-      {
-        title: "Manage",
-        items: [
-          ...(
-            plainChat
-              ? []
-              : [
-                  {
-                    label: "Environment",
-                    icon: <Settings2 className="h-4 w-4" />,
-                    onSelect: () => openProjectEnvironmentDialog(projectPath),
-                  },
-                ]
-          ),
-          {
-            label: collapsed ? "Expand group" : "Collapse group",
-            icon: collapsed ? <FolderOpen className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />,
-            onSelect: () => toggleProjectCollapsed(projectPath),
-          },
-        ],
-      },
-    ];
+  const openProjectInEditor = async (path: string) => {
+    try {
+      await invoke("open_in_editor", { path });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(t("workspace.openProjectInEditorFailed", { message }));
+    }
   };
-  const renderProjectGroupMenuItems = (projectPath: string, collapsed: boolean) => (
-    <>
-      <ContextMenuLabel className="truncate text-xs text-muted-foreground">
-        {getWorkbenchProjectName(projectPath)}
-      </ContextMenuLabel>
-      <ContextMenuSeparator />
-      {getProjectGroupMenuSections(projectPath, collapsed).map((section, index) => (
-        <Fragment key={section.title}>
-          {index > 0 && <ContextMenuSeparator />}
-          <ContextMenuLabel className="text-xs text-muted-foreground">{section.title}</ContextMenuLabel>
-          {section.items.map((item) => (
-            <ContextMenuItem key={item.label} onSelect={item.onSelect} className="gap-2">
-              {item.icon}
-              {item.label}
-            </ContextMenuItem>
-          ))}
-        </Fragment>
-      ))}
-    </>
-  );
-  const renderProjectGroupDropdownItems = (projectPath: string, collapsed: boolean) => (
-    <>
-      <DropdownMenuLabel className="truncate text-xs text-muted-foreground">
-        {getWorkbenchProjectName(projectPath)}
-      </DropdownMenuLabel>
-      <DropdownMenuSeparator />
-      {getProjectGroupMenuSections(projectPath, collapsed).map((section, index) => (
-        <Fragment key={section.title}>
-          {index > 0 && <DropdownMenuSeparator />}
-          <DropdownMenuLabel className="text-xs text-muted-foreground">{section.title}</DropdownMenuLabel>
-          {section.items.map((item) => (
-            <DropdownMenuItem key={item.label} onSelect={item.onSelect} className="gap-2">
-              {item.icon}
-              {item.label}
-            </DropdownMenuItem>
-          ))}
-        </Fragment>
-      ))}
-    </>
+  const renderProjectPathMenuItems = (projectPath: string, variant: ProjectPathMenuVariant) => (
+    <ProjectPathMenuItems
+      path={projectPath}
+      variant={variant}
+      isPlainChat={isPlainChatWorkspace(projectPath)}
+      onViewDetails={openProjectDetails}
+      onOpenInEditor={openProjectInEditor}
+      onConfigureRuntimeEnvironment={openProjectEnvironmentDialog}
+    />
   );
   const continueHistorySession = async (session: Session, provider: AgentProvider, prompt: string) => {
     const sourceProvider = providerForTranscript(session);
@@ -2826,8 +3279,9 @@ export default function AgentWorkspacePage() {
     if (nativeResume) {
       void createSession(provider, prompt, {
         cwd: session.project_path,
-        title: getHistorySessionTitle(session),
+        title: getHistorySessionTitle(session, t("common.untitledConversation")),
         resumeHistorySession: session,
+        focusRuntime: true,
       });
       return;
     }
@@ -2835,31 +3289,35 @@ export default function AgentWorkspacePage() {
     if (provider === "terminal") {
       void createSession(provider, prompt, {
         cwd: session.project_path,
-        title: getHistorySessionTitle(session),
+        title: getHistorySessionTitle(session, t("common.untitledConversation")),
       });
       return;
     }
 
-    const historyTitle = getHistorySessionTitle(session);
-    let forkPrompt: string;
+    const historyTitle = getHistorySessionTitle(session, t("common.untitledConversation"));
+    let runtimeFork: SessionRuntimeFork;
     try {
-      const forkContext = await invoke<SessionHandoff>("generate_session_handoff_prompt", {
+      runtimeFork = await invoke<SessionRuntimeFork>("create_session_runtime_fork", {
         projectId: session.project_id,
         sessionId: session.id,
         targetProvider: provider,
-        userPrompt: prompt,
       });
-      forkPrompt = forkContext.prompt;
-      toast.info(`Prepared fork for ${labelForProvider(provider)}`);
+      toast.info(t("workspace.runtimeSwitchPrepared", { provider: labelForProvider(provider) }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`Could not prepare fork: ${message}`);
+      toast.error(t("workspace.runtimeSwitchFailed", { message }));
       return;
     }
 
-    void createSession(provider, forkPrompt, {
-      cwd: session.project_path,
-      title: `${labelForProvider(provider)} fork: ${historyTitle}`.slice(0, 80),
+    setPendingRuntimeForkSessions((prev) => ({
+      ...prev,
+      [getHistoryConversationId(runtimeFork.targetSession)]: runtimeFork.targetSession,
+    }));
+    void createSession(provider, prompt, {
+      cwd: runtimeFork.projectPath,
+      title: historyTitle.slice(0, 80),
+      resumeHistorySession: runtimeFork.targetSession,
+      focusRuntime: true,
       fork: {
         parentSessionId: session.id,
         fromMessageId: session.id,
@@ -2868,7 +3326,7 @@ export default function AgentWorkspacePage() {
     });
   };
   const forkHistorySession = (payload: SessionForkPayload) => {
-    const title = `Fork: ${getHistorySessionTitle(payload.session)}`.slice(0, 80);
+    const title = t("workspace.forkTitle", { title: getHistorySessionTitle(payload.session, t("common.untitledConversation")) }).slice(0, 80);
     const provider = providerForTranscript(payload.session) ?? "claude";
     const prompt = [
       "Continue from this forked conversation context.",
@@ -2885,73 +3343,122 @@ export default function AgentWorkspacePage() {
       fork: {
         parentSessionId: payload.session.id,
         fromMessageId: payload.messageId,
-        fromTitle: getHistorySessionTitle(payload.session),
+        fromTitle: getHistorySessionTitle(payload.session, t("common.untitledConversation")),
       },
     });
   };
+  const locateCurrentConversation = () => {
+    if (!currentWorkbenchRow) return;
+    pendingScrollToConversationRef.current = currentWorkbenchRow.conversationId;
+    openRouteConversation(currentWorkbenchRow);
+    if (scrollConversationRowIntoView(currentWorkbenchRow.conversationId)) {
+      pendingScrollToConversationRef.current = null;
+      highlightConversationOnArrival(currentWorkbenchRow.conversationId);
+      return;
+    }
+    requestAnimationFrame(() => {
+      if (scrollConversationRowIntoView(currentWorkbenchRow.conversationId)) {
+        pendingScrollToConversationRef.current = null;
+        highlightConversationOnArrival(currentWorkbenchRow.conversationId);
+      }
+    });
+  };
+  const locateButtonSubtle = Boolean(currentWorkbenchRow && currentConversationRowVisible);
+  const locateButtonTitle = locateButtonSubtle
+    ? t("workspace.currentConversationVisible")
+    : t("workspace.locateCurrentConversation");
+  const locateButtonClass = `inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+    locateButtonSubtle
+      ? "bg-background text-muted-foreground/40 hover:bg-card-alt/60 hover:text-muted-foreground"
+      : "bg-background text-primary hover:bg-primary/10 hover:text-primary"
+  }`;
 
   return (
     <div className="flex h-full min-h-0 bg-background">
-      <section
-        className="relative flex shrink-0 flex-col border-r border-border bg-card"
-        style={{ width: sessionsSidebarWidth }}
-      >
-        <div className="border-b border-border px-4 py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0" title={workspacePath ?? undefined}>
-              <div className="flex min-w-0 items-center gap-2">
-                <h1 className="truncate font-serif text-lg font-semibold text-foreground">{sessionsHeaderTitle}</h1>
-                {saving ? (
-                  <span className="shrink-0 rounded-md bg-card-alt px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
-                    Saving
-                  </span>
-                ) : null}
+      {!sidebarCollapsed && (
+        <section
+          className="relative flex shrink-0 flex-col border-r border-border bg-card"
+          style={{ width: sessionsSidebarWidth }}
+        >
+          <div className="border-b border-border px-4 py-3">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0" title={workspacePath ?? undefined}>
+                <div className="flex min-w-0 items-center gap-2">
+                  <h1 className="flex min-w-0 items-baseline gap-1.5 font-serif text-lg font-semibold text-foreground">
+                    <span className="truncate">{sessionsHeaderTitle}</span>
+                    {sessionsHeaderCount !== null ? (
+                      <span className="shrink-0 text-sm font-medium tabular-nums text-muted-foreground">
+                        ({formatNumber(sessionsHeaderCount)})
+                      </span>
+                    ) : null}
+                  </h1>
+                  {saving ? (
+                    <span className="shrink-0 rounded-md bg-card-alt px-1.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      {t("workspace.saving")}
+                    </span>
+                  ) : null}
+                </div>
               </div>
-              <p className="truncate text-xs text-muted-foreground">{sessionsHeaderSummary}</p>
-            </div>
-            <div className="flex shrink-0 items-center gap-1">
-              <WorkbenchOutlineMenu
-                outlineMode={outlineMode}
-                onOutlineModeChange={setPersistedOutlineMode}
-                mergeWorktrees={mergeWorktrees}
-                onMergeWorktreesChange={setPersistedMergeWorktrees}
-                showProjectNewConversation={showProjectNewConversation}
-                onShowProjectNewConversationChange={setPersistedShowProjectNewConversation}
-                displayFilter={displayFilter}
-                onDisplayFilterChange={setPersistedDisplayFilter}
-                sortMode={sortMode}
-                onSortModeChange={setPersistedSortMode}
-                reorderGroups={reorderGroups}
-                onReorderGroupsChange={setPersistedReorderGroups}
-              />
-              <button
-                type="button"
-                onClick={openNewSession}
-                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border transition-colors ${
-                  showNewSessionView
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-background text-muted-foreground hover:bg-card-alt hover:text-foreground"
-                }`}
-                title="New conversation"
-                aria-label="New conversation"
-              >
-                <Plus className="h-4 w-4" />
-              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                <button
+                  type="button"
+                  onClick={locateCurrentConversation}
+                  disabled={!currentWorkbenchRow}
+                  className={locateButtonClass}
+                  title={locateButtonTitle}
+                  aria-label={locateButtonTitle}
+                >
+                  <LocateFixed className="h-4 w-4" />
+                </button>
+                <WorkbenchOutlineMenu
+                  outlineMode={outlineMode}
+                  onOutlineModeChange={setPersistedOutlineMode}
+                  mergeWorktrees={mergeWorktrees}
+                  onMergeWorktreesChange={setPersistedMergeWorktrees}
+                  showProjectNewConversation={showProjectNewConversation}
+                  onShowProjectNewConversationChange={setPersistedShowProjectNewConversation}
+                  displayFilter={displayFilter}
+                  onDisplayFilterChange={setPersistedDisplayFilter}
+                  sortMode={sortMode}
+                  onSortModeChange={setPersistedSortMode}
+                  reorderGroups={reorderGroups}
+                  onReorderGroupsChange={setPersistedReorderGroups}
+                />
+                <button
+                  type="button"
+                  onClick={openNewSession}
+                  className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-border transition-colors ${
+                    showNewSessionView
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-background text-muted-foreground hover:bg-card-alt hover:text-foreground"
+                  }`}
+                  title={t("workspace.newConversation")}
+                  aria-label={t("workspace.newConversation")}
+                >
+                  <Plus className="h-4 w-4" />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div
-          className={`min-h-0 flex-1 overflow-y-auto ${
-            loaded && workbenchRows.length > 0 && outlineMode === "project" ? "p-0" : "p-3"
-          }`}
-        >
-          {!loaded ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">Loading...</div>
+          <div
+            ref={conversationListScrollRef}
+            className={`min-h-0 flex-1 overflow-y-auto ${
+              loaded && workbenchRows.length > 0 && outlineMode === "project" ? "p-0" : "p-3"
+            }`}
+          >
+          {conversationListInitialLoading ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              {!loaded ? t("common.loading") : t("workspace.loadingConversations")}
+            </div>
           ) : workbenchRows.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-card-alt/40 px-4 py-8 text-center">
               <div className="text-sm text-muted-foreground">
-                {loadingHistorySessions ? "Loading conversations..." : sessionListMode === "archived" ? "No archived conversations." : "No conversations yet."}
+                {loadingHistorySessions
+                  ? t("workspace.loadingConversations")
+                  : sessionListMode === "archived"
+                  ? t("settings.noArchivedConversations")
+                  : t("workspace.noConversationsYet")}
               </div>
               {sessionListMode !== "archived" && (
                 <button
@@ -2960,14 +3467,14 @@ export default function AgentWorkspacePage() {
                   className="mt-3 inline-flex h-8 items-center gap-2 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
                 >
                   <Plus className="h-4 w-4" />
-                  New conversation
+                  {t("workspace.newConversation")}
                 </button>
               )}
             </div>
           ) : outlineMode === "recent" ? (
             <div className="space-y-2">
               <div className="flex items-center justify-between px-1.5 text-xs font-medium text-muted-foreground">
-                <span>All conversations</span>
+                <span>{t("workspace.allConversations")}</span>
                 <span>{workbenchRows.length}</span>
               </div>
               <div className="space-y-px">
@@ -3007,7 +3514,7 @@ export default function AgentWorkspacePage() {
                             onClick={() => toggleProjectCollapsed(project.path)}
                             className="flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 self-stretch text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
                             aria-expanded={!collapsed}
-                            aria-label={`${collapsed ? "Expand" : "Collapse"} ${getWorkbenchProjectName(project.path)}`}
+                            aria-label={`${collapsed ? t("common.expand") : t("common.collapse")} ${getWorkbenchProjectName(project.path)}`}
                           >
                             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center text-muted-foreground transition-colors group-hover:text-foreground">
                               {collapsed ? <ChevronRight className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
@@ -3017,41 +3524,52 @@ export default function AgentWorkspacePage() {
                             </span>
                             {stats?.running ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" /> : null}
                           </button>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <button
-                                type="button"
-                                className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
-                                title="Project actions"
-                                aria-label="Project actions"
-                              >
-                                <MoreHorizontal className="h-4 w-4" />
+                          <div className="flex shrink-0 items-center gap-1">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button
+                                  type="button"
+                                  className="pointer-events-none inline-flex h-6 w-0 shrink-0 items-center justify-center overflow-hidden rounded-md text-muted-foreground opacity-0 transition-[width,opacity,background-color,color] duration-150 hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:pointer-events-auto group-hover:w-6 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:w-6 group-focus-within:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:w-6 data-[state=open]:opacity-100"
+                                  title={t("workspace.projectActions")}
+                                  aria-label={t("workspace.projectActions")}
+                                >
+                                  <MoreHorizontal className="h-4 w-4" />
                               </button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-56">
-                              {renderProjectGroupDropdownItems(project.path, collapsed)}
+                              {renderProjectPathMenuItems(project.path, "dropdown")}
                             </DropdownMenuContent>
                           </DropdownMenu>
-                        </div>
-                      </ContextMenuTrigger>
-                      <ContextMenuContent className="w-56" onCloseAutoFocus={(event) => event.preventDefault()}>
-                        {renderProjectGroupMenuItems(project.path, collapsed)}
-                      </ContextMenuContent>
+                            <button
+                              type="button"
+                              onClick={() => openNewSessionForProject(project.path)}
+                              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground opacity-70 transition-[opacity,background-color,color] hover:bg-card-alt hover:text-foreground hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:opacity-100"
+                              title={t("workspace.newConversationInProject", { project: getWorkbenchProjectName(project.path) })}
+                              aria-label={t("workspace.newConversationInProject", { project: getWorkbenchProjectName(project.path) })}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          </div>
+                      </div>
+                    </ContextMenuTrigger>
+                    <ContextMenuContent className="w-56" onCloseAutoFocus={(event) => event.preventDefault()}>
+                      {renderProjectPathMenuItems(project.path, "context")}
+                    </ContextMenuContent>
                     </ContextMenu>
                     {!collapsed && (
-                      <div className="ml-5 space-y-px border-l border-border py-0.5 pl-1">
+                      <div className="ml-5 space-y-px border-l border-border py-0.5 pl-1 pr-2.5">
                         {(showProjectNewConversation || project.rows.length === 0) && (
                           <button
                             type="button"
                             onClick={() => openNewSessionForProject(project.path)}
                             className="group/new-conversation flex h-[31px] w-full items-center gap-2 rounded-lg pl-2.5 pr-2 text-left text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                            title={`New conversation in ${getWorkbenchProjectName(project.path)}`}
-                            aria-label={`New conversation in ${getWorkbenchProjectName(project.path)}`}
+                            title={t("workspace.newConversationInProject", { project: getWorkbenchProjectName(project.path) })}
+                            aria-label={t("workspace.newConversationInProject", { project: getWorkbenchProjectName(project.path) })}
                           >
                             <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-card-alt text-muted-foreground transition-colors group-hover/new-conversation:text-foreground">
                               <Plus className="h-3.5 w-3.5" />
                             </span>
-                            <span className="min-w-0 flex-1 truncate text-sm font-medium">New conversation</span>
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium">{t("workspace.newConversation")}</span>
                           </button>
                         )}
                         {project.rows.length > 0 && visibleRows.map(renderWorkbenchRow)}
@@ -3061,10 +3579,10 @@ export default function AgentWorkspacePage() {
                               <button
                                 type="button"
                                 className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
-                                title={`${overflowRows.length} more conversations`}
+                                title={t("workspace.moreConversationCount", { count: overflowRows.length })}
                               >
                                 <MoreHorizontal className="h-4 w-4 shrink-0" />
-                                <span className="min-w-0 flex-1 truncate">More conversations</span>
+                                <span className="min-w-0 flex-1 truncate">{t("workspace.moreConversations")}</span>
                                 <span className="shrink-0 text-xs">{overflowRows.length}</span>
                               </button>
                             </DropdownMenuTrigger>
@@ -3088,7 +3606,7 @@ export default function AgentWorkspacePage() {
         <div
           role="separator"
           aria-orientation="vertical"
-          aria-label="Resize sessions sidebar"
+          aria-label={t("workspace.resizeSessionsSidebar")}
           aria-valuemin={SESSIONS_SIDEBAR_MIN_WIDTH}
           aria-valuemax={SESSIONS_SIDEBAR_MAX_WIDTH}
           aria-valuenow={Math.round(sessionsSidebarWidth)}
@@ -3106,22 +3624,29 @@ export default function AgentWorkspacePage() {
             );
           }}
           className="absolute inset-y-0 -right-1 z-10 w-2 cursor-col-resize outline-none transition-colors before:absolute before:inset-y-0 before:left-1/2 before:w-px before:-translate-x-1/2 before:bg-border before:transition-colors hover:bg-primary/5 hover:before:bg-primary/50 focus-visible:bg-primary/10 focus-visible:before:bg-primary"
-          title="Drag to resize"
+          title={t("environment.dragToResize")}
         />
-      </section>
+        </section>
+      )}
 
       <main className="relative flex min-w-0 flex-1 flex-col">
-        {showProjectDetailsView && selectedProjectDetails ? (
-          <ProjectDetailsPanel
-            projectPath={selectedProjectDetails.path}
-            project={selectedProjectDetails.project}
-            conversations={selectedProjectDetails.conversations}
-            stats={selectedProjectDetails.stats}
-            onClose={closeCurrentConversation}
-            onNewConversation={() => openNewSessionForProject(selectedProjectDetails.path)}
-            onEnvironment={() => openProjectEnvironmentDialog(selectedProjectDetails.path)}
-            onSelectConversation={selectConversation}
-          />
+        {showProjectDetailsView ? (
+          selectedProjectDetails ? (
+            <ProjectDetailsPanel
+              projectPath={selectedProjectDetails.path}
+              project={selectedProjectDetails.project}
+              conversations={selectedProjectDetails.conversations}
+              stats={selectedProjectDetails.stats}
+              onClose={closeCurrentConversation}
+              onNewConversation={() => openNewSessionForProject(selectedProjectDetails.path)}
+              onEnvironment={() => openProjectEnvironmentDialog(selectedProjectDetails.path)}
+              onSelectConversation={selectConversation}
+            />
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center bg-background px-6 text-sm text-muted-foreground">
+              {t("common.loading")}
+            </div>
+          )
         ) : showNewSessionView ? (
           <div className="flex min-h-0 flex-1 overflow-y-auto bg-background px-6 py-10">
             <div className="m-auto flex w-full max-w-3xl flex-col">
@@ -3134,18 +3659,18 @@ export default function AgentWorkspacePage() {
                   }}
                   disabled={!selectedProjectPath || !primaryEnvironmentAction || !primaryEnvironmentConfig}
                   className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground disabled:opacity-40"
-                >
-                  <Terminal className="h-4 w-4" />
-                  Run
-                </button>
+	                >
+	                  <Terminal className="h-4 w-4" />
+	                  {t("environment.run")}
+	                </button>
                 <button
                   type="button"
                   onClick={() => openEnvironmentDialog(selectedProjectPath ? "project" : "global")}
                   className="inline-flex h-9 items-center gap-2 rounded-lg border border-border bg-card px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground disabled:opacity-40"
-                >
-                  <Settings2 className="h-4 w-4" />
-                  Environment
-                </button>
+	                >
+	                  <Settings2 className="h-4 w-4" />
+	                  {t("common.environment")}
+	                </button>
               </div>
               <AgentComposer
                 cwd={selectedCwd}
@@ -3174,6 +3699,10 @@ export default function AgentWorkspacePage() {
         ) : selectedHistorySession ? (
           <SessionDetail
             session={selectedHistorySession}
+            projectPath={selectedHistoryProjectPath}
+            projectPathMenuItems={
+              selectedHistoryProjectPath ? renderProjectPathMenuItems(selectedHistoryProjectPath, "context") : undefined
+            }
             onClose={closeCurrentConversation}
             onFork={forkHistorySession}
             displayMode={selectedHistoryDisplayMode}
@@ -3185,7 +3714,7 @@ export default function AgentWorkspacePage() {
                 hasProjectPath={Boolean(selectedHistorySession.project_path && !isPlainChatWorkspace(selectedHistorySession.project_path))}
                 pathOptions={composerPathOptions}
                 variant="dock"
-                placeholder="Message this conversation"
+                placeholder={t("workspace.messageConversation")}
                 defaultProvider={selectedHistoryDefaultProvider}
                 providerContextKey={selectedHistoryConversationId ?? selectedHistorySession.id}
                 onPickFolder={pickFolder}
@@ -3197,17 +3726,20 @@ export default function AgentWorkspacePage() {
         ) : activeSession ? (
           <>
             <SessionDetailHeader
-              projectPath={activeSession.cwd}
-              titlePrefix={<ProviderIcon provider={activeSession.provider} />}
-              title={
-                <h2 className="min-w-0 flex-1 truncate font-serif text-base font-semibold text-foreground">
-                  {getSessionDisplayTitle(activeSession)}
-                </h2>
+              projectPath={activeHeaderProjectPath}
+              projectPathMenuItems={
+                activeHeaderProjectPath ? renderProjectPathMenuItems(activeHeaderProjectPath, "context") : undefined
               }
+              titlePrefix={<ProviderIcon provider={activeSession.provider} />}
+	              title={
+	                <h2 className="min-w-0 flex-1 truncate font-serif text-base font-semibold text-foreground">
+	                  {getSessionDisplayTitle(activeSession, { shell: t("chat.shell"), newSession: t("chat.newSession") })}
+	                </h2>
+	              }
               actions={
                 <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
-                    <button className="p-1.5 rounded-lg text-muted-foreground hover:bg-card-alt" title="Conversation actions">
+                    <button className="p-1.5 rounded-lg text-muted-foreground hover:bg-card-alt" title={t("workspace.conversationActions")}>
                       <MoreHorizontal className="h-4 w-4" />
                     </button>
                   </DropdownMenuTrigger>
@@ -3216,7 +3748,7 @@ export default function AgentWorkspacePage() {
                       <SessionDetailDropdownMenuItems
                         projectId={activeSessionRow.transcript.project_id}
                         sessionId={activeSessionRow.transcript.id}
-                        title={getHistorySessionTitle(activeSessionRow.transcript)}
+	                        title={getHistorySessionTitle(activeSessionRow.transcript, t("common.untitledConversation"))}
                         source={activeSessionRow.transcript.source}
                         projectPath={activeSessionRow.transcript.project_path ?? activeSession.cwd}
                         onExport={() => openSessionExportDialog(activeSessionRow.transcript!)}
@@ -3225,7 +3757,7 @@ export default function AgentWorkspacePage() {
                         onDisplayModeChange={(mode) => setConversationDisplayMode(activeSessionRow, mode)}
                         onOpenConversation={() => setConversationDisplayMode(activeSessionRow, "chat")}
                         onEnvironment={() => openConversationEnvironmentDialog(activeSessionRow)}
-                        environmentActionLabel={primaryEnvironmentAction ? `Run ${primaryEnvironmentAction.name || "environment action"}` : "Run environment action"}
+	                        environmentActionLabel={t("environment.runAction", { name: primaryEnvironmentAction?.name || t("environment.actionFallback") })}
                         environmentActionDisabled={!primaryEnvironmentAction || !primaryEnvironmentConfig}
                         onRunEnvironmentAction={() => {
                           if (!primaryEnvironmentAction || !primaryEnvironmentConfig) return;
@@ -3250,10 +3782,10 @@ export default function AgentWorkspacePage() {
                     ) : (
                       <>
                         {activeSession.archived ? (
-                          <DropdownMenuItem onClick={() => restoreSession(activeSession)} className="gap-2">
-                            <ArchiveRestore className="h-4 w-4" />
-                            Restore conversation
-                          </DropdownMenuItem>
+	                          <DropdownMenuItem onClick={() => restoreSession(activeSession)} className="gap-2">
+	                            <ArchiveRestore className="h-4 w-4" />
+	                            {t("workspace.restoreConversation")}
+	                          </DropdownMenuItem>
                         ) : (
                           <>
                             <DropdownMenuItem
@@ -3264,42 +3796,42 @@ export default function AgentWorkspacePage() {
                               }}
                               className="gap-2"
                             >
-                              <Terminal className="h-4 w-4" />
-                              {primaryEnvironmentAction ? `Run ${primaryEnvironmentAction.name || "environment action"}` : "Run environment action"}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => openEnvironmentDialog("session")} className="gap-2">
-                              <Settings2 className="h-4 w-4" />
-                              Environment
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => relaunchSession(activeSession)} className="gap-2">
-                              <RotateCcw className="h-4 w-4" />
-                              Run again
-                            </DropdownMenuItem>
+	                              <Terminal className="h-4 w-4" />
+	                              {t("environment.runAction", { name: primaryEnvironmentAction?.name || t("environment.actionFallback") })}
+	                            </DropdownMenuItem>
+	                            <DropdownMenuItem onClick={() => openEnvironmentDialog("session")} className="gap-2">
+	                              <Settings2 className="h-4 w-4" />
+	                              {t("common.environment")}
+	                            </DropdownMenuItem>
+	                            <DropdownMenuItem onClick={() => relaunchSession(activeSession)} className="gap-2">
+	                              <RotateCcw className="h-4 w-4" />
+	                              {t("workspace.runAgain")}
+	                            </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => {
                                 if (activeConnected) stopSession(activeSession);
                                 else relaunchSession(activeSession);
                               }}
                               className="gap-2"
-                            >
-                              {activeConnected ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                              {activeConnected ? "Stop runtime" : "Start runtime"}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => markNeedsReview(activeSession)} className="gap-2">
-                              <AlertCircle className="h-4 w-4" />
-                              Mark needs review
-                            </DropdownMenuItem>
-                            <DropdownMenuItem onClick={() => archiveSession(activeSession)} className="gap-2">
-                              <Archive className="h-4 w-4" />
-                              Archive
-                            </DropdownMenuItem>
+	                            >
+	                              {activeConnected ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+	                              {activeConnected ? t("workspace.stopRuntime") : t("workspace.startRuntime")}
+	                            </DropdownMenuItem>
+	                            <DropdownMenuItem onClick={() => markNeedsReview(activeSession)} className="gap-2">
+	                              <AlertCircle className="h-4 w-4" />
+	                              {t("workspace.markNeedsReview")}
+	                            </DropdownMenuItem>
+	                            <DropdownMenuItem onClick={() => archiveSession(activeSession)} className="gap-2">
+	                              <Archive className="h-4 w-4" />
+	                              {t("workspace.archiveConversation")}
+	                            </DropdownMenuItem>
                           </>
                         )}
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={closeCurrentConversation} className="gap-2">
-                          <X className="h-4 w-4" />
-                          Close panel
-                        </DropdownMenuItem>
+	                        <DropdownMenuItem onClick={closeCurrentConversation} className="gap-2">
+	                          <X className="h-4 w-4" />
+	                          {t("workspace.closePanel")}
+	                        </DropdownMenuItem>
                       </>
                     )}
                   </DropdownMenuContent>
@@ -3413,7 +3945,7 @@ function getConversationProvider(row: WorkbenchConversation) {
   return row.runtime?.provider ?? providerForTranscript(row.transcript);
 }
 
-function getConversationSourceLabel(row: WorkbenchConversation) {
+function getConversationSourceLabel(row: WorkbenchConversation, t?: TranslateFn) {
   const provider = getConversationProvider(row);
   if (provider) return labelForProvider(provider);
   if (row.transcript?.source === "codex") return "Codex";
@@ -3421,20 +3953,20 @@ function getConversationSourceLabel(row: WorkbenchConversation) {
   if (row.transcript?.source === "app-web") return "Claude Web";
   if (row.transcript?.source === "app-cowork") return "Claude Cowork";
   if (row.transcript?.source === "cli") return "Claude CLI";
-  return "History";
+  return t ? t("session.history") : "History";
 }
 
 function getConversationCreatedAt(row: WorkbenchConversation) {
   return row.transcript?.created_at ? row.transcript.created_at * 1000 : row.runtime?.createdAt ?? row.timestamp;
 }
 
-function getConversationStatusLabel(row: WorkbenchConversation) {
-  if (row.archived) return "archived";
-  if (isConversationAgentRunning(row)) return "agent running";
-  if (row.runtime) return getAgentStatusLabel(row.runtime);
-  if (row.needsReview) return "needs review";
-  if (row.unread) return "unread";
-  return "history";
+function getConversationStatusLabel(row: WorkbenchConversation, t?: TranslateFn) {
+  if (row.archived) return t ? t("workspace.archived") : "archived";
+  if (isConversationAgentRunning(row)) return t ? t("workspace.agentRunning") : "agent running";
+  if (row.runtime) return getAgentStatusLabel(row.runtime, t);
+  if (row.needsReview) return t ? t("workspace.needsReview") : "needs review";
+  if (row.unread) return t ? t("workspace.unread") : "unread";
+  return t ? t("workspace.history") : "history";
 }
 
 function ProjectDetailsPanel({
@@ -3456,6 +3988,7 @@ function ProjectDetailsPanel({
   onEnvironment: () => void;
   onSelectConversation: (row: WorkbenchConversation) => void;
 }) {
+  const { t } = useI18n();
   const analysis = useMemo(() => {
     const nowMs = Date.now();
     const sevenDaysAgo = nowMs - 7 * 24 * 60 * 60 * 1000;
@@ -3479,7 +4012,7 @@ function ProjectDetailsPanel({
     let cost = 0;
 
     for (const row of conversations) {
-      const providerLabel = getConversationSourceLabel(row);
+      const providerLabel = getConversationSourceLabel(row, t);
       providerCounts.set(providerLabel, (providerCounts.get(providerLabel) ?? 0) + 1);
       createdTimestamps.push(getConversationCreatedAt(row));
       if (row.archived) archived += 1;
@@ -3528,7 +4061,7 @@ function ProjectDetailsPanel({
       firstActivity,
       providerEntries,
     };
-  }, [conversations, project?.last_active]);
+  }, [conversations, project?.last_active, t]);
 
   const statSource = stats ?? {
     active: analysis.active,
@@ -3559,13 +4092,13 @@ function ProjectDetailsPanel({
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <IconButton title="New conversation" onClick={onNewConversation}>
+          <IconButton title={t("workspace.newConversation")} onClick={onNewConversation}>
             <Plus className="h-4 w-4" />
           </IconButton>
-          <IconButton title="Environment" onClick={onEnvironment}>
+          <IconButton title={t("common.environment")} onClick={onEnvironment}>
             <Settings2 className="h-4 w-4" />
           </IconButton>
-          <IconButton title="Close details" onClick={onClose}>
+          <IconButton title={t("workspace.closeDetails")} onClick={onClose}>
             <X className="h-4 w-4" />
           </IconButton>
         </div>
@@ -3575,27 +4108,27 @@ function ProjectDetailsPanel({
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
           <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <ProjectMetric
-              label="Sessions"
+              label={t("workspace.sessions")}
               value={formatNumber(analysis.total)}
-              detail={`${formatNumber(statSource.active)} active / ${formatNumber(statSource.archived)} archived`}
+              detail={t("workspace.activeArchived", { active: formatNumber(statSource.active), archived: formatNumber(statSource.archived) })}
               icon={<MessageSquare className="h-4 w-4" />}
             />
             <ProjectMetric
-              label="Runtime"
+              label={t("common.runtime")}
               value={formatNumber(analysis.runtime)}
-              detail={`${formatNumber(statSource.running)} running`}
+              detail={t("workspace.runtimeCount", { count: formatNumber(statSource.running) })}
               icon={<Terminal className="h-4 w-4" />}
             />
             <ProjectMetric
-              label="Review"
+              label={t("workspace.needsReview")}
               value={formatNumber(statSource.needsReview)}
-              detail={`${formatNumber(statSource.unread)} unread`}
+              detail={t("workspace.unreadCount", { count: formatNumber(statSource.unread) })}
               icon={<AlertCircle className="h-4 w-4" />}
             />
             <ProjectMetric
-              label="History"
+              label={t("session.history")}
               value={formatNumber(analysis.history)}
-              detail={`${formatNumber(analysis.rounds)} rounds / ${formatNumber(analysis.messages)} messages`}
+              detail={t("workspace.roundsMessages", { rounds: formatNumber(analysis.rounds), messages: formatNumber(analysis.messages) })}
               icon={<Archive className="h-4 w-4" />}
             />
           </section>
@@ -3603,31 +4136,31 @@ function ProjectDetailsPanel({
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]">
             <section className="rounded-xl border border-border bg-card">
               <div className="border-b border-border px-4 py-3">
-                <h3 className="font-serif text-base font-semibold text-foreground">Project Information</h3>
+                <h3 className="font-serif text-base font-semibold text-foreground">{t("workspace.projectInformation")}</h3>
               </div>
               <div className="grid gap-0 divide-y divide-border">
-                <ProjectInfoRow label="Path" value={projectPath} mono />
-                <ProjectInfoRow label="Last activity" value={formatDateTime(analysis.lastActivity)} detail={formatRelativeTime(analysis.lastActivity)} />
-                <ProjectInfoRow label="First session" value={formatDateTime(analysis.firstActivity)} />
-                <ProjectInfoRow label="Project index" value={project ? `${formatNumber(project.session_count)} sessions` : "Not indexed"} />
+                <ProjectInfoRow label={t("workspace.path")} value={projectPath} mono />
+                <ProjectInfoRow label={t("workspace.lastActivity")} value={formatDateTime(analysis.lastActivity, t)} detail={formatRelativeTime(analysis.lastActivity, t)} />
+                <ProjectInfoRow label={t("workspace.firstSession")} value={formatDateTime(analysis.firstActivity, t)} />
+                <ProjectInfoRow label={t("workspace.projectIndex")} value={project ? t("chat.sessionCount", { count: formatNumber(project.session_count) }) : t("workspace.notIndexed")} />
               </div>
             </section>
 
             <section className="rounded-xl border border-border bg-card">
               <div className="border-b border-border px-4 py-3">
-                <h3 className="font-serif text-base font-semibold text-foreground">Session Analysis</h3>
+                <h3 className="font-serif text-base font-semibold text-foreground">{t("workspace.sessionAnalysis")}</h3>
               </div>
               <div className="space-y-4 px-4 py-4">
                 <div className="grid grid-cols-2 gap-3 text-sm">
-                  <ProjectAnalysisItem label="Last 7 days" value={formatNumber(analysis.recent)} />
-                  <ProjectAnalysisItem label="Older than 30 days" value={formatNumber(analysis.stale)} />
-                  <ProjectAnalysisItem label="Input tokens" value={formatNumber(analysis.inputTokens)} />
-                  <ProjectAnalysisItem label="Output tokens" value={formatNumber(analysis.outputTokens)} />
-                  <ProjectAnalysisItem label="Context tokens" value={formatNumber(analysis.contextTokens)} />
-                  <ProjectAnalysisItem label="Cost" value={formatCost(analysis.cost)} />
+                  <ProjectAnalysisItem label={t("workspace.last7Days")} value={formatNumber(analysis.recent)} />
+                  <ProjectAnalysisItem label={t("workspace.olderThan30Days")} value={formatNumber(analysis.stale)} />
+                  <ProjectAnalysisItem label={t("workspace.inputTokens")} value={formatNumber(analysis.inputTokens)} />
+                  <ProjectAnalysisItem label={t("workspace.outputTokens")} value={formatNumber(analysis.outputTokens)} />
+                  <ProjectAnalysisItem label={t("workspace.contextTokens")} value={formatNumber(analysis.contextTokens)} />
+                  <ProjectAnalysisItem label={t("workspace.cost")} value={formatCost(analysis.cost)} />
                 </div>
                 <div>
-                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Provider Mix</div>
+                  <div className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">{t("workspace.providerMix")}</div>
                   <div className="flex flex-wrap gap-2">
                     {analysis.providerEntries.length > 0 ? (
                       analysis.providerEntries.map(([label, count]) => (
@@ -3640,7 +4173,7 @@ function ProjectDetailsPanel({
                         </span>
                       ))
                     ) : (
-                      <span className="text-sm text-muted-foreground">No sessions</span>
+                      <span className="text-sm text-muted-foreground">{t("common.noSessions")}</span>
                     )}
                   </div>
                 </div>
@@ -3650,15 +4183,19 @@ function ProjectDetailsPanel({
 
           <section className="rounded-xl border border-border bg-card">
             <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-              <h3 className="font-serif text-base font-semibold text-foreground">All Sessions</h3>
+              <h3 className="font-serif text-base font-semibold text-foreground">{t("workspace.allSessions")}</h3>
               <span className="text-xs font-medium tabular-nums text-muted-foreground">{formatNumber(analysis.total)}</span>
             </div>
             <div className="divide-y divide-border">
               {conversations.length > 0 ? (
                 conversations.map((row) => {
                   const provider = getConversationProvider(row);
-                  const status = getConversationStatusLabel(row);
-                  const title = getConversationTitle(row);
+                  const status = getConversationStatusLabel(row, t);
+                  const title = getConversationTitle(row, {
+                    untitledConversation: t("common.untitledConversation"),
+                    shell: t("chat.shell"),
+                    newSession: t("chat.newSession"),
+                  });
                   return (
                     <button
                       key={row.id}
@@ -3666,7 +4203,7 @@ function ProjectDetailsPanel({
                       onClick={() => onSelectConversation(row)}
                       disabled={row.archived}
                       className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-card-alt disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
-                      title={row.archived ? "Archived session" : title}
+                      title={row.archived ? t("workspace.archivedSession") : title}
                     >
                       {provider ? (
                         <ProviderIcon provider={provider} />
@@ -3678,27 +4215,27 @@ function ProjectDetailsPanel({
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-sm font-medium text-foreground">{title}</div>
                         <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                          <span>{getConversationSourceLabel(row)}</span>
+                          <span>{getConversationSourceLabel(row, t)}</span>
                           <span>/</span>
                           <span>{status}</span>
                           {row.transcript ? (
                             <>
                               <span>/</span>
-                              <span>{formatNumber(row.transcript.rounds)} rounds</span>
+                              <span>{t("chat.rounds", { count: formatNumber(row.transcript.rounds) })}</span>
                               <span>/</span>
-                              <span>{formatNumber(row.transcript.message_count)} messages</span>
+                              <span>{t("chat.messagesTotal", { count: formatNumber(row.transcript.message_count) })}</span>
                             </>
                           ) : null}
                         </div>
                       </div>
                       <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                        {formatRelativeTime(row.timestamp)}
+                        {formatRelativeTime(row.timestamp, t)}
                       </span>
                     </button>
                   );
                 })
               ) : (
-                <div className="px-4 py-8 text-center text-sm text-muted-foreground">No sessions</div>
+                <div className="px-4 py-8 text-center text-sm text-muted-foreground">{t("common.noSessions")}</div>
               )}
             </div>
           </section>
@@ -3810,9 +4347,10 @@ function WorkbenchOutlineMenu({
   reorderGroups: boolean;
   onReorderGroupsChange: (reorder: boolean) => void;
 }) {
-  const outlineLabel = outlineMode === "project" ? "By project" : "None";
-  const sortLabel = sortMode === "last-modified" ? "Latest modified" : sortMode === "created" ? "Created" : "Name";
-  const filterLabel = displayFilter === "running" ? "Running" : displayFilter === "review" ? "Needs review" : "All conversations";
+  const { t } = useI18n();
+  const outlineLabel = outlineMode === "project" ? t("workspace.byProject") : t("common.none");
+  const sortLabel = sortMode === "last-modified" ? t("workspace.latestModified") : sortMode === "created" ? t("workspace.created") : t("common.name");
+  const filterLabel = displayFilter === "running" ? t("workspace.running") : displayFilter === "review" ? t("workspace.needsReview") : t("workspace.allConversations");
 
   return (
     <DropdownMenu>
@@ -3820,8 +4358,8 @@ function WorkbenchOutlineMenu({
         <button
           type="button"
           className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
-          title="Group, sort, and filter conversations"
-          aria-label="Group, sort, and filter conversations"
+          title={t("workspace.groupSortFilter")}
+          aria-label={t("workspace.groupSortFilter")}
         >
           <ListFilter className="h-4 w-4" />
         </button>
@@ -3831,133 +4369,133 @@ function WorkbenchOutlineMenu({
         collisionPadding={12}
         className="max-h-[var(--radix-dropdown-menu-content-available-height)] w-56 overflow-y-auto overscroll-contain"
       >
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Group</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs text-muted-foreground">{t("workspace.group")}</DropdownMenuLabel>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className="cursor-pointer rounded-lg">
-            <span className="min-w-0 flex-1">By</span>
+            <span className="min-w-0 flex-1">{t("workspace.by")}</span>
             <span className="mr-1 max-w-24 truncate text-xs text-muted-foreground">{outlineLabel}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent sideOffset={8} alignOffset={-4} className="w-64 rounded-xl p-1.5">
-            <DropdownMenuLabel className="text-xs text-muted-foreground">Group by</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">{t("workspace.groupBy")}</DropdownMenuLabel>
             <DropdownMenuRadioGroup value={outlineMode} onValueChange={(value) => onOutlineModeChange(value as WorkbenchOutlineMode)}>
-              <MenuItemTooltip
-                title="None"
-                description="Do not group conversations."
-                rules={["Sort applies to individual conversations."]}
-              >
-                <DropdownMenuRadioItem value="recent">None</DropdownMenuRadioItem>
+	              <MenuItemTooltip
+	                title={t("common.none")}
+	                description={t("workspace.doNotGroupConversations")}
+	                rules={[t("workspace.sortAppliesToConversations")]}
+	              >
+                <DropdownMenuRadioItem value="recent">{t("common.none")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
-              <MenuItemTooltip
-                title="By project"
-                description="Groups conversations by project."
-                rules={["Conversations inside each project use the current sort mode.", "Group order stays in latest-modified unless 'Reorder groups by sort' is on."]}
-              >
-                <DropdownMenuRadioItem value="project">By project</DropdownMenuRadioItem>
+	              <MenuItemTooltip
+	                title={t("workspace.byProject")}
+	                description={t("workspace.groupConversationsByProject")}
+	                rules={[t("workspace.projectConversationsUseSort"), t("workspace.groupOrderLatestUnlessReorder")]}
+	              >
+                <DropdownMenuRadioItem value="project">{t("workspace.byProject")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        <MenuItemTooltip
-          title="Reorder groups by sort"
-          description="Apply the current sort to the order of project groups."
-          rules={["Off by default — groups stay in latest-modified order.", "Only applies when grouped by project."]}
-        >
+	        <MenuItemTooltip
+	          title={t("workspace.reorderGroups")}
+	          description={t("workspace.applySortToProjectGroups")}
+	          rules={[t("workspace.groupsStayLatestByDefault"), t("workspace.onlyWhenGroupedByProject")]}
+	        >
           <DropdownMenuCheckboxItem
             checked={reorderGroups}
             onCheckedChange={(checked) => onReorderGroupsChange(checked === true)}
           >
-            Reorder groups by sort
+            {t("workspace.reorderGroups")}
           </DropdownMenuCheckboxItem>
         </MenuItemTooltip>
-        <MenuItemTooltip
-          title="New conversation in each project"
-          description="Show a New conversation entry as the first item under every project group."
-          rules={["Off by default.", "Empty project groups always show this entry."]}
-        >
+	        <MenuItemTooltip
+	          title={t("workspace.newConversationInEachProject")}
+	          description={t("workspace.showNewConversationInProjects")}
+	          rules={[t("workspace.offByDefault"), t("workspace.emptyGroupsAlwaysShowNew")]}
+	        >
           <DropdownMenuCheckboxItem
             checked={showProjectNewConversation}
             onCheckedChange={(checked) => onShowProjectNewConversationChange(checked === true)}
           >
-            New conversation in each project
+            {t("workspace.newConversationInEachProject")}
           </DropdownMenuCheckboxItem>
         </MenuItemTooltip>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Sort</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs text-muted-foreground">{t("workspace.sort")}</DropdownMenuLabel>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className="cursor-pointer rounded-lg">
-            <span className="min-w-0 flex-1">By</span>
+            <span className="min-w-0 flex-1">{t("workspace.by")}</span>
             <span className="mr-1 max-w-24 truncate text-xs text-muted-foreground">{sortLabel}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent sideOffset={8} alignOffset={-4} className="w-64 rounded-xl p-1.5">
-            <DropdownMenuLabel className="text-xs text-muted-foreground">Sort by</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">{t("workspace.sortBy")}</DropdownMenuLabel>
             <DropdownMenuRadioGroup value={sortMode} onValueChange={(value) => onSortModeChange(value as WorkbenchSortMode)}>
-              <MenuItemTooltip
-                title="Latest modified"
-                description="Orders by most recent activity."
-                rules={["All conversations: latest conversation modified time.", "By project: indexed project activity plus latest conversation activity."]}
-              >
-                <DropdownMenuRadioItem value="last-modified">Latest modified</DropdownMenuRadioItem>
+	              <MenuItemTooltip
+	                title={t("workspace.latestModified")}
+	                description={t("workspace.ordersByRecentActivity")}
+	                rules={[t("workspace.allLatestConversationModified"), t("workspace.projectLatestActivity")]}
+	              >
+                <DropdownMenuRadioItem value="last-modified">{t("workspace.latestModified")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
-              <MenuItemTooltip
-                title="Created"
-                description="Orders by creation time."
-                rules={["All conversations: conversation created time.", "By project: earliest conversation created in that project."]}
-              >
-                <DropdownMenuRadioItem value="created">Created</DropdownMenuRadioItem>
+	              <MenuItemTooltip
+	                title={t("workspace.created")}
+	                description={t("workspace.ordersByCreationTime")}
+	                rules={[t("workspace.allConversationCreated"), t("workspace.projectEarliestConversation")]}
+	              >
+                <DropdownMenuRadioItem value="created">{t("workspace.created")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
-              <MenuItemTooltip
-                title="Name"
-                description="Orders alphabetically."
-                rules={["All conversations: conversation title.", "By project: project name.", "Recent activity breaks ties."]}
-              >
-                <DropdownMenuRadioItem value="name">Name</DropdownMenuRadioItem>
+	              <MenuItemTooltip
+	                title={t("common.name")}
+	                description={t("workspace.ordersAlphabetically")}
+	                rules={[t("workspace.allConversationTitle"), t("workspace.projectName"), t("workspace.recentActivityBreaksTies")]}
+	              >
+                <DropdownMenuRadioItem value="name">{t("common.name")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Filter</DropdownMenuLabel>
+        <DropdownMenuLabel className="text-xs text-muted-foreground">{t("workspace.filter")}</DropdownMenuLabel>
         <DropdownMenuSub>
           <DropdownMenuSubTrigger className="cursor-pointer rounded-lg">
-            <span className="min-w-0 flex-1">By</span>
+            <span className="min-w-0 flex-1">{t("workspace.by")}</span>
             <span className="mr-1 max-w-24 truncate text-xs text-muted-foreground">{filterLabel}</span>
           </DropdownMenuSubTrigger>
           <DropdownMenuSubContent sideOffset={8} alignOffset={-4} className="w-64 rounded-xl p-1.5">
-            <DropdownMenuLabel className="text-xs text-muted-foreground">Filter by</DropdownMenuLabel>
+            <DropdownMenuLabel className="text-xs text-muted-foreground">{t("workspace.filterBy")}</DropdownMenuLabel>
             <DropdownMenuRadioGroup value={displayFilter} onValueChange={(value) => onDisplayFilterChange(value as WorkbenchDisplayFilter)}>
-              <MenuItemTooltip
-                title="All conversations"
-                description="Show every conversation in the current active or archived list."
-                rules={["Does not filter by runtime or review status."]}
-              >
-                <DropdownMenuRadioItem value="all">All conversations</DropdownMenuRadioItem>
+	              <MenuItemTooltip
+	                title={t("workspace.allConversations")}
+	                description={t("workspace.showEveryConversation")}
+	                rules={[t("workspace.noRuntimeOrReviewFilter")]}
+	              >
+                <DropdownMenuRadioItem value="all">{t("workspace.allConversations")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
-              <MenuItemTooltip
-                title="Running"
-                description="Show conversations with active runtime work."
-                rules={["Includes sessions marked running or currently working."]}
-              >
-                <DropdownMenuRadioItem value="running">Running</DropdownMenuRadioItem>
+	              <MenuItemTooltip
+	                title={t("workspace.running")}
+	                description={t("workspace.showActiveRuntimeWork")}
+	                rules={[t("workspace.includesRunningOrWorking")]}
+	              >
+                <DropdownMenuRadioItem value="running">{t("workspace.running")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
-              <MenuItemTooltip
-                title="Needs review"
-                description="Show conversations marked for review."
-                rules={["Includes runtime review status and saved review markers."]}
-              >
-                <DropdownMenuRadioItem value="review">Needs review</DropdownMenuRadioItem>
+	              <MenuItemTooltip
+	                title={t("workspace.needsReview")}
+	                description={t("workspace.showMarkedForReview")}
+	                rules={[t("workspace.includesReviewMarkers")]}
+	              >
+                <DropdownMenuRadioItem value="review">{t("workspace.needsReview")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
         <DropdownMenuSeparator />
-        <DropdownMenuLabel className="text-xs text-muted-foreground">Advanced</DropdownMenuLabel>
-        <MenuItemTooltip
-          title="Merge worktrees"
-          description="Show worktree conversations under their source project when possible."
-          rules={["Affects project grouping and project-level counts.", "Does not move files or sessions."]}
-        >
+        <DropdownMenuLabel className="text-xs text-muted-foreground">{t("workspace.advanced")}</DropdownMenuLabel>
+	        <MenuItemTooltip
+	          title={t("workspace.mergeWorktrees")}
+	          description={t("workspace.showWorktreesUnderSource")}
+	          rules={[t("workspace.affectsProjectGrouping"), t("workspace.doesNotMoveFiles")]}
+	        >
           <DropdownMenuCheckboxItem checked={mergeWorktrees} onCheckedChange={(checked) => onMergeWorktreesChange(checked === true)}>
-            Merge worktrees
+            {t("workspace.mergeWorktrees")}
           </DropdownMenuCheckboxItem>
         </MenuItemTooltip>
       </DropdownMenuContent>
@@ -3965,19 +4503,20 @@ function WorkbenchOutlineMenu({
   );
 }
 
-function getAgentStatusLabel(session: AgentSession) {
-  if (session.archived) return "archived";
-  if (session.provider === "terminal") return "shell";
-  if (isAgentRunning(session)) return "agent running";
-  if (session.status === "needs-review") return "needs review";
-  if (session.status === "error") return "agent error";
-  if (session.status === "completed") return "agent completed";
-  return "agent idle";
+function getAgentStatusLabel(session: AgentSession, t?: TranslateFn) {
+  if (session.archived) return t ? t("workspace.archived") : "archived";
+  if (session.provider === "terminal") return t ? t("chat.shell") : "shell";
+  if (isAgentRunning(session)) return t ? t("workspace.agentRunning") : "agent running";
+  if (session.status === "needs-review") return t ? t("workspace.needsReview") : "needs review";
+  if (session.status === "error") return t ? t("workspace.agentError") : "agent error";
+  if (session.status === "completed") return t ? t("workspace.agentCompleted") : "agent completed";
+  return t ? t("workspace.agentIdle") : "agent idle";
 }
 
 function ConversationButton({
   conversation,
   active,
+  locateHighlightKey,
   connected,
   onSelect,
   onStart,
@@ -3992,9 +4531,11 @@ function ConversationButton({
   onClose,
   displayMode,
   onDisplayModeChange,
+  onLocateHighlightEnd,
 }: {
   conversation: WorkbenchConversation;
   active: boolean;
+  locateHighlightKey?: number;
   connected: boolean;
   onSelect: () => void;
   onStart?: () => void;
@@ -4009,40 +4550,39 @@ function ConversationButton({
   onClose?: () => void;
   displayMode?: WorkbenchDisplayMode;
   onDisplayModeChange?: (mode: WorkbenchDisplayMode) => void;
+  onLocateHighlightEnd?: (key: number) => void;
 }) {
+  const { t } = useI18n();
   const [confirmingArchive, setConfirmingArchive] = useState(false);
+  const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const runtime = conversation.runtime;
   const transcript = conversation.transcript;
   const provider = runtime?.provider ?? providerForTranscript(transcript);
-  const displayTitle = transcript ? getHistorySessionTitle(transcript) : runtime ? getSessionDisplayTitle(runtime) : "Untitled conversation";
+  const displayTitle = transcript
+    ? getHistorySessionTitle(transcript, t("common.untitledConversation"))
+    : runtime
+      ? getSessionDisplayTitle(runtime, { shell: t("chat.shell"), newSession: t("chat.newSession") })
+      : t("common.untitledConversation");
   const agentRunning = isConversationAgentRunning(conversation);
   const runtimeLabel = conversation.archived
-    ? "archived"
+    ? t("workspace.archived")
     : agentRunning
-      ? "agent running"
+      ? t("workspace.agentRunning")
       : runtime
-        ? getAgentStatusLabel(runtime)
-        : "conversation";
-  const readLabel = conversation.unread ? "Unread" : "Read";
-  const pinnedLabel = conversation.pinned ? "Pinned" : "Unpinned";
-  const providerLabel = provider ? labelForProvider(provider) : transcript?.source ?? "conversation";
-  const relativeTime = formatRelativeTime(conversation.timestamp);
-  const statusTone = agentRunning
-    ? "bg-primary text-primary"
-    : runtime?.status === "needs-review"
-      ? "bg-primary text-primary"
-      : runtime?.status === "error"
-        ? "bg-destructive text-destructive"
-        : "bg-muted-foreground text-muted-foreground";
-  const statusIndicator = conversation.archived ? (
-    <Archive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-label="Archived" />
-  ) : agentRunning ? (
+        ? getAgentStatusLabel(runtime, t)
+        : t("workspace.conversation");
+  const readLabel = conversation.unread ? t("workspace.unread") : t("workspace.read");
+  const pinnedLabel = conversation.pinned ? t("workspace.pinned") : t("workspace.unpinned");
+  const providerLabel = provider ? labelForProvider(provider) : transcript?.source ?? t("workspace.conversation");
+  const relativeTime = formatRelativeTime(conversation.timestamp, t);
+  const needsCheck = !agentRunning && conversation.needsReview;
+  const defaultToolbarContent = agentRunning ? (
     <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" aria-label={runtimeLabel} />
-  ) : conversation.needsReview ? (
-    <AlertCircle className="h-3.5 w-3.5 shrink-0 text-primary" aria-label="Needs review" />
-  ) : runtime ? (
-    <span className={`h-2 w-2 shrink-0 rounded-full ${statusTone}`} aria-label={runtimeLabel} />
-  ) : null;
+  ) : needsCheck ? (
+    <span className="h-2 w-2 shrink-0 rounded-full bg-primary" aria-label={t("workspace.needsReview")} />
+  ) : (
+    <span className="min-w-[3.5rem] text-right">{relativeTime}</span>
+  );
   const renderLeadingIcon = () =>
     provider ? (
       <ProviderIcon provider={provider} />
@@ -4088,51 +4628,80 @@ function ConversationButton({
 
   useEffect(() => {
     setConfirmingArchive(false);
+    setActionsMenuOpen(false);
   }, [conversation.conversationId, conversation.archived]);
 
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
         <div
-          className={`group relative flex h-[31px] w-full items-center rounded-lg transition-colors ${
+          data-conversation-id={conversation.conversationId}
+          className={`group relative z-0 flex h-[31px] w-full items-center overflow-hidden rounded-sm transition-colors ${
             active
               ? "bg-primary/10"
               : "hover:bg-card-alt"
           }`}
           onMouseLeave={() => setConfirmingArchive(false)}
         >
+          {locateHighlightKey !== undefined ? (
+            <span
+              key={locateHighlightKey}
+              className="conversation-locate-highlight pointer-events-none absolute inset-0 z-0 overflow-hidden rounded-sm"
+              onAnimationEnd={() => onLocateHighlightEnd?.(locateHighlightKey)}
+            />
+          ) : null}
           <button
             type="button"
             onClick={onSelect}
             aria-label={`${displayTitle}, ${providerLabel}, ${runtimeLabel}, ${pinnedLabel}, ${readLabel}, ${relativeTime}`}
-            className="flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden pl-2.5 pr-1 text-left"
+            className="relative z-10 flex h-full min-w-0 flex-1 items-center gap-2 overflow-hidden pl-2.5 pr-2.5 text-left"
           >
             {renderLeadingIcon()}
             <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{displayTitle}</span>
-            <span className="flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[11px] font-medium tabular-nums text-muted-foreground">
-              {conversation.pinned && <Pin className="h-3 w-3 shrink-0 text-primary" aria-label="Pinned" />}
-              {conversation.unread && <span className="h-2 w-2 shrink-0 rounded-full bg-primary" aria-label="Unread" />}
-              {statusIndicator}
-              <span className="min-w-[3.5rem] text-right">{relativeTime}</span>
+            <span
+              className={`flex min-w-[4.25rem] shrink-0 items-center justify-end whitespace-nowrap text-[11px] font-medium tabular-nums text-muted-foreground transition-opacity ${
+                confirmingArchive || actionsMenuOpen
+                  ? "opacity-0"
+                  : "opacity-100 group-hover:opacity-0 group-focus-within:opacity-0"
+              }`}
+            >
+              {defaultToolbarContent}
             </span>
             <span className="sr-only">
               {runtimeLabel}, {pinnedLabel}, {readLabel}
             </span>
           </button>
           <div
-            className={`flex h-full w-9 shrink-0 items-center justify-center transition-opacity ${
-              active || confirmingArchive
-                ? "opacity-100"
-                : "opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+            className={`absolute inset-y-0 right-0 z-10 flex w-[4.75rem] items-center justify-end gap-1 pr-[5px] transition-opacity ${
+              confirmingArchive || actionsMenuOpen
+                ? "pointer-events-auto opacity-100"
+                : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
             }`}
           >
+            <DropdownMenu modal={false} open={actionsMenuOpen} onOpenChange={setActionsMenuOpen}>
+              <DropdownMenuTrigger asChild>
+                <SidebarActionButton title={t("workspace.conversationActions")} onClick={() => undefined} active={actionsMenuOpen}>
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </SidebarActionButton>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56" onCloseAutoFocus={(event) => event.preventDefault()}>
+                {sessionContextMenuProps ? (
+                  <SessionDetailDropdownMenuItems {...sessionContextMenuProps} />
+                ) : (
+                  <DropdownMenuItem onSelect={conversation.archived ? onRestore : onArchive} className="gap-2">
+                    {conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+                    {conversation.archived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
+                  </DropdownMenuItem>
+                )}
+              </DropdownMenuContent>
+            </DropdownMenu>
             {conversation.archived ? (
-              <SidebarActionButton title="Restore conversation" onClick={onRestore}>
+              <SidebarActionButton title={t("workspace.restoreConversation")} onClick={onRestore}>
                 <ArchiveRestore className="h-3.5 w-3.5" />
               </SidebarActionButton>
             ) : (
               <SidebarActionButton
-                title={confirmingArchive ? "Confirm archive" : "Archive conversation"}
+                title={confirmingArchive ? t("workspace.confirmArchive") : t("workspace.archiveConversation")}
                 onClick={handleInlineArchiveClick}
                 active={confirmingArchive}
               >
@@ -4146,10 +4715,10 @@ function ConversationButton({
         {sessionContextMenuProps ? (
           <SessionDetailContextMenuItems {...sessionContextMenuProps} />
         ) : (
-          <ContextMenuItem onSelect={conversation.archived ? onRestore : onArchive} className="gap-2">
-            {conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
-            {conversation.archived ? "Unarchive" : "Archive"}
-          </ContextMenuItem>
+	          <ContextMenuItem onSelect={conversation.archived ? onRestore : onArchive} className="gap-2">
+	            {conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+	            {conversation.archived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
+	          </ContextMenuItem>
         )}
       </ContextMenuContent>
     </ContextMenu>
@@ -4220,6 +4789,8 @@ function DetachedState({
   onStart: () => void;
   onRestore: () => void;
 }) {
+  const { t } = useI18n();
+
   if (session.archived) {
     return (
       <div className="flex h-full items-center justify-center bg-background px-6">
@@ -4227,9 +4798,9 @@ function DetachedState({
           <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-card-alt text-muted-foreground">
             <Archive className="h-5 w-5" />
           </div>
-          <h3 className="font-serif text-xl font-semibold text-foreground">Conversation is archived</h3>
+          <h3 className="font-serif text-xl font-semibold text-foreground">{t("workspace.conversationArchived")}</h3>
           <p className="mt-2 text-sm text-muted-foreground">
-            The conversation is preserved in the workspace archive. Restore it before starting a runtime.
+            {t("workspace.conversationArchivedDescription")}
           </p>
           <button
             type="button"
@@ -4237,7 +4808,7 @@ function DetachedState({
             className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
           >
             <ArchiveRestore className="h-4 w-4" />
-            Restore
+            {t("workspace.restore")}
           </button>
         </div>
       </div>
@@ -4252,9 +4823,9 @@ function DetachedState({
         <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-xl bg-card-alt text-muted-foreground">
           <X className="h-5 w-5" />
         </div>
-        <h3 className="font-serif text-xl font-semibold text-foreground">Conversation is not attached</h3>
+        <h3 className="font-serif text-xl font-semibold text-foreground">{t("workspace.conversationNotAttached")}</h3>
         <p className="mt-2 text-sm text-muted-foreground">
-          The saved conversation remains in the workspace. Start it again when you want to attach a runtime.
+          {t("workspace.conversationNotAttachedDescription")}
         </p>
         {displayCommand && (
           <code className="mt-4 block truncate rounded-lg bg-card-alt px-3 py-2 text-left font-mono text-xs text-muted-foreground">
@@ -4267,7 +4838,7 @@ function DetachedState({
           className="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
         >
           <Play className="h-4 w-4" />
-          Start runtime
+          {t("workspace.startRuntime")}
         </button>
       </div>
     </div>

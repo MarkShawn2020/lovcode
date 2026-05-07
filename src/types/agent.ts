@@ -12,6 +12,19 @@ export type AgentSessionStatus = "idle" | "running" | "completed" | "needs-revie
 
 export type AgentWorkState = "idle" | "working" | "stopped";
 
+export type AgentHistoryLinkStatus = "pending" | "linked" | "not-found";
+
+export interface AgentRuntimeStatus {
+  provider: AgentProvider;
+  command?: string | null;
+  installed: boolean;
+  runnable?: boolean;
+  path?: string | null;
+  path_source?: string | null;
+  version?: string | null;
+  install_route?: string | null;
+}
+
 export type EnvironmentPlatform = "default" | "macos" | "linux" | "windows";
 
 export type EnvironmentScope = "global" | "project" | "session";
@@ -44,6 +57,9 @@ export interface AgentSession {
   ptyId?: string | null;
   title: string;
   linkedHistorySessionId?: string | null;
+  historyLinkStatus?: AgentHistoryLinkStatus | null;
+  historyLinkLastTriedAt?: number | null;
+  historyLinkLastReason?: string | null;
   forkParentSessionId?: string | null;
   forkFromMessageId?: string | null;
   forkedFromTitle?: string | null;

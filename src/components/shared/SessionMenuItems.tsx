@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAtom } from "jotai";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import {
   AlertCircle,
   ArrowRightLeft,
@@ -14,14 +14,11 @@ import {
   FolderOpen,
   Info,
   MessageSquare,
-  Play,
-  RotateCcw,
   Archive,
   ArchiveRestore,
   Pin,
   PinOff,
   Settings2,
-  Square,
   Terminal,
 } from "lucide-react";
 import { ExternalLinkIcon, ChatBubbleIcon, Cross2Icon } from "@radix-ui/react-icons";
@@ -48,6 +45,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
+import { useI18n } from "@/i18n";
 import {
   archivedSessionIdsAtom,
   expandMessagesAtom,
@@ -56,7 +54,7 @@ import {
   pinnedSessionIdsAtom,
   userPromptsOnlyAtom,
 } from "@/store";
-import type { ContentBlock, Message, Session, SessionHandoff } from "@/types";
+import type { ContentBlock, Message, Session, SessionRuntimeFork } from "@/types";
 import {
   checkPaths,
   extractMarkdownLinkHrefs,
@@ -67,6 +65,7 @@ import {
 import { PathLink } from "@/views/Chat/PathLink";
 
 type HandoffTarget = "claude" | "codex";
+type TranslateFn = ReturnType<typeof useI18n>["t"];
 
 const HANDOFF_TARGET_LABELS: Record<HandoffTarget, string> = {
   claude: "Claude Code",
@@ -163,7 +162,7 @@ function getHandoffTargets(source?: Session["source"]): HandoffTarget[] {
   return (["claude", "codex"] as HandoffTarget[]).filter((target) => target !== sourceProvider);
 }
 
-function sourceLabel(source?: Session["source"]): string {
+function sourceLabel(source?: Session["source"], t?: TranslateFn): string {
   switch (source) {
     case "codex":
       return "Codex";
@@ -176,7 +175,7 @@ function sourceLabel(source?: Session["source"]): string {
     case "cli":
       return "Claude Code CLI";
     default:
-      return "Unknown";
+      return t ? t("common.unknown") : "Unknown";
   }
 }
 
@@ -343,19 +342,19 @@ function useSessionInfo(
   return state;
 }
 
-function sessionInfoRows(info: SessionInfo): Array<{ label: string; value: string; mono?: boolean }> {
+function sessionInfoRows(info: SessionInfo, t?: TranslateFn): Array<{ label: string; value: string; mono?: boolean }> {
   const rows: Array<{ label: string; value: string; mono?: boolean }> = [
-    { label: "Title", value: info.title || "Untitled conversation" },
-    { label: "Source", value: sourceLabel(info.source) },
-    { label: "Session ID", value: info.sessionId, mono: true },
-    { label: "Project ID", value: info.projectId, mono: true },
+    { label: t ? t("session.title") : "Title", value: info.title || (t ? t("common.untitledConversation") : "Untitled conversation") },
+    { label: t ? t("session.source") : "Source", value: sourceLabel(info.source, t) },
+    { label: t ? t("session.sessionId") : "Session ID", value: info.sessionId, mono: true },
+    { label: t ? t("session.projectId") : "Project ID", value: info.projectId, mono: true },
   ];
 
-  if (info.projectPath) rows.push({ label: "Project path", value: info.projectPath, mono: true });
-  if (info.transcriptPath) rows.push({ label: "Transcript", value: info.transcriptPath, mono: true });
+  if (info.projectPath) rows.push({ label: t ? t("session.projectPath") : "Project path", value: info.projectPath, mono: true });
+  if (info.transcriptPath) rows.push({ label: t ? t("session.transcript") : "Transcript", value: info.transcriptPath, mono: true });
   if (info.messageCount !== undefined) {
     rows.push({
-      label: "Messages",
+      label: t ? t("session.messages") : "Messages",
       value: `${info.userMessageCount ?? 0} user / ${info.messageCount} total`,
     });
   }
@@ -372,9 +371,9 @@ function formatRelatedFile(file: RelatedSessionFile): string {
   return suffixes.length > 0 ? `${file.path} (${suffixes.join("; ")})` : file.path;
 }
 
-function buildSessionInfoText(info: SessionInfo): string {
+function buildSessionInfoText(info: SessionInfo, t?: TranslateFn): string {
   const lines = ["# Session Basic Info", ""];
-  for (const row of sessionInfoRows(info)) {
+  for (const row of sessionInfoRows(info, t)) {
     lines.push(`- ${row.label}: ${row.value}`);
   }
 
@@ -407,18 +406,19 @@ function buildTraceContextText(info: SessionInfo): string {
 - Use the session ID and project path when asking another AI or teammate to continue, debug, or audit this session.`;
 }
 
-async function copyTextWithToast(text: string, label: string) {
+async function copyTextWithToast(text: string, messages: { copied: string; failed: (message: string) => string }) {
   try {
     await invoke("copy_to_clipboard", { text });
-    toast.success(`${label} copied`);
+    toast.success(messages.copied);
   } catch (error) {
-    toast.error(`Could not copy ${label.toLowerCase()}: ${errorMessage(error)}`);
+    toast.error(messages.failed(errorMessage(error)));
   }
 }
 
 function useSessionInfoActions(
   config: Pick<SessionMenuConfig, "projectId" | "sessionId" | "title" | "source" | "projectPath">,
 ) {
+  const { t } = useI18n();
   const sessionInfoState = useSessionInfo(config);
   const [infoDialogOpen, setInfoDialogOpen] = useState(false);
   const readyToCopy = sessionInfoState.status !== "loading";
@@ -429,16 +429,28 @@ function useSessionInfoActions(
   }, []);
 
   const handleCopySessionInfo = useCallback(() => {
-    return copyTextWithToast(buildSessionInfoText(sessionInfoState.info), "Session info");
-  }, [sessionInfoState.info]);
+    const label = t("session.infoLabel");
+    return copyTextWithToast(buildSessionInfoText(sessionInfoState.info, t), {
+      copied: t("session.infoCopied", { label }),
+      failed: (message) => t("session.copyFailed", { label, message }),
+    });
+  }, [sessionInfoState.info, t]);
 
   const handleCopyRelatedFiles = useCallback(() => {
-    return copyTextWithToast(buildRelatedFilesText(sessionInfoState.info), "Related file paths");
-  }, [sessionInfoState.info]);
+    const label = t("session.relatedPathsLabel");
+    return copyTextWithToast(buildRelatedFilesText(sessionInfoState.info), {
+      copied: t("session.infoCopied", { label }),
+      failed: (message) => t("session.copyFailed", { label, message }),
+    });
+  }, [sessionInfoState.info, t]);
 
   const handleCopyTraceContext = useCallback(() => {
-    return copyTextWithToast(buildTraceContextText(sessionInfoState.info), "Trace context");
-  }, [sessionInfoState.info]);
+    const label = t("session.traceContextLabel");
+    return copyTextWithToast(buildTraceContextText(sessionInfoState.info), {
+      copied: t("session.infoCopied", { label }),
+      failed: (message) => t("session.copyFailed", { label, message }),
+    });
+  }, [sessionInfoState.info, t]);
 
   return {
     sessionInfoState,
@@ -455,6 +467,7 @@ function useSessionInfoActions(
 
 // Shared handlers
 export function useSessionMenuHandlers(projectId: string, sessionId: string, source?: Session["source"], title?: string) {
+  const { t } = useI18n();
   const sessionTitle = title?.trim();
   const handleReveal = () => invoke("reveal_session_file", { projectId, sessionId });
   const handleOpenInEditor = () => invoke("open_session_in_editor", { projectId, sessionId });
@@ -475,16 +488,21 @@ export function useSessionMenuHandlers(projectId: string, sessionId: string, sou
   const handoffTargets = getHandoffTargets(source);
   const handleCopyHandoffPrompt = async (targetProvider: HandoffTarget) => {
     try {
-      const forkContext = await invoke<SessionHandoff>("generate_session_handoff_prompt", {
+      const runtimeFork = await invoke<SessionRuntimeFork>("create_session_runtime_fork", {
         projectId,
         sessionId,
         targetProvider,
       });
-      await invoke("copy_to_clipboard", { text: forkContext.prompt });
-      toast.success(`Copied fork prompt for ${HANDOFF_TARGET_LABELS[targetProvider]}`);
+      const resume =
+        targetProvider === "codex"
+          ? `codex resume ${runtimeFork.targetSessionId}`
+          : `claude --resume ${runtimeFork.targetSessionId}`;
+      const cmd = `cd ${shellQuote(runtimeFork.projectPath)} && ${resume}`;
+      await invoke("copy_to_clipboard", { text: cmd });
+      toast.success(t("session.copyRuntimeResumeSuccess", { target: HANDOFF_TARGET_LABELS[targetProvider] }));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      toast.error(`Could not prepare fork prompt: ${message}`);
+      toast.error(t("session.copyRuntimeResumeFailed", { message }));
     }
   };
 
@@ -649,14 +667,15 @@ function SessionInfoDialog({
   onCopyRelatedFiles: () => void;
   onCopyTraceContext: () => void;
 }) {
+  const { t } = useI18n();
   const { info, status, error } = state;
   const hasRelatedFiles = info.relatedFiles.length > 0;
   const messageSummary =
     info.messageCount === undefined
       ? status === "loading"
-        ? "Loading..."
+        ? t("common.loading")
         : undefined
-      : `${info.userMessageCount ?? 0} user / ${info.messageCount} total`;
+      : t("session.messagesUserTotal", { user: info.userMessageCount ?? 0, total: info.messageCount });
 
   if (!open || typeof document === "undefined") return null;
 
@@ -664,66 +683,66 @@ function SessionInfoDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="!flex max-h-[84vh] max-w-3xl !flex-col !gap-0 !overflow-hidden p-0 sm:rounded-xl">
         <DialogHeader className="border-b border-border px-5 py-4 pr-12">
-          <DialogTitle className="font-serif text-xl">Session Information</DialogTitle>
+          <DialogTitle className="font-serif text-xl">{t("session.information")}</DialogTitle>
           <div className="mt-2 flex flex-wrap gap-2">
             <Button size="sm" variant="outline" className="h-8 gap-1.5" disabled={status === "loading"} onClick={onCopySessionInfo}>
               <Info size={14} />
-              Copy info
+              {t("session.copyInfo")}
             </Button>
             <Button size="sm" variant="outline" className="h-8 gap-1.5" disabled={status === "loading" || !hasRelatedFiles} onClick={onCopyRelatedFiles}>
               <FolderInput size={14} />
-              Copy paths
+              {t("session.copyPaths")}
             </Button>
             <Button size="sm" variant="outline" className="h-8 gap-1.5" disabled={status === "loading"} onClick={onCopyTraceContext}>
               <ClipboardList size={14} />
-              Copy trace
+              {t("session.copyTrace")}
             </Button>
           </div>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 py-4">
           {status === "error" && error && (
             <div className="rounded-lg border border-border bg-card-alt px-3 py-2 text-xs text-muted-foreground" title={error}>
-              Could not load all session details: {error}
+              {t("session.couldNotLoadDetails", { message: error })}
             </div>
           )}
 
           <section>
-            <h3 className="font-serif text-base font-semibold text-foreground">Basic</h3>
+            <h3 className="font-serif text-base font-semibold text-foreground">{t("session.basic")}</h3>
             <div className="mt-2 rounded-xl border border-border bg-card px-3">
-              <SessionInfoRow label="Title" value={info.title || "Untitled conversation"} />
-              <SessionInfoRow label="Source" value={sourceLabel(info.source)} />
-              <SessionInfoRow label="Session ID" value={info.sessionId} mono />
-              <SessionInfoRow label="Project ID" value={info.projectId} mono />
-              <SessionInfoRow label="Project path">
+              <SessionInfoRow label={t("session.title")} value={info.title || t("common.untitledConversation")} />
+              <SessionInfoRow label={t("session.source")} value={sourceLabel(info.source, t)} />
+              <SessionInfoRow label={t("session.sessionId")} value={info.sessionId} mono />
+              <SessionInfoRow label={t("session.projectId")} value={info.projectId} mono />
+              <SessionInfoRow label={t("session.projectPath")}>
                 {info.projectPath ? (
                   <SessionPathLink path={info.projectPath} isDir />
                 ) : (
-                  <span className="text-muted-foreground">Unknown</span>
+                  <span className="text-muted-foreground">{t("common.unknown")}</span>
                 )}
               </SessionInfoRow>
-              <SessionInfoRow label="Transcript">
+              <SessionInfoRow label={t("session.transcript")}>
                 {info.transcriptPath ? (
                   <SessionPathLink path={info.transcriptPath} cwd={info.projectPath} />
                 ) : (
-                  <span className="text-muted-foreground">{status === "loading" ? "Loading..." : "Unknown"}</span>
+                  <span className="text-muted-foreground">{status === "loading" ? t("common.loading") : t("common.unknown")}</span>
                 )}
               </SessionInfoRow>
-              <SessionInfoRow label="Messages" value={messageSummary} />
+              <SessionInfoRow label={t("session.messages")} value={messageSummary} />
             </div>
           </section>
 
           <section>
             <div className="flex items-center justify-between gap-3">
-              <h3 className="font-serif text-base font-semibold text-foreground">Related File Paths</h3>
+              <h3 className="font-serif text-base font-semibold text-foreground">{t("session.relatedFilePaths")}</h3>
               <span className="text-xs tabular-nums text-muted-foreground">
-                {status === "loading" ? "Loading..." : `${info.relatedFiles.length} detected`}
+                {status === "loading" ? t("common.loading") : t("session.detectedCount", { count: info.relatedFiles.length })}
               </span>
             </div>
             <div className="mt-2 rounded-xl border border-border bg-card">
               {status === "loading" ? (
-                <div className="px-3 py-4 text-sm text-muted-foreground">Loading related paths...</div>
+                <div className="px-3 py-4 text-sm text-muted-foreground">{t("session.loadingRelatedPaths")}</div>
               ) : info.relatedFiles.length === 0 ? (
-                <div className="px-3 py-4 text-sm text-muted-foreground">No file paths detected.</div>
+                <div className="px-3 py-4 text-sm text-muted-foreground">{t("session.noFilePathsDetected")}</div>
               ) : (
                 <div className="max-h-[40vh] divide-y divide-border/60 overflow-y-auto">
                   {info.relatedFiles.map((file, index) => (
@@ -739,19 +758,19 @@ function SessionInfoDialog({
                           cwd={info.projectPath}
                         />
                         {file.raw !== file.path && (
-                          <div className="break-all font-mono text-[11px] text-muted-foreground">
-                            resolved: {file.path}
-                          </div>
+	                          <div className="break-all font-mono text-[11px] text-muted-foreground">
+	                            {t("session.resolvedPath", { path: file.path })}
+	                          </div>
                         )}
                         {file.exists === false && (
-                          <div className="text-[11px] text-muted-foreground">Not found on disk.</div>
+                          <div className="text-[11px] text-muted-foreground">{t("session.notFoundOnDisk")}</div>
                         )}
                       </div>
                     </div>
                   ))}
                   {info.relatedFilesTruncated && (
                     <div className="px-3 py-2 text-xs text-muted-foreground">
-                      Additional paths were omitted after the first {MAX_RELATED_FILES}.
+                      {t("session.additionalPathsOmitted", { count: MAX_RELATED_FILES })}
                     </div>
                   )}
                 </div>
@@ -766,8 +785,9 @@ function SessionInfoDialog({
 }
 
 function SessionInfoMenuHint({ state }: { state: SessionInfoState }) {
+  const { t } = useI18n();
   const { info, status } = state;
-  const countLabel = status === "loading" ? "Loading..." : `${info.relatedFiles.length} related paths`;
+  const countLabel = status === "loading" ? t("common.loading") : t("session.relatedPathsCount", { count: info.relatedFiles.length });
 
   return (
     <div className="px-2 pb-1 pt-0.5 text-[11px] text-muted-foreground">
@@ -783,18 +803,19 @@ function DropdownHandoffSubmenu({
   targets: HandoffTarget[];
   onCopy: (target: HandoffTarget) => void;
 }) {
+  const { t } = useI18n();
   if (targets.length === 0) return null;
   return (
     <DropdownMenuSub>
       <DropdownMenuSubTrigger className="gap-2">
         <ArrowRightLeft size={14} />
-        Fork to runtime
+        {t("session.resumeInRuntime")}
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent>
         {targets.map((target) => (
           <DropdownMenuItem key={target} onClick={() => onCopy(target)} className="gap-2">
             <ArrowRightLeft size={14} />
-            Copy fork prompt for {HANDOFF_TARGET_LABELS[target]}
+            {t("session.copyRuntimeResumeFor", { target: HANDOFF_TARGET_LABELS[target] })}
           </DropdownMenuItem>
         ))}
       </DropdownMenuSubContent>
@@ -809,18 +830,19 @@ function ContextHandoffSubmenu({
   targets: HandoffTarget[];
   onCopy: (target: HandoffTarget) => void;
 }) {
+  const { t } = useI18n();
   if (targets.length === 0) return null;
   return (
     <ContextMenuSub>
       <ContextMenuSubTrigger className="gap-2">
         <ArrowRightLeft size={14} />
-        Fork to runtime
+        {t("session.resumeInRuntime")}
       </ContextMenuSubTrigger>
       <ContextMenuSubContent>
         {targets.map((target) => (
           <ContextMenuItem key={target} onClick={() => onCopy(target)} className="gap-2">
             <ArrowRightLeft size={14} />
-            Copy fork prompt for {HANDOFF_TARGET_LABELS[target]}
+            {t("session.copyRuntimeResumeFor", { target: HANDOFF_TARGET_LABELS[target] })}
           </ContextMenuItem>
         ))}
       </ContextMenuSubContent>
@@ -832,21 +854,14 @@ export function SessionDetailDropdownMenuItems({
   onClose,
   displayMode,
   onDisplayModeChange,
-  onOpenConversation,
-  environmentActionLabel,
-  environmentActionDisabled,
-  onRunEnvironmentAction,
   onEnvironment,
-  onRestartRuntime,
-  onStartRuntime,
-  onStopRuntime,
-  runtimeConnected,
   unread,
   onToggleRead,
   needsReview,
   onMarkNeedsReview,
   ...sessionConfig
 }: SessionDetailMenuConfig) {
+  const { t } = useI18n();
   const {
     userPromptsOnly,
     setUserPromptsOnly,
@@ -857,14 +872,6 @@ export function SessionDetailDropdownMenuItems({
     originalChat,
     setOriginalChat,
   } = useSessionDetailViewState();
-  const hasConversationActions = Boolean(
-    onOpenConversation ||
-      onRunEnvironmentAction ||
-      onEnvironment ||
-      onRestartRuntime ||
-      (onStartRuntime && onStopRuntime) ||
-      sessionConfig.onResume,
-  );
   const {
     handleReveal,
     handleOpenInEditor,
@@ -902,56 +909,10 @@ export function SessionDetailDropdownMenuItems({
         onCopyRelatedFiles={handleCopyRelatedFiles}
         onCopyTraceContext={handleCopyTraceContext}
       />
-      {hasConversationActions && (
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger className="gap-2">
-            <MessageSquare size={14} />
-            Open & Run
-          </DropdownMenuSubTrigger>
-          <DropdownMenuSubContent>
-          {onOpenConversation && (
-            <DropdownMenuItem onClick={onOpenConversation} className="gap-2">
-              <MessageSquare size={14} />
-              Open conversation
-            </DropdownMenuItem>
-          )}
-          {onEnvironment && (
-            <DropdownMenuItem onClick={onEnvironment} className="gap-2">
-              <Settings2 size={14} />
-              Environment
-            </DropdownMenuItem>
-          )}
-          {onRunEnvironmentAction && (
-            <DropdownMenuItem disabled={environmentActionDisabled} onClick={onRunEnvironmentAction} className="gap-2">
-              <Terminal size={14} />
-              {environmentActionLabel ?? "Run environment action"}
-            </DropdownMenuItem>
-          )}
-          {onRestartRuntime && (
-            <DropdownMenuItem onClick={onRestartRuntime} className="gap-2">
-              <RotateCcw size={14} />
-              Run again
-            </DropdownMenuItem>
-          )}
-          {onStartRuntime && onStopRuntime && (
-            <DropdownMenuItem onClick={runtimeConnected ? onStopRuntime : onStartRuntime} className="gap-2">
-              {runtimeConnected ? <Square size={14} /> : <Play size={14} />}
-              {runtimeConnected ? "Stop runtime" : "Start runtime"}
-            </DropdownMenuItem>
-          )}
-          {sessionConfig.onResume && (
-            <DropdownMenuItem onClick={sessionConfig.onResume} className="gap-2">
-              <ChatBubbleIcon className="w-3.5 h-3.5" />
-              Resume Session
-            </DropdownMenuItem>
-          )}
-          </DropdownMenuSubContent>
-        </DropdownMenuSub>
-      )}
       <DropdownMenuSub>
         <DropdownMenuSubTrigger className="gap-2">
           <Eye size={14} />
-          View
+          {t("session.view")}
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent className="w-80">
           {displayMode && onDisplayModeChange && (
@@ -960,23 +921,23 @@ export function SessionDetailDropdownMenuItems({
                 value={displayMode}
                 onValueChange={(value) => onDisplayModeChange(value as "chat" | "pty")}
               >
-                <DropdownMenuRadioItem value="chat">Chat record</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="chat">{t("session.chatRecord")}</DropdownMenuRadioItem>
                 <DropdownMenuRadioItem value="pty">PTY</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
               <DropdownMenuSeparator />
             </>
           )}
           <DropdownMenuCheckboxItem checked={userPromptsOnly} onCheckedChange={setUserPromptsOnly}>
-            Prompts only
+            {t("session.promptsOnly")}
           </DropdownMenuCheckboxItem>
           <DropdownMenuCheckboxItem checked={expandMessages} onCheckedChange={setExpandMessages}>
-            Expand messages
+            {t("session.expandMessages")}
           </DropdownMenuCheckboxItem>
           <DropdownMenuCheckboxItem checked={markdownPreview} onCheckedChange={setMarkdownPreview}>
-            Markdown preview
+            {t("session.markdownPreview")}
           </DropdownMenuCheckboxItem>
           <DropdownMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-            Readable slash command
+            {t("session.readableSlashCommand")}
           </DropdownMenuCheckboxItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
@@ -987,7 +948,7 @@ export function SessionDetailDropdownMenuItems({
             className="gap-2"
           >
             <Info size={14} />
-            Session information...
+            {t("session.informationEllipsis")}
           </DropdownMenuItem>
           <SessionInfoMenuHint state={sessionInfoState} />
         </DropdownMenuSubContent>
@@ -995,60 +956,74 @@ export function SessionDetailDropdownMenuItems({
       <DropdownMenuSub>
         <DropdownMenuSubTrigger className="gap-2">
           <Pin size={14} />
-          Manage
+          {t("session.manage")}
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent>
           <DropdownMenuItem onClick={togglePinned} className="gap-2">
             {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
-            {isPinned ? "Unpin" : "Pin to top"}
+            {isPinned ? t("session.unpin") : t("session.pinToTop")}
           </DropdownMenuItem>
           {onToggleRead && (
             <DropdownMenuItem onClick={onToggleRead} className="gap-2">
               {unread ? <Eye size={14} /> : <EyeOff size={14} />}
-              {unread ? "Mark as read" : "Mark as unread"}
+              {unread ? t("session.markAsRead") : t("session.markAsUnread")}
             </DropdownMenuItem>
           )}
           {onMarkNeedsReview && (
             <DropdownMenuItem onClick={onMarkNeedsReview} className="gap-2">
               <AlertCircle size={14} />
-              {needsReview ? "Needs review" : "Mark needs review"}
+              {needsReview ? t("workspace.needsReview") : t("workspace.markNeedsReview")}
             </DropdownMenuItem>
           )}
           <DropdownMenuItem onClick={toggleArchived} className="gap-2">
             {isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-            {isArchived ? "Unarchive" : "Archive"}
+            {isArchived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
           </DropdownMenuItem>
           {sessionConfig.onArchiveAllAfter && sessionConfig.archiveAfterCount !== undefined && sessionConfig.archiveAfterCount > 0 && (
             <DropdownMenuItem onClick={sessionConfig.onArchiveAllAfter} className="gap-2">
               <Archive size={14} />
-              Archive This and {sessionConfig.archiveAfterCount} After
+              {t("session.archiveThisAndAfter", { count: sessionConfig.archiveAfterCount })}
             </DropdownMenuItem>
           )}
         </DropdownMenuSubContent>
       </DropdownMenuSub>
+      {onEnvironment && (
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger className="gap-2">
+            <Settings2 size={14} />
+            {t("workspace.advanced")}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuSubContent>
+            <DropdownMenuItem onClick={onEnvironment} className="gap-2">
+              <Settings2 size={14} />
+              {t("session.configureRunScripts")}
+            </DropdownMenuItem>
+          </DropdownMenuSubContent>
+        </DropdownMenuSub>
+      )}
       <DropdownMenuSub>
         <DropdownMenuSubTrigger className="gap-2">
           <Copy size={14} />
-          Copy
+          {t("session.copy")}
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent>
           <DropdownMenuItem disabled={!readyToCopy} onClick={handleCopySessionInfo} className="gap-2">
             <Info size={14} />
-            Session Info
+            {t("session.sessionInfo")}
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!readyToCopy || !hasRelatedFiles} onClick={handleCopyRelatedFiles} className="gap-2">
             <FolderInput size={14} />
-            Related File Paths
+            {t("session.relatedFilePaths")}
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!readyToCopy} onClick={handleCopyTraceContext} className="gap-2">
             <ClipboardList size={14} />
-            Trace Context
+            {t("session.traceContext")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {canCopySessionTitle && (
             <DropdownMenuItem onClick={handleCopySessionTitle} className="gap-2">
               <MessageSquare size={14} />
-              Session Title
+              {t("session.sessionTitle")}
             </DropdownMenuItem>
           )}
           <DropdownMenuItem onClick={handleCopySessionId} className="gap-2">
@@ -1058,12 +1033,12 @@ export function SessionDetailDropdownMenuItems({
           {sessionConfig.projectPath && (
             <DropdownMenuItem onClick={() => handleCopyResumeCommand(sessionConfig.projectPath!)} className="gap-2">
               <Terminal size={14} />
-              Resume Command
+            {t("session.resumeCommand")}
             </DropdownMenuItem>
           )}
           <DropdownMenuItem onClick={handleCopyPath} className="gap-2">
             <FolderInput size={14} />
-            File Path
+            {t("session.filePath")}
           </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
@@ -1077,16 +1052,16 @@ export function SessionDetailDropdownMenuItems({
       <DropdownMenuSub>
         <DropdownMenuSubTrigger className="gap-2">
           <FolderOpen size={14} />
-          Files
+          {t("session.files")}
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent>
           <DropdownMenuItem onClick={handleReveal} className="gap-2">
             <FolderOpen size={14} />
-            Reveal in Finder
+            {t("fileViewer.revealInFinder")}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handleOpenInEditor} className="gap-2">
             <ExternalLinkIcon width={14} />
-            Open in Editor
+            {t("common.openInEditor")}
           </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
@@ -1095,7 +1070,7 @@ export function SessionDetailDropdownMenuItems({
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onClose} className="gap-2">
             <Cross2Icon width={14} />
-            Close panel
+            {t("workspace.closePanel")}
           </DropdownMenuItem>
         </>
       )}
@@ -1107,21 +1082,14 @@ export function SessionDetailContextMenuItems({
   onClose,
   displayMode,
   onDisplayModeChange,
-  onOpenConversation,
-  environmentActionLabel,
-  environmentActionDisabled,
-  onRunEnvironmentAction,
   onEnvironment,
-  onRestartRuntime,
-  onStartRuntime,
-  onStopRuntime,
-  runtimeConnected,
   unread,
   onToggleRead,
   needsReview,
   onMarkNeedsReview,
   ...sessionConfig
 }: SessionDetailMenuConfig) {
+  const { t } = useI18n();
   const {
     userPromptsOnly,
     setUserPromptsOnly,
@@ -1132,14 +1100,6 @@ export function SessionDetailContextMenuItems({
     originalChat,
     setOriginalChat,
   } = useSessionDetailViewState();
-  const hasConversationActions = Boolean(
-    onOpenConversation ||
-      onRunEnvironmentAction ||
-      onEnvironment ||
-      onRestartRuntime ||
-      (onStartRuntime && onStopRuntime) ||
-      sessionConfig.onResume,
-  );
   const {
     handleReveal,
     handleOpenInEditor,
@@ -1177,56 +1137,10 @@ export function SessionDetailContextMenuItems({
         onCopyRelatedFiles={handleCopyRelatedFiles}
         onCopyTraceContext={handleCopyTraceContext}
       />
-      {hasConversationActions && (
-        <ContextMenuSub>
-          <ContextMenuSubTrigger className="gap-2">
-            <MessageSquare size={14} />
-            Open & Run
-          </ContextMenuSubTrigger>
-          <ContextMenuSubContent>
-          {onOpenConversation && (
-            <ContextMenuItem onClick={onOpenConversation} className="gap-2">
-              <MessageSquare size={14} />
-              Open conversation
-            </ContextMenuItem>
-          )}
-          {onEnvironment && (
-            <ContextMenuItem onClick={onEnvironment} className="gap-2">
-              <Settings2 size={14} />
-              Environment
-            </ContextMenuItem>
-          )}
-          {onRunEnvironmentAction && (
-            <ContextMenuItem disabled={environmentActionDisabled} onClick={onRunEnvironmentAction} className="gap-2">
-              <Terminal size={14} />
-              {environmentActionLabel ?? "Run environment action"}
-            </ContextMenuItem>
-          )}
-          {onRestartRuntime && (
-            <ContextMenuItem onClick={onRestartRuntime} className="gap-2">
-              <RotateCcw size={14} />
-              Run again
-            </ContextMenuItem>
-          )}
-          {onStartRuntime && onStopRuntime && (
-            <ContextMenuItem onClick={runtimeConnected ? onStopRuntime : onStartRuntime} className="gap-2">
-              {runtimeConnected ? <Square size={14} /> : <Play size={14} />}
-              {runtimeConnected ? "Stop runtime" : "Start runtime"}
-            </ContextMenuItem>
-          )}
-          {sessionConfig.onResume && (
-            <ContextMenuItem onClick={sessionConfig.onResume} className="gap-2">
-              <ChatBubbleIcon className="w-3.5 h-3.5" />
-              Resume Session
-            </ContextMenuItem>
-          )}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-      )}
       <ContextMenuSub>
         <ContextMenuSubTrigger className="gap-2">
           <Eye size={14} />
-          View
+          {t("session.view")}
         </ContextMenuSubTrigger>
         <ContextMenuSubContent className="w-80">
           {displayMode && onDisplayModeChange && (
@@ -1235,23 +1149,23 @@ export function SessionDetailContextMenuItems({
                 value={displayMode}
                 onValueChange={(value) => onDisplayModeChange(value as "chat" | "pty")}
               >
-                <ContextMenuRadioItem value="chat">Chat record</ContextMenuRadioItem>
+                <ContextMenuRadioItem value="chat">{t("session.chatRecord")}</ContextMenuRadioItem>
                 <ContextMenuRadioItem value="pty">PTY</ContextMenuRadioItem>
               </ContextMenuRadioGroup>
               <ContextMenuSeparator />
             </>
           )}
           <ContextMenuCheckboxItem checked={userPromptsOnly} onCheckedChange={setUserPromptsOnly}>
-            Prompts only
+            {t("session.promptsOnly")}
           </ContextMenuCheckboxItem>
           <ContextMenuCheckboxItem checked={expandMessages} onCheckedChange={setExpandMessages}>
-            Expand messages
+            {t("session.expandMessages")}
           </ContextMenuCheckboxItem>
           <ContextMenuCheckboxItem checked={markdownPreview} onCheckedChange={setMarkdownPreview}>
-            Markdown preview
+            {t("session.markdownPreview")}
           </ContextMenuCheckboxItem>
           <ContextMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-            Readable slash command
+            {t("session.readableSlashCommand")}
           </ContextMenuCheckboxItem>
           <ContextMenuSeparator />
           <ContextMenuItem
@@ -1262,7 +1176,7 @@ export function SessionDetailContextMenuItems({
             className="gap-2"
           >
             <Info size={14} />
-            Session information...
+            {t("session.informationEllipsis")}
           </ContextMenuItem>
           <SessionInfoMenuHint state={sessionInfoState} />
         </ContextMenuSubContent>
@@ -1270,60 +1184,74 @@ export function SessionDetailContextMenuItems({
       <ContextMenuSub>
         <ContextMenuSubTrigger className="gap-2">
           <Pin size={14} />
-          Manage
+          {t("session.manage")}
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <ContextMenuItem onClick={togglePinned} className="gap-2">
             {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
-            {isPinned ? "Unpin" : "Pin to top"}
+            {isPinned ? t("session.unpin") : t("session.pinToTop")}
           </ContextMenuItem>
           {onToggleRead && (
             <ContextMenuItem onClick={onToggleRead} className="gap-2">
               {unread ? <Eye size={14} /> : <EyeOff size={14} />}
-              {unread ? "Mark as read" : "Mark as unread"}
+              {unread ? t("session.markAsRead") : t("session.markAsUnread")}
             </ContextMenuItem>
           )}
           {onMarkNeedsReview && (
             <ContextMenuItem onClick={onMarkNeedsReview} className="gap-2">
               <AlertCircle size={14} />
-              {needsReview ? "Needs review" : "Mark needs review"}
+              {needsReview ? t("workspace.needsReview") : t("workspace.markNeedsReview")}
             </ContextMenuItem>
           )}
           <ContextMenuItem onClick={toggleArchived} className="gap-2">
             {isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-            {isArchived ? "Unarchive" : "Archive"}
+            {isArchived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
           </ContextMenuItem>
           {sessionConfig.onArchiveAllAfter && sessionConfig.archiveAfterCount !== undefined && sessionConfig.archiveAfterCount > 0 && (
             <ContextMenuItem onClick={sessionConfig.onArchiveAllAfter} className="gap-2">
               <Archive size={14} />
-              Archive This and {sessionConfig.archiveAfterCount} After
+              {t("session.archiveThisAndAfter", { count: sessionConfig.archiveAfterCount })}
             </ContextMenuItem>
           )}
         </ContextMenuSubContent>
       </ContextMenuSub>
+      {onEnvironment && (
+        <ContextMenuSub>
+          <ContextMenuSubTrigger className="gap-2">
+            <Settings2 size={14} />
+            {t("workspace.advanced")}
+          </ContextMenuSubTrigger>
+          <ContextMenuSubContent>
+            <ContextMenuItem onClick={onEnvironment} className="gap-2">
+              <Settings2 size={14} />
+              {t("session.configureRunScripts")}
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
+      )}
       <ContextMenuSub>
         <ContextMenuSubTrigger className="gap-2">
           <Copy size={14} />
-          Copy
+          {t("session.copy")}
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <ContextMenuItem disabled={!readyToCopy} onClick={handleCopySessionInfo} className="gap-2">
             <Info size={14} />
-            Session Info
+            {t("session.sessionInfo")}
           </ContextMenuItem>
           <ContextMenuItem disabled={!readyToCopy || !hasRelatedFiles} onClick={handleCopyRelatedFiles} className="gap-2">
             <FolderInput size={14} />
-            Related File Paths
+            {t("session.relatedFilePaths")}
           </ContextMenuItem>
           <ContextMenuItem disabled={!readyToCopy} onClick={handleCopyTraceContext} className="gap-2">
             <ClipboardList size={14} />
-            Trace Context
+            {t("session.traceContext")}
           </ContextMenuItem>
           <ContextMenuSeparator />
           {canCopySessionTitle && (
             <ContextMenuItem onClick={handleCopySessionTitle} className="gap-2">
               <MessageSquare size={14} />
-              Session Title
+              {t("session.sessionTitle")}
             </ContextMenuItem>
           )}
           <ContextMenuItem onClick={handleCopySessionId} className="gap-2">
@@ -1333,12 +1261,12 @@ export function SessionDetailContextMenuItems({
           {sessionConfig.projectPath && (
             <ContextMenuItem onClick={() => handleCopyResumeCommand(sessionConfig.projectPath!)} className="gap-2">
               <Terminal size={14} />
-              Resume Command
+            {t("session.resumeCommand")}
             </ContextMenuItem>
           )}
           <ContextMenuItem onClick={handleCopyPath} className="gap-2">
             <FolderInput size={14} />
-            File Path
+            {t("session.filePath")}
           </ContextMenuItem>
         </ContextMenuSubContent>
       </ContextMenuSub>
@@ -1352,16 +1280,16 @@ export function SessionDetailContextMenuItems({
       <ContextMenuSub>
         <ContextMenuSubTrigger className="gap-2">
           <FolderOpen size={14} />
-          Files
+          {t("session.files")}
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <ContextMenuItem onClick={handleReveal} className="gap-2">
             <FolderOpen size={14} />
-            Reveal in Finder
+            {t("fileViewer.revealInFinder")}
           </ContextMenuItem>
           <ContextMenuItem onClick={handleOpenInEditor} className="gap-2">
             <ExternalLinkIcon width={14} />
-            Open in Editor
+            {t("common.openInEditor")}
           </ContextMenuItem>
         </ContextMenuSubContent>
       </ContextMenuSub>
@@ -1370,7 +1298,7 @@ export function SessionDetailContextMenuItems({
           <ContextMenuSeparator />
           <ContextMenuItem onClick={onClose} className="gap-2">
             <Cross2Icon width={14} />
-            Close panel
+            {t("workspace.closePanel")}
           </ContextMenuItem>
         </>
       )}
@@ -1398,6 +1326,7 @@ export function SessionDropdownMenuItems({
   isArchivedOverride,
   onToggleArchiveOverride,
 }: SessionMenuConfig) {
+  const { t } = useI18n();
   const {
     handleReveal,
     handleOpenInEditor,
@@ -1434,48 +1363,48 @@ export function SessionDropdownMenuItems({
     <>
       <DropdownMenuItem onClick={togglePinned} className="gap-2">
         {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
-        {isPinned ? "Unpin" : "Pin to top"}
+        {isPinned ? t("session.unpin") : t("session.pinToTop")}
       </DropdownMenuItem>
       {onResume && (
         <DropdownMenuItem onClick={onResume} className="gap-2">
           <ChatBubbleIcon className="w-3.5 h-3.5" />
-          Resume Session
+          {t("session.resumeSession")}
         </DropdownMenuItem>
       )}
       <DropdownMenuItem onClick={toggleArchived} className="gap-2">
         {isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-        {isArchived ? "Unarchive" : "Archive"}
+        {isArchived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
       </DropdownMenuItem>
       {onArchiveAllAfter && archiveAfterCount !== undefined && archiveAfterCount > 0 && (
         <DropdownMenuItem onClick={onArchiveAllAfter} className="gap-2">
           <Archive size={14} />
-          Archive This and {archiveAfterCount} After
+          {t("session.archiveThisAndAfter", { count: archiveAfterCount })}
         </DropdownMenuItem>
       )}
       <DropdownMenuSeparator />
       <DropdownMenuSub>
         <DropdownMenuSubTrigger className="gap-2">
           <Copy size={14} />
-          Copy
+          {t("session.copy")}
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent>
           <DropdownMenuItem disabled={!readyToCopy} onClick={handleCopySessionInfo} className="gap-2">
             <Info size={14} />
-            Session Info
+            {t("session.sessionInfo")}
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!readyToCopy || !hasRelatedFiles} onClick={handleCopyRelatedFiles} className="gap-2">
             <FolderInput size={14} />
-            Related File Paths
+            {t("session.relatedFilePaths")}
           </DropdownMenuItem>
           <DropdownMenuItem disabled={!readyToCopy} onClick={handleCopyTraceContext} className="gap-2">
             <ClipboardList size={14} />
-            Trace Context
+            {t("session.traceContext")}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           {canCopySessionTitle && (
             <DropdownMenuItem onClick={handleCopySessionTitle} className="gap-2">
               <MessageSquare size={14} />
-              Session Title
+              {t("session.sessionTitle")}
             </DropdownMenuItem>
           )}
           <DropdownMenuItem onClick={handleCopySessionId} className="gap-2">
@@ -1485,12 +1414,12 @@ export function SessionDropdownMenuItems({
           {projectPath && (
             <DropdownMenuItem onClick={() => handleCopyResumeCommand(projectPath)} className="gap-2">
               <Terminal size={14} />
-              Resume Command
+            {t("session.resumeCommand")}
             </DropdownMenuItem>
           )}
           <DropdownMenuItem onClick={handleCopyPath} className="gap-2">
             <FolderInput size={14} />
-            File Path
+            {t("session.filePath")}
           </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
@@ -1498,16 +1427,16 @@ export function SessionDropdownMenuItems({
       <DropdownMenuSub>
         <DropdownMenuSubTrigger className="gap-2">
           <FolderOpen size={14} />
-          Open
+          {t("common.open")}
         </DropdownMenuSubTrigger>
         <DropdownMenuSubContent>
           <DropdownMenuItem onClick={handleReveal} className="gap-2">
             <FolderOpen size={14} />
-            Reveal in Finder
+            {t("fileViewer.revealInFinder")}
           </DropdownMenuItem>
           <DropdownMenuItem onClick={handleOpenInEditor} className="gap-2">
             <ExternalLinkIcon width={14} />
-            Open in Editor
+            {t("common.openInEditor")}
           </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
@@ -1516,12 +1445,12 @@ export function SessionDropdownMenuItems({
           <DropdownMenuSeparator />
           {setOriginalChat && (
             <DropdownMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-              Readable Slash Command
+              {t("session.readableSlashCommand")}
             </DropdownMenuCheckboxItem>
           )}
           {setMarkdownPreview && (
             <DropdownMenuCheckboxItem checked={markdownPreview} onCheckedChange={setMarkdownPreview}>
-              Markdown Preview
+              {t("session.markdownPreview")}
             </DropdownMenuCheckboxItem>
           )}
         </>
@@ -1531,7 +1460,7 @@ export function SessionDropdownMenuItems({
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={onExport} className="gap-2">
             <Download size={14} />
-            Export
+            {t("export.export")}
           </DropdownMenuItem>
         </>
       )}
@@ -1559,6 +1488,7 @@ export function SessionContextMenuItems({
   isArchivedOverride,
   onToggleArchiveOverride,
 }: SessionMenuConfig) {
+  const { t } = useI18n();
   const {
     handleReveal,
     handleOpenInEditor,
@@ -1595,48 +1525,48 @@ export function SessionContextMenuItems({
     <>
       <ContextMenuItem onClick={togglePinned} className="gap-2">
         {isPinned ? <PinOff size={14} /> : <Pin size={14} />}
-        {isPinned ? "Unpin" : "Pin to top"}
+        {isPinned ? t("session.unpin") : t("session.pinToTop")}
       </ContextMenuItem>
       {onResume && (
         <ContextMenuItem onClick={onResume} className="gap-2">
           <ChatBubbleIcon className="w-3.5 h-3.5" />
-          Resume Session
+          {t("session.resumeSession")}
         </ContextMenuItem>
       )}
       <ContextMenuItem onClick={toggleArchived} className="gap-2">
         {isArchived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
-        {isArchived ? "Unarchive" : "Archive"}
+        {isArchived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
       </ContextMenuItem>
       {onArchiveAllAfter && archiveAfterCount !== undefined && archiveAfterCount > 0 && (
         <ContextMenuItem onClick={onArchiveAllAfter} className="gap-2">
           <Archive size={14} />
-          Archive This and {archiveAfterCount} After
+          {t("session.archiveThisAndAfter", { count: archiveAfterCount })}
         </ContextMenuItem>
       )}
       <ContextMenuSeparator />
       <ContextMenuSub>
         <ContextMenuSubTrigger className="gap-2">
           <Copy size={14} />
-          Copy
+          {t("session.copy")}
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <ContextMenuItem disabled={!readyToCopy} onClick={handleCopySessionInfo} className="gap-2">
             <Info size={14} />
-            Session Info
+            {t("session.sessionInfo")}
           </ContextMenuItem>
           <ContextMenuItem disabled={!readyToCopy || !hasRelatedFiles} onClick={handleCopyRelatedFiles} className="gap-2">
             <FolderInput size={14} />
-            Related File Paths
+            {t("session.relatedFilePaths")}
           </ContextMenuItem>
           <ContextMenuItem disabled={!readyToCopy} onClick={handleCopyTraceContext} className="gap-2">
             <ClipboardList size={14} />
-            Trace Context
+            {t("session.traceContext")}
           </ContextMenuItem>
           <ContextMenuSeparator />
           {canCopySessionTitle && (
             <ContextMenuItem onClick={handleCopySessionTitle} className="gap-2">
               <MessageSquare size={14} />
-              Session Title
+              {t("session.sessionTitle")}
             </ContextMenuItem>
           )}
           <ContextMenuItem onClick={handleCopySessionId} className="gap-2">
@@ -1646,12 +1576,12 @@ export function SessionContextMenuItems({
           {projectPath && (
             <ContextMenuItem onClick={() => handleCopyResumeCommand(projectPath)} className="gap-2">
               <Terminal size={14} />
-              Resume Command
+            {t("session.resumeCommand")}
             </ContextMenuItem>
           )}
           <ContextMenuItem onClick={handleCopyPath} className="gap-2">
             <FolderInput size={14} />
-            File Path
+            {t("session.filePath")}
           </ContextMenuItem>
         </ContextMenuSubContent>
       </ContextMenuSub>
@@ -1659,16 +1589,16 @@ export function SessionContextMenuItems({
       <ContextMenuSub>
         <ContextMenuSubTrigger className="gap-2">
           <FolderOpen size={14} />
-          Open
+          {t("common.open")}
         </ContextMenuSubTrigger>
         <ContextMenuSubContent>
           <ContextMenuItem onClick={handleReveal} className="gap-2">
             <FolderOpen size={14} />
-            Reveal in Finder
+            {t("fileViewer.revealInFinder")}
           </ContextMenuItem>
           <ContextMenuItem onClick={handleOpenInEditor} className="gap-2">
             <ExternalLinkIcon width={14} />
-            Open in Editor
+            {t("common.openInEditor")}
           </ContextMenuItem>
         </ContextMenuSubContent>
       </ContextMenuSub>
@@ -1677,12 +1607,12 @@ export function SessionContextMenuItems({
           <ContextMenuSeparator />
           {setOriginalChat && (
             <ContextMenuCheckboxItem checked={originalChat} onCheckedChange={setOriginalChat}>
-              Readable Slash Command
+              {t("session.readableSlashCommand")}
             </ContextMenuCheckboxItem>
           )}
           {setMarkdownPreview && (
             <ContextMenuCheckboxItem checked={markdownPreview} onCheckedChange={setMarkdownPreview}>
-              Markdown Preview
+              {t("session.markdownPreview")}
             </ContextMenuCheckboxItem>
           )}
         </>
@@ -1692,7 +1622,7 @@ export function SessionContextMenuItems({
           <ContextMenuSeparator />
           <ContextMenuItem onClick={onExport} className="gap-2">
             <Download size={14} />
-            Export
+            {t("export.export")}
           </ContextMenuItem>
         </>
       )}

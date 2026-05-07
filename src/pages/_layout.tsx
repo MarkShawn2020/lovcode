@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { useQueryClient } from "../hooks";
 import { useAtom } from "jotai";
@@ -46,53 +46,37 @@ import type { AgentSession, AgentWorkspaceState, EnvironmentConfig, EnvironmentS
 const AGENT_WORKSPACE_STATE_UPDATED_EVENT = "agent-workspace-state-updated";
 
 // ============================================================================
-// Route to Feature mapping
+// Route to top-nav section mapping
 // ============================================================================
 
-function getFeatureFromPath(pathname: string): FeatureType | null {
+const TOP_NAV_BY_ROUTE_SEGMENT: Record<string, FeatureType> = {
+  dashboard: "dashboard",
+  workbench: "workbench",
+  workspace: "workbench",
+  history: "workbench",
+  features: "features",
+  settings: "features",
+  commands: "features",
+  mcp: "features",
+  skills: "features",
+  hooks: "features",
+  agents: "features",
+  "output-styles": "features",
+  statusline: "features",
+  marketplace: "features",
+  extensions: "features",
+  lab: "lab",
+  wishes: "lab",
+  knowledge: "lab",
+  docs: "lab",
+  events: "lab",
+  "annual-report-2025": "lab",
+};
+
+function getTopNavFeatureFromPath(pathname: string): FeatureType | null {
   const path = pathname.startsWith("/") ? pathname.slice(1) : pathname;
   const segment = path.split("/")[0];
-
-  const featureMap: Record<string, FeatureType> = {
-    "": null as unknown as FeatureType,
-    "dashboard": "dashboard",
-    "lab": "lab",
-    "workbench": "workbench",
-    "wishes": "wish-room",
-    "workspace": "workspace",
-    "features": "features",
-    "history": "chat",
-    "skills": "skills",
-    "commands": "commands",
-    "mcp": "mcp",
-    "hooks": "hooks",
-    "agents": "sub-agents",
-    "output-styles": "output-styles",
-    "statusline": "statusline",
-    "settings": "settings",
-    "knowledge": "kb-distill",
-    "marketplace": "marketplace",
-    "events": "events",
-  };
-
-  // Handle settings sub-routes
-  if (path.startsWith("settings/")) {
-    const sub = path.split("/")[1];
-    if (sub === "env") return "basic-env";
-    if (sub === "maas") return "basic-maas";
-    if (sub === "version") return "basic-version";
-    if (sub === "context") return "basic-context";
-    return "settings";
-  }
-
-  // Handle knowledge sub-routes
-  if (path.startsWith("knowledge/")) {
-    const sub = path.split("/")[1];
-    if (sub === "distill") return "kb-distill";
-    // sub === "source" → dynamic source, no fixed FeatureType
-  }
-
-  return featureMap[segment] ?? null;
+  return TOP_NAV_BY_ROUTE_SEGMENT[segment] ?? null;
 }
 
 // ============================================================================
@@ -104,8 +88,8 @@ export default function RootLayout() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // Derive current feature from URL
-  const currentFeature = getFeatureFromPath(location.pathname);
+  // Derive the active top-level nav item from URL.
+  const activeTopNavFeature = getTopNavFeatureFromPath(location.pathname);
 
   // App state (non-routing)
   const [homeDir, setHomeDir] = useState("");
@@ -123,8 +107,8 @@ export default function RootLayout() {
   }, []);
 
   // Splash dismissal:
-  //   - On /history or /workbench (and "/" which redirects via HomePage),
-  //     ProjectList controls the splash — wait until the session list is
+  //   - On /workbench (and "/" which redirects via HomePage), the workbench
+  //     controls the splash — wait until the session list is
   //     actually ready, no jarring "empty shell" gap.
   //   - On every other route, RootLayout dismisses immediately — those
   //     pages don't have a multi-second initial query.
@@ -132,7 +116,7 @@ export default function RootLayout() {
   // on "/" because HomePage will redirect within a microtask.
   useEffect(() => {
     const p = location.pathname;
-    if (p === "/" || p.startsWith("/history") || p.startsWith("/workbench")) return;
+    if (p === "/" || p.startsWith("/workbench")) return;
     window.dispatchEvent(new Event("app:ready"));
   }, [location.pathname]);
 
@@ -198,11 +182,11 @@ export default function RootLayout() {
       "lab": "/lab",
       "workbench": "/workbench",
       "wish-room": "/wishes",
-      "chat": "/history",
+      "chat": "/workbench",
       "workspace": "/workspace",
       "basic-env": "/settings/env",
       "basic-maas": "/settings/maas",
-      "basic-version": "/settings/version",
+      "basic-version": "/settings/runtime",
       "basic-context": "/settings/context",
       "settings": "/settings",
       "commands": "/commands",
@@ -228,7 +212,7 @@ export default function RootLayout() {
     <AppConfigContext.Provider value={appConfig}>
       <div className="h-screen bg-canvas flex flex-col">
         <GlobalHeader
-          currentFeature={currentFeature}
+          activeFeature={activeTopNavFeature}
           canGoBack={window.history.length > 1}
           canGoForward={false}
           onGoBack={() => navigate(-1)}

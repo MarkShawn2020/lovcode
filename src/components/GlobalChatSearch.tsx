@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { atom, useAtom, useAtomValue } from "jotai";
 import { useNavigate } from "react-router-dom";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@/lib/tauri";
 import { Window, getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { register, unregister, isRegistered } from "@tauri-apps/plugin-global-shortcut";
@@ -17,6 +17,10 @@ export const chatSearchOpenAtom = atom(false);
 
 const SYSTEM_HOTKEY = "CmdOrCtrl+K";
 const SEARCH_WINDOW_LABEL = "search";
+
+function getSessionSelectionPath(session: Pick<Session, "project_id" | "id">): string {
+  return `/workbench?projectId=${encodeURIComponent(session.project_id)}&sessionId=${encodeURIComponent(session.id)}`;
+}
 
 async function toggleSearchWindow() {
   try {
@@ -61,7 +65,10 @@ export function GlobalChatSearch() {
       sessionId: string;
       summary: string | null;
     }>("open-chat", (e) => {
-      navigate("/history", { state: { selectSessionId: e.payload.sessionId } });
+      navigate(getSessionSelectionPath({
+        project_id: e.payload.projectId,
+        id: e.payload.sessionId,
+      }));
       const main = getCurrentWindow();
       main.show().catch(() => {});
       main.unminimize().catch(() => {});
@@ -176,7 +183,7 @@ export function GlobalChatSearch() {
       inputRef={inputRef}
       toReadable={toReadable}
       onSelect={(s) => {
-        navigate("/history", { state: { selectSessionId: s.id } });
+        navigate(getSessionSelectionPath(s));
         setOpen(false);
       }}
       onClose={() => setOpen(false)}

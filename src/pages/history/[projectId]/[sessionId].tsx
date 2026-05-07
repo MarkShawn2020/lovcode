@@ -1,19 +1,14 @@
-import { useParams, useNavigate } from "react-router-dom";
-import { MessageView } from "../../../views/Chat";
+import { Navigate, useLocation, useParams } from "react-router-dom";
 
-export default function ChatMessagesPage() {
+export default function HistorySessionRedirectPage() {
   const { projectId, sessionId } = useParams<{ projectId: string; sessionId: string }>();
-  const navigate = useNavigate();
+  const location = useLocation();
 
-  if (!projectId || !sessionId) return null;
+  if (!projectId || !sessionId) return <Navigate to="/workbench" replace />;
 
-  return (
-    <MessageView
-      projectId={decodeURIComponent(projectId)}
-      projectPath=""
-      sessionId={decodeURIComponent(sessionId)}
-      summary=""
-      onBack={() => navigate(`/history/${projectId}`)}
-    />
-  );
+  const search = new URLSearchParams(location.search);
+  search.set("projectId", decodeURIComponent(projectId));
+  search.set("sessionId", decodeURIComponent(sessionId));
+
+  return <Navigate to={`/workbench?${search.toString()}`} replace />;
 }

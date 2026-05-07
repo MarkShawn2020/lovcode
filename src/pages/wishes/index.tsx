@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
-import { Bot, Check, Circle, FolderOpen, Link2, Plus, SlidersHorizontal, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
+import { Bot, Check, Circle, FolderOpen, Link2, Pencil, Plus, RotateCcw, Save, SlidersHorizontal, Trash2, X } from "lucide-react";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,6 +11,7 @@ import { resolveSessionLabel, useReadableText } from "@/views/Chat/utils";
 import { LabLayout } from "@/views/Lab";
 
 const STORAGE_KEY = "lovcode:wish-room:items";
+const UNDO_TIMEOUT_MS = 3000;
 
 type WishStatus = "all" | "open" | "done";
 
@@ -31,6 +32,12 @@ interface AutocompleteCandidate {
   label: string;
   meta?: string;
   projectPath?: string | null;
+}
+
+interface UndoCompletion {
+  id: string;
+  title: string;
+  token: string;
 }
 
 const statusFilters: { key: WishStatus; labelKey: "wish.open" | "wish.all" | "wish.done" }[] = [
@@ -176,6 +183,8 @@ export default function WishesPage() {
   const [project, setProject] = useState("");
   const [session, setSession] = useState("");
   const [aiEnabled, setAiEnabled] = useState(false);
+  const [undoCompletion, setUndoCompletion] = useState<UndoCompletion | null>(null);
+  const [undoHovered, setUndoHovered] = useState(false);
 
   useEffect(() => {
     try {
@@ -184,6 +193,17 @@ export default function WishesPage() {
       // Keep the page usable even if localStorage is unavailable.
     }
   }, [wishes]);
+
+  useEffect(() => {
+    if (!undoCompletion) return;
+    if (undoHovered) return;
+    const timeout = window.setTimeout(() => {
+      setUndoCompletion((current) => (
+        current?.token === undoCompletion.token ? null : current
+      ));
+    }, UNDO_TIMEOUT_MS);
+    return () => window.clearTimeout(timeout);
+  }, [undoCompletion, undoHovered]);
 
   const visibleWishes = useMemo(() => {
     if (filter === "open") return wishes.filter((wish) => !wish.done);
@@ -230,19 +250,69 @@ export default function WishesPage() {
   };
 
   const updateWish = (id: string, patch: Partial<WishItem>) => {
+    const target = wishes.find((wish) => wish.id === id);
+    if (patch.done === true && target && !target.done) {
+      setUndoHovered(false);
+      setUndoCompletion({
+        id,
+        title: target.title,
+        token: createId(),
+      });
+    }
+    if (patch.done === false) {
+      setUndoCompletion((current) => (current?.id === id ? null : current));
+    }
     setWishes((current) => current.map((wish) => (
       wish.id === id ? { ...wish, ...patch } : wish
     )));
   };
 
   const deleteWish = (id: string) => {
+    setUndoCompletion((current) => (current?.id === id ? null : current));
     setWishes((current) => current.filter((wish) => wish.id !== id));
+  };
+
+  const undoCompleteWish = () => {
+    if (!undoCompletion) return;
+    const { id } = undoCompletion;
+    setUndoCompletion(null);
+    setWishes((current) => current.map((wish) => (
+      wish.id === id ? { ...wish, done: false } : wish
+    )));
   };
 
   return (
     <LabLayout active="wish-room">
       <div className="h-full overflow-auto bg-background">
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-4 py-5">
+          {undoCompletion ? (
+            <div
+              className="pointer-events-none sticky top-3 z-20 flex justify-center px-2"
+            >
+              <div
+                role="status"
+                aria-live="polite"
+                onMouseEnter={() => setUndoHovered(true)}
+                onMouseLeave={() => {
+                  setUndoHovered(false);
+                  setUndoCompletion(null);
+                }}
+                className="pointer-events-auto inline-flex max-w-[min(100%,28rem)] items-center gap-2 rounded-xl border border-border bg-card/95 px-2.5 py-1.5 text-xs text-muted-foreground shadow-sm backdrop-blur"
+              >
+                <p className="min-w-0 truncate">
+                  {t("wish.completedUndo", { title: undoCompletion.title })}
+                </p>
+                <button
+                  type="button"
+                  onClick={undoCompleteWish}
+                  className="inline-flex h-7 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-medium text-primary hover:bg-primary/10"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  {t("wish.undo")}
+                </button>
+              </div>
+            </div>
+          ) : null}
           <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <div className="mb-1.5 flex items-center gap-2 text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
@@ -409,12 +479,68 @@ function WishRow({
 }) {
   const { locale, t } = useI18n();
   const [expanded, setExpanded] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(wish.title);
+  const [draftNote, setDraftNote] = useState(wish.note);
+  const titleInputRef = useRef<HTMLInputElement | null>(null);
   const hasBinding = Boolean(wish.project || wish.session);
   const { selectedProject, sessions: sessionCandidatesSource } = useSessionCandidates(projects, wish.project, expanded);
   const sessionCandidates = useMemo(
     () => buildSessionCandidates(sessionCandidatesSource, selectedProject, toReadable, formatPath, locale),
     [formatPath, locale, selectedProject, sessionCandidatesSource, toReadable],
   );
+  const canSaveEdit = draftTitle.trim().length > 0;
+
+  useEffect(() => {
+    if (editing) return;
+    setDraftTitle(wish.title);
+    setDraftNote(wish.note);
+  }, [editing, wish.note, wish.title]);
+
+  useEffect(() => {
+    if (!editing) return;
+    titleInputRef.current?.focus();
+    titleInputRef.current?.select();
+  }, [editing]);
+
+  const startEditing = () => {
+    setDraftTitle(wish.title);
+    setDraftNote(wish.note);
+    setExpanded(false);
+    setEditing(true);
+  };
+
+  const cancelEditing = () => {
+    setDraftTitle(wish.title);
+    setDraftNote(wish.note);
+    setEditing(false);
+  };
+
+  const saveEditing = () => {
+    const title = draftTitle.trim();
+    if (!title) return;
+    onUpdate({ title, note: draftNote.trim() });
+    setEditing(false);
+  };
+
+  const handleTitleKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEditing();
+    }
+  };
+
+  const handleNoteKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      cancelEditing();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+      event.preventDefault();
+      saveEditing();
+    }
+  };
 
   return (
     <article className={wish.done ? "bg-muted/20" : "bg-card"}>
@@ -429,43 +555,110 @@ function WishRow({
         </button>
 
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <p className={`min-w-0 flex-1 truncate text-sm font-medium text-foreground ${wish.done ? "line-through decoration-primary/50" : ""}`}>
-              {wish.title}
-            </p>
-            <span className="shrink-0 text-[11px] text-muted-foreground">{formatDate(wish.createdAt, locale)}</span>
-          </div>
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-            {wish.note ? <span className="max-w-full truncate">{wish.note}</span> : null}
-            {wish.aiEnabled ? <MetaPill icon={<Bot className="h-3 w-3" />} label="AI" active /> : null}
-            {hasBinding ? (
-              <MetaPill
-                icon={<Link2 className="h-3 w-3" />}
-                label={[wish.project, wish.session].filter(Boolean).join(" / ")}
-                active
+          {editing ? (
+            <form
+              className="grid gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                saveEditing();
+              }}
+            >
+              <Input
+                ref={titleInputRef}
+                value={draftTitle}
+                onChange={(event) => setDraftTitle(event.target.value)}
+                onKeyDown={handleTitleKeyDown}
+                aria-label={t("wish.placeholder")}
+                className="h-9 border-input bg-background text-sm font-medium focus-visible:ring-1 focus-visible:ring-ring focus-visible:ring-offset-0"
               />
-            ) : null}
-          </div>
+              <textarea
+                value={draftNote}
+                onChange={(event) => setDraftNote(event.target.value)}
+                onKeyDown={handleNoteKeyDown}
+                rows={2}
+                placeholder={t("wish.note")}
+                aria-label={t("wish.note")}
+                className="min-h-14 w-full resize-none rounded-xl border border-input bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              />
+            </form>
+          ) : (
+            <>
+              <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <button
+                  type="button"
+                  onClick={startEditing}
+                  className={`min-w-0 flex-1 truncate text-left text-sm font-medium text-foreground hover:text-primary ${wish.done ? "line-through decoration-primary/50" : ""}`}
+                  title={t("common.edit")}
+                >
+                  {wish.title}
+                </button>
+                <span className="shrink-0 text-[11px] text-muted-foreground">{formatDate(wish.createdAt, locale)}</span>
+              </div>
+              <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                {wish.note ? <span className="max-w-full truncate">{wish.note}</span> : null}
+                {wish.aiEnabled ? <MetaPill icon={<Bot className="h-3 w-3" />} label="AI" active /> : null}
+                {hasBinding ? (
+                  <MetaPill
+                    icon={<Link2 className="h-3 w-3" />}
+                    label={[wish.project, wish.session].filter(Boolean).join(" / ")}
+                    active
+                  />
+                ) : null}
+              </div>
+            </>
+          )}
         </div>
 
-        <button
-          type="button"
-          onClick={() => setExpanded((open) => !open)}
-          className="h-7 shrink-0 rounded-lg px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          {t("wish.bind")}
-        </button>
-        <button
-          type="button"
-          onClick={onDelete}
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
-          title={t("common.delete")}
-        >
-          <Trash2 className="h-4 w-4" />
-        </button>
+        {editing ? (
+          <>
+            <button
+              type="button"
+              onClick={saveEditing}
+              disabled={!canSaveEdit}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+              title={t("common.save")}
+            >
+              <Save className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={cancelEditing}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={t("common.cancel")}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={startEditing}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={t("common.edit")}
+            >
+              <Pencil className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpanded((open) => !open)}
+              className="h-7 shrink-0 rounded-lg px-2 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+            >
+              {t("wish.bind")}
+            </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={t("common.delete")}
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </>
+        )}
       </div>
 
-      {expanded && (
+      {expanded && !editing && (
         <div className="grid gap-2 border-t border-border bg-background/60 px-3 py-3 md:grid-cols-[1fr_1fr_auto]">
           <textarea
             value={wish.note}
