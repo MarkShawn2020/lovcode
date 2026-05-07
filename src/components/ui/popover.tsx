@@ -151,12 +151,15 @@ export function PopoverContent({
 
     updateLayout();
     const frameId = window.requestAnimationFrame(updateLayout);
+    const observedElement = contentRef.current;
     const resizeObserver =
-      typeof ResizeObserver === "undefined" || !contentRef.current
+      typeof ResizeObserver === "undefined" || !observedElement
         ? null
         : new ResizeObserver(updateLayout);
 
-    resizeObserver?.observe(contentRef.current);
+    if (resizeObserver && observedElement) {
+      resizeObserver.observe(observedElement);
+    }
     window.addEventListener("resize", updateLayout);
     window.addEventListener("scroll", updateLayout, true);
     return () => {
