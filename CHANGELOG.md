@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.38.0
+
+### Minor Changes
+
+- Add standard agent chat mode, agent harness streaming, and Codex install source controls.
+
 ## 0.37.1
 
 ### Patch Changes
