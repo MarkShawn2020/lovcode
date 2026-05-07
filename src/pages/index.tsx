@@ -41,7 +41,7 @@ function getLastPath(): string {
       return migrateLegacyPath(saved);
     }
   } catch {}
-  return "/landing";
+  return "/workbench";
 }
 
 export default function HomePage() {

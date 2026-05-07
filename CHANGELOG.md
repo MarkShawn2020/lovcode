@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.37.1
+
+### Patch Changes
+
+- Open the app workbench on first launch instead of the public landing page.
+
 ## 0.37.0
 
 ### Minor Changes
