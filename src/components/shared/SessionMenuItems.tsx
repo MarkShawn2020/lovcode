@@ -129,8 +129,8 @@ export interface SessionMenuConfig {
 
 export interface SessionDetailMenuConfig extends SessionMenuConfig {
   onClose?: () => void;
-  displayMode?: "chat" | "pty";
-  onDisplayModeChange?: (mode: "chat" | "pty") => void;
+  displayMode?: "standard" | "cli";
+  onDisplayModeChange?: (mode: "standard" | "cli") => void;
   onOpenConversation?: () => void;
   environmentActionLabel?: string;
   environmentActionDisabled?: boolean;
@@ -919,10 +919,10 @@ export function SessionDetailDropdownMenuItems({
             <>
               <DropdownMenuRadioGroup
                 value={displayMode}
-                onValueChange={(value) => onDisplayModeChange(value as "chat" | "pty")}
+                onValueChange={(value) => onDisplayModeChange(value as "standard" | "cli")}
               >
-                <DropdownMenuRadioItem value="chat">{t("session.chatRecord")}</DropdownMenuRadioItem>
-                <DropdownMenuRadioItem value="pty">PTY</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="standard">{t("session.standardMode")}</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="cli">{t("session.commandLineMode")}</DropdownMenuRadioItem>
               </DropdownMenuRadioGroup>
               <DropdownMenuSeparator />
             </>
@@ -1147,10 +1147,10 @@ export function SessionDetailContextMenuItems({
             <>
               <ContextMenuRadioGroup
                 value={displayMode}
-                onValueChange={(value) => onDisplayModeChange(value as "chat" | "pty")}
+                onValueChange={(value) => onDisplayModeChange(value as "standard" | "cli")}
               >
-                <ContextMenuRadioItem value="chat">{t("session.chatRecord")}</ContextMenuRadioItem>
-                <ContextMenuRadioItem value="pty">PTY</ContextMenuRadioItem>
+                <ContextMenuRadioItem value="standard">{t("session.standardMode")}</ContextMenuRadioItem>
+                <ContextMenuRadioItem value="cli">{t("session.commandLineMode")}</ContextMenuRadioItem>
               </ContextMenuRadioGroup>
               <ContextMenuSeparator />
             </>

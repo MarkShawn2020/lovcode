@@ -10,7 +10,7 @@ import {
   type TextareaHTMLAttributes,
 } from "react";
 import { useAtomValue } from "jotai";
-import { AlertCircle, Check, ChevronDown, Cpu, RefreshCw, Settings, Terminal } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Cpu, MessageSquare, RefreshCw, Settings, Terminal } from "lucide-react";
 import { invoke } from "@/lib/tauri";
 import { useNavigate } from "react-router-dom";
 import {
@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ProjectPathPicker, type ProjectPathOption } from "@/components/shared/ProjectPathPicker";
 import { useI18n, type TranslationKey, type TranslationValues } from "@/i18n";
-import type { AgentProvider, AgentRuntimeStatus } from "@/types/agent";
+import type { AgentLaunchMode, AgentProvider, AgentRuntimeStatus } from "@/types/agent";
 import type { ClaudeSettings, MaasModel, MaasProvider, MaasRealtimeStatus, ZenmuxRealtimeModel } from "@/types";
 import { labelForProvider } from "@/lib/agent/commands";
 import { normalizeClaudeCodeModelName } from "@/lib/agent/models";
@@ -85,7 +85,7 @@ interface AgentComposerProps {
   onCancel?: () => void;
   onPickFolder?: () => void;
   onSelectCwd?: (path: string | null) => void;
-  onCreate: (provider: AgentProvider, prompt: string) => void;
+  onCreate: (provider: AgentProvider, prompt: string, launchMode: AgentLaunchMode) => void;
 }
 
 export function AgentComposer({
@@ -108,6 +108,7 @@ export function AgentComposer({
   const { t, translate } = useI18n();
   const navigate = useNavigate();
   const [provider, setProvider] = useState<AgentProvider>(defaultProvider);
+  const [launchMode, setLaunchMode] = useState<AgentLaunchMode>("standard");
   const [prompt, setPrompt] = useState("");
   const [maasRegistry, setMaasRegistry] = useState<MaasProvider[]>([]);
   const [maasRealtimeStatus, setMaasRealtimeStatus] = useState<MaasRealtimeStatus | null>(null);
@@ -128,6 +129,7 @@ export function AgentComposer({
   const displayCwdLabel = cwdLabel ?? (cwd ? undefined : allowNoProject ? t("composer.generalChat") : undefined);
   const providerResetKey = providerContextKey ?? defaultProvider;
   const providerLabel = translate(labelForProvider(provider));
+  const effectiveLaunchMode: AgentLaunchMode = provider === "terminal" ? "cli" : launchMode;
   const selectedRuntimeStatus = runtimeStatuses[provider] ?? null;
   const selectedRuntimeMissing = CLI_PROVIDERS.has(provider) && (
     selectedRuntimeStatus?.installed === false ||
@@ -264,6 +266,10 @@ export function AgentComposer({
 
   const submit = async () => {
     if (!canSubmit) return;
+    if (provider !== "terminal" && effectiveLaunchMode === "standard" && !prompt.trim()) {
+      focusPrompt();
+      return;
+    }
     if (CLI_PROVIDERS.has(provider)) {
       if (checkingRuntimeProvider === provider) return;
       const status = runtimeStatuses[provider] ?? (await refreshRuntimeStatus(provider));
@@ -273,7 +279,7 @@ export function AgentComposer({
         return;
       }
     }
-    onCreate(provider, prompt);
+    onCreate(provider, prompt, effectiveLaunchMode);
     setBlockedProvider(null);
     setPrompt("");
     requestAnimationFrame(() => {
@@ -322,6 +328,14 @@ export function AgentComposer({
       realtimeStatus={maasRealtimeStatus}
       realtimeStatusLoaded={maasRealtimeLoaded}
       onSettingsRawChange={setSettingsRaw}
+      className="w-full max-w-full"
+    />
+  );
+  const panelLaunchModePicker = (
+    <LaunchModePicker
+      provider={provider}
+      launchMode={effectiveLaunchMode}
+      onLaunchModeChange={setLaunchMode}
       className="w-full max-w-full"
     />
   );
@@ -395,6 +409,7 @@ export function AgentComposer({
                 className="agent-composer-panel-project w-full max-w-full"
               />
               {panelProviderPicker}
+              {panelLaunchModePicker}
               {panelModelPicker}
             </div>
           </div>
@@ -413,6 +428,11 @@ export function AgentComposer({
             runtimeStatusLoaded={runtimeStatusLoaded}
             onProviderChange={handleProviderChange}
             onOpenRuntimeSetup={openRuntimeSetupForProvider}
+          />
+          <CompactLaunchModePicker
+            provider={provider}
+            launchMode={effectiveLaunchMode}
+            onLaunchModeChange={setLaunchMode}
           />
           <PromptTextarea
             ref={textareaRef}
@@ -605,6 +625,139 @@ function CompactCliPicker({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function LaunchModePicker({
+  provider,
+  launchMode,
+  onLaunchModeChange,
+  className,
+}: {
+  provider: AgentProvider;
+  launchMode: AgentLaunchMode;
+  onLaunchModeChange: (mode: AgentLaunchMode) => void;
+  className?: string;
+}) {
+  const { t } = useI18n();
+  const disabled = provider === "terminal";
+  const label = launchMode === "standard" ? t("composer.standardMode") : t("composer.commandLineMode");
+  const eyebrow = disabled ? t("composer.commandLineMode") : t("composer.runMode");
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className={cn(
+            PICKER_TRIGGER_BASE_CLASS,
+            PICKER_TRIGGER_SIZE_CLASS.compact,
+            disabled && "cursor-default opacity-70 hover:bg-card-alt/60",
+            className,
+          )}
+          aria-label={t("composer.switchRunMode")}
+          title={disabled ? t("composer.terminalModeRequired") : t("composer.switchRunMode")}
+        >
+          <PickerTriggerContent
+            icon={<LaunchModeIcon mode={launchMode} />}
+            label={label}
+            eyebrow={eyebrow}
+            hasMenu={!disabled}
+          />
+        </button>
+      </DropdownMenuTrigger>
+      {!disabled && (
+        <DropdownMenuContent align="start" sideOffset={6} className="w-56 rounded-xl p-1.5">
+          <DropdownMenuLabel className="px-2 py-1 text-xs font-medium text-muted-foreground">
+            {t("composer.runMode")}
+          </DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={launchMode}
+            onValueChange={(value) => onLaunchModeChange(value as AgentLaunchMode)}
+          >
+            <DropdownMenuRadioItem value="standard" className="gap-2 rounded-lg py-2 pr-2">
+              <LaunchModeIcon mode="standard" />
+              <span className="grid min-w-0 flex-1">
+                <span className="truncate text-sm">{t("composer.standardMode")}</span>
+                <span className="truncate text-xs text-muted-foreground">{t("composer.standardModeDetail")}</span>
+              </span>
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="cli" className="gap-2 rounded-lg py-2 pr-2">
+              <LaunchModeIcon mode="cli" />
+              <span className="grid min-w-0 flex-1">
+                <span className="truncate text-sm">{t("composer.commandLineMode")}</span>
+                <span className="truncate text-xs text-muted-foreground">{t("composer.commandLineModeDetail")}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      )}
+    </DropdownMenu>
+  );
+}
+
+function CompactLaunchModePicker({
+  provider,
+  launchMode,
+  onLaunchModeChange,
+}: {
+  provider: AgentProvider;
+  launchMode: AgentLaunchMode;
+  onLaunchModeChange: (mode: AgentLaunchMode) => void;
+}) {
+  const { t } = useI18n();
+  const disabled = provider === "terminal";
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          disabled={disabled}
+          className={cn(
+            "mt-0.5 inline-flex h-7 shrink-0 items-center gap-1 rounded-lg border border-border bg-card-alt px-1.5 text-muted-foreground transition-colors hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            disabled && "cursor-default opacity-70 hover:bg-card-alt",
+          )}
+          title={disabled ? t("composer.terminalModeRequired") : t("composer.switchRunMode")}
+          aria-label={t("composer.switchRunMode")}
+        >
+          <LaunchModeIcon mode={launchMode} />
+          {!disabled && <ChevronDown className="h-3 w-3 shrink-0" />}
+        </button>
+      </DropdownMenuTrigger>
+      {!disabled && (
+        <DropdownMenuContent align="start" sideOffset={8} className="w-56 rounded-xl p-1.5">
+          <DropdownMenuLabel className="px-2 py-1 text-xs font-medium text-muted-foreground">
+            {t("composer.runMode")}
+          </DropdownMenuLabel>
+          <DropdownMenuRadioGroup
+            value={launchMode}
+            onValueChange={(value) => onLaunchModeChange(value as AgentLaunchMode)}
+          >
+            <DropdownMenuRadioItem value="standard" className="gap-2 rounded-lg py-2 pr-2">
+              <LaunchModeIcon mode="standard" />
+              <span className="grid min-w-0 flex-1">
+                <span className="truncate text-sm">{t("composer.standardMode")}</span>
+                <span className="truncate text-xs text-muted-foreground">{t("composer.standardModeDetail")}</span>
+              </span>
+            </DropdownMenuRadioItem>
+            <DropdownMenuRadioItem value="cli" className="gap-2 rounded-lg py-2 pr-2">
+              <LaunchModeIcon mode="cli" />
+              <span className="grid min-w-0 flex-1">
+                <span className="truncate text-sm">{t("composer.commandLineMode")}</span>
+                <span className="truncate text-xs text-muted-foreground">{t("composer.commandLineModeDetail")}</span>
+              </span>
+            </DropdownMenuRadioItem>
+          </DropdownMenuRadioGroup>
+        </DropdownMenuContent>
+      )}
+    </DropdownMenu>
+  );
+}
+
+function LaunchModeIcon({ mode }: { mode: AgentLaunchMode }) {
+  const className = "h-3.5 w-3.5 shrink-0";
+  return mode === "standard" ? <MessageSquare className={className} /> : <Terminal className={className} />;
 }
 
 function RuntimeProviderRadioItem({

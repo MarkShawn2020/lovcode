@@ -12,6 +12,11 @@ import { queryKeys, useInvokeMutation, useInvokeQuery, useQueryClient } from "..
 import { useI18n, type TranslationKey } from "../../i18n";
 import { cn } from "../../lib/utils";
 import { AgentCliRuntimeCard, agentRuntimeStatusKey } from "./AgentCliRuntimeCard";
+import {
+  getDefaultNpmInstallRegistry,
+  NpmInstallSourceControl,
+  type NpmInstallRegistry,
+} from "./NpmInstallSourceControl";
 
 function formatDownloads(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -59,7 +64,7 @@ function VersionChoice({
 }
 
 export function ClaudeCodeVersionSection() {
-  const { t } = useI18n();
+  const { activeLanguage, t } = useI18n();
   const {
     data: versionInfo,
     error: queryError,
@@ -70,16 +75,21 @@ export function ClaudeCodeVersionSection() {
     "get_claude_code_version_info",
   );
   const queryClient = useQueryClient();
-  const installMutation = useInvokeMutation<string, { version: string; installType: ClaudeCodeInstallType }>(
-    "install_claude_code_version",
-    [queryKeys.claudeCodeVersionInfo],
-  );
+  const installMutation = useInvokeMutation<
+    string,
+    { version: string; installType: ClaudeCodeInstallType; npmRegistry?: NpmInstallRegistry }
+  >("install_claude_code_version", [queryKeys.claudeCodeVersionInfo]);
   const autoupdaterMutation = useInvokeMutation<void, { disabled: boolean }>(
     "set_claude_code_autoupdater",
   );
   const [installing, setInstalling] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState<string>("latest");
-  const [selectedInstallType, setSelectedInstallType] = useState<ClaudeCodeInstallType>("native");
+  const [selectedInstallType, setSelectedInstallType] = useState<ClaudeCodeInstallType>(() =>
+    activeLanguage === "zh" ? "npm" : "native",
+  );
+  const [selectedNpmRegistry, setSelectedNpmRegistry] = useState<NpmInstallRegistry>(() =>
+    getDefaultNpmInstallRegistry(activeLanguage),
+  );
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean | null>(null);
   const [versionPopoverOpen, setVersionPopoverOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -114,6 +124,7 @@ export function ClaudeCodeVersionSection() {
       await installMutation.mutateAsync({
         version,
         installType,
+        npmRegistry: installType === "npm" ? selectedNpmRegistry : undefined,
       });
 
       await Promise.all([
@@ -256,6 +267,16 @@ export function ClaudeCodeVersionSection() {
                   })}
                 </div>
               </section>
+
+              {selectedInstallType === "npm" && (
+                <section>
+                  <NpmInstallSourceControl
+                    value={selectedNpmRegistry}
+                    onValueChange={setSelectedNpmRegistry}
+                    disabled={installing}
+                  />
+                </section>
+              )}
 
               <section className="space-y-1.5">
                 <p className="px-1 text-xs font-medium text-muted-foreground">

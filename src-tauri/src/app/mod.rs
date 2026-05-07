@@ -81,6 +81,8 @@ mod extensions;
 pub(crate) use extensions::*;
 mod agent_runtime;
 pub(crate) use agent_runtime::*;
+mod agent_harness;
+pub(crate) use agent_harness::*;
 mod lovcode_version;
 pub(crate) use lovcode_version::*;
 mod pty;

@@ -106,7 +106,7 @@ pub(crate) fn read_codex_session_head(path: &Path) -> CodexSessionHead {
                     let role = payload.get("role").and_then(|v| v.as_str()).unwrap_or("");
                     if role == "assistant" {
                         let text = codex_payload_message_text(payload);
-                        if !text.trim().is_empty() {
+                        if !text.trim().is_empty() && !is_codex_no_response_placeholder(&text) {
                             head.message_count += 1;
                         }
                     } else if role == "user" {
@@ -203,6 +203,8 @@ pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, 
                             continue;
                         }
                     } else if text.trim().is_empty() {
+                        continue;
+                    } else if is_codex_no_response_placeholder(&text) {
                         continue;
                     }
                     let content_blocks = extract_content_blocks(&payload.get("content").cloned());

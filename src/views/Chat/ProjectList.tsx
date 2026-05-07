@@ -92,9 +92,17 @@ const recentModelsAtom = atomWithStorage<RecentModelEntry[]>(
   [],
 );
 
-export type SessionDetailDisplayMode = "chat" | "pty";
+export type SessionDetailDisplayMode = "standard" | "cli";
+type LegacySessionDetailDisplayMode = "chat" | "pty";
+export const SESSION_ACTIVITY_EVENT = "lovcode:session-file-activity";
 
-const sessionDetailDisplayModesAtom = atomWithStorage<Record<string, SessionDetailDisplayMode>>(
+export function normalizeSessionDetailDisplayMode(value?: string | null): SessionDetailDisplayMode | null {
+  if (value === "standard" || value === "chat") return "standard";
+  if (value === "cli" || value === "pty") return "cli";
+  return null;
+}
+
+const sessionDetailDisplayModesAtom = atomWithStorage<Record<string, SessionDetailDisplayMode | LegacySessionDetailDisplayMode>>(
   "lovcode:sessionDetailDisplayModes",
   {},
 );
@@ -1334,6 +1342,10 @@ function getSessionDetailDisplayModeKey(session: Pick<Session, "project_id" | "i
   return `${session.project_id}:${session.id}`;
 }
 
+function getSessionActivityConversationId(session: Pick<Session, "project_id" | "id">) {
+  return `history:${session.project_id}:${session.id}`;
+}
+
 function isUserPromptGroup(group: Message[]) {
   return group.length > 0 && group.every(isUserPromptMessage);
 }
@@ -1374,6 +1386,43 @@ function groupConsecutiveByRole(messages: Message[]): Message[][] {
   return groups;
 }
 
+function getMessageRenderVersion(messages: Message[]) {
+  return messages
+    .map((message) =>
+      [
+        message.uuid,
+        message.line_number,
+        message.role,
+        message.is_tool ? 1 : 0,
+        message.timestamp ?? "",
+        message.content,
+        message.content_blocks ? JSON.stringify(message.content_blocks) : "",
+      ].join("\u001e"),
+    )
+    .join("\u001f");
+}
+
+function normalizeMessageContent(content: string) {
+  return content.replace(/\s+/g, " ").trim();
+}
+
+function mergePendingMessages(messages: Message[], pendingMessages: Message[]) {
+  if (pendingMessages.length === 0) return messages;
+  const recentMessages = messages.slice(-8);
+  const next = [...messages];
+  pendingMessages.forEach((pending) => {
+    const pendingContent = normalizeMessageContent(pending.content);
+    if (!pendingContent) return;
+    const alreadyVisible = recentMessages.some((message) =>
+      message.role === pending.role &&
+      Boolean(message.is_tool) === Boolean(pending.is_tool) &&
+      normalizeMessageContent(message.content) === pendingContent,
+    );
+    if (!alreadyVisible) next.push(pending);
+  });
+  return next;
+}
+
 export interface SessionForkPayload {
   session: Session;
   messageId: string;
@@ -1412,6 +1461,52 @@ function useGroupCollapse(deps: unknown[], initialExpanded = false) {
   }, deps);
 
   return { expanded, setExpanded, isOverflow, ref };
+}
+
+export function StandardMessageList({
+  messages,
+  userPromptsOnly,
+  originalChat,
+  markdownPreview,
+  expandMessages,
+  highlight,
+  toReadable,
+  onCopy,
+  onFork,
+  cwd,
+}: {
+  messages: Message[];
+  userPromptsOnly: boolean;
+  originalChat: boolean;
+  markdownPreview: boolean;
+  expandMessages: boolean;
+  highlight?: string;
+  toReadable: (s: string | null) => string;
+  onCopy: (content: string) => void;
+  onFork?: (payload: { message: Message; context: string }) => void;
+  cwd?: string;
+}) {
+  const messageRenderVersion = getMessageRenderVersion(messages);
+  const groupedMessages = useMemo(() => {
+    return userPromptsOnly
+      ? messages.map((message) => [message] as Message[])
+      : groupConsecutiveByRole(messages);
+  }, [messages, userPromptsOnly, messageRenderVersion]);
+
+  return (
+    <StickyPromptList
+      groupedMessages={groupedMessages}
+      userPromptsOnly={userPromptsOnly}
+      originalChat={originalChat}
+      markdownPreview={markdownPreview}
+      expandMessages={expandMessages}
+      highlight={highlight}
+      toReadable={toReadable}
+      onCopy={onCopy}
+      onFork={onFork}
+      cwd={cwd}
+    />
+  );
 }
 
 function StickyPromptList({
@@ -1572,6 +1667,7 @@ const MessageGroupCard = memo(function MessageGroupCard({
   const isUser = isUserPromptGroup(group);
   const userPromptText = isUser ? groupContent : "";
   const userPromptCompressed = isUser ? compressPromptText(userPromptText) : null;
+  const canOpenPromptDetail = Boolean(userPromptCompressed);
   const userPathHits = usePathHits(userPromptText, cwd, true);
   const toolBlocks = useMemo(
     () => (!isUser && groupHasToolBlocks(group) ? flattenGroupContentBlocks(group) : null),
@@ -1581,7 +1677,7 @@ const MessageGroupCard = memo(function MessageGroupCard({
   return (
     <div
       onDoubleClick={
-        isUser
+        canOpenPromptDetail
           ? () => {
               const titleSrc = userPromptText.split("\n").find((l) => l.trim()) ?? "Prompt";
               openPromptDetailWindow(
@@ -1597,8 +1693,10 @@ const MessageGroupCard = memo(function MessageGroupCard({
         isUser
           ? "border-border bg-card before:absolute before:inset-0 before:bg-primary/[0.07] before:pointer-events-none"
           : "bg-card border-border/40"
-      } ${sticky ? "sticky top-0 z-10" : ""} ${isUser ? "select-none cursor-pointer" : ""}`}
-      title={isUser ? "Double-click to open in window" : undefined}
+      } ${sticky ? "sticky top-0 z-10" : ""} ${isUser ? "select-none" : ""} ${
+        canOpenPromptDetail ? "cursor-pointer" : ""
+      }`}
+      title={canOpenPromptDetail ? "Double-click to open in window" : undefined}
     >
       <div className="relative min-w-0">
         {promptIndex !== undefined && (
@@ -1685,7 +1783,7 @@ const MessageGroupCard = memo(function MessageGroupCard({
                 {expanded ? "Collapse" : "Expand"}
               </DropdownMenuItem>
             )}
-            {isUser && (
+            {canOpenPromptDetail && (
               <DropdownMenuItem
                 onClick={() => {
                   const titleSrc = userPromptText.split("\n").find((l) => l.trim()) ?? "Prompt";
@@ -1984,6 +2082,7 @@ export function SessionDetail({
   onFork,
   displayMode,
   onDisplayModeChange,
+  pendingMessages = [],
 }: {
   session: Session;
   onClose: () => void;
@@ -1994,6 +2093,7 @@ export function SessionDetail({
   onFork?: (payload: SessionForkPayload) => void;
   displayMode?: SessionDetailDisplayMode;
   onDisplayModeChange?: (mode: SessionDetailDisplayMode) => void;
+  pendingMessages?: Message[];
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const queryClient = useQueryClient();
@@ -2010,7 +2110,8 @@ export function SessionDetail({
   const [storedDisplayModes, setStoredDisplayModes] = useAtom(sessionDetailDisplayModesAtom);
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const displayModeKey = getSessionDetailDisplayModeKey(session);
-  const effectiveDisplayMode = displayMode ?? storedDisplayModes[displayModeKey] ?? "chat";
+  const effectiveDisplayMode =
+    displayMode ?? normalizeSessionDetailDisplayMode(storedDisplayModes[displayModeKey]) ?? "standard";
   const setEffectiveDisplayMode = (mode: SessionDetailDisplayMode) => {
     setStoredDisplayModes((prev) =>
       prev[displayModeKey] === mode
@@ -2038,7 +2139,7 @@ export function SessionDetail({
   const selection = useMaasActiveSelection();
   const messageLoadSeqRef = useRef(0);
   const liveSyncScrollRef = useRef(false);
-  const codexPollInFlightRef = useRef(false);
+  const livePollInFlightRef = useRef(false);
   const captureLiveSyncScrollIntent = useCallback(() => {
     const scroller = scrollRef.current;
     liveSyncScrollRef.current = !scroller
@@ -2094,49 +2195,63 @@ export function SessionDetail({
   }, [captureLiveSyncScrollIntent, loadMessages, queryClient, session.project_id, session.id]);
 
   useEffect(() => {
-    if (session.source !== "codex") return;
+    const conversationId = getSessionActivityConversationId(session);
+    const handleActivity = (event: Event) => {
+      const detail = (event as CustomEvent<{ conversationIds?: string[] }>).detail;
+      if (!detail?.conversationIds?.includes(conversationId)) return;
+      captureLiveSyncScrollIntent();
+      queryClient.invalidateQueries({ queryKey: ["session-usage", session.project_id, session.id] });
+      void loadMessages(false);
+    };
 
-    const refreshCodexTranscript = () => {
+    window.addEventListener(SESSION_ACTIVITY_EVENT, handleActivity);
+    return () => window.removeEventListener(SESSION_ACTIVITY_EVENT, handleActivity);
+  }, [captureLiveSyncScrollIntent, loadMessages, queryClient, session]);
+
+  useEffect(() => {
+    if (effectiveDisplayMode !== "standard") return;
+
+    const refreshLiveTranscript = () => {
       if (document.visibilityState === "hidden") return;
-      if (codexPollInFlightRef.current) return;
-      codexPollInFlightRef.current = true;
+      if (livePollInFlightRef.current) return;
+      livePollInFlightRef.current = true;
       captureLiveSyncScrollIntent();
       queryClient.invalidateQueries({ queryKey: ["session-usage", session.project_id, session.id] });
       void loadMessages(false).finally(() => {
-        codexPollInFlightRef.current = false;
+        livePollInFlightRef.current = false;
       });
     };
 
-    const intervalId = window.setInterval(refreshCodexTranscript, 2500);
+    const intervalId = window.setInterval(refreshLiveTranscript, 1000);
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") refreshCodexTranscript();
+      if (document.visibilityState === "visible") refreshLiveTranscript();
     };
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    refreshLiveTranscript();
 
     return () => {
-      codexPollInFlightRef.current = false;
+      livePollInFlightRef.current = false;
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [captureLiveSyncScrollIntent, loadMessages, queryClient, session.project_id, session.id, session.source]);
+  }, [captureLiveSyncScrollIntent, effectiveDisplayMode, loadMessages, queryClient, session.project_id, session.id]);
+
+  const displayMessages = useMemo(
+    () => mergePendingMessages(messages, pendingMessages),
+    [messages, pendingMessages],
+  );
 
   const filteredMessages = useMemo(() => {
-    let result = originalChat ? messages.filter((m) => !m.is_meta) : messages;
+    let result = originalChat ? displayMessages.filter((m) => !m.is_meta) : displayMessages;
     if (userPromptsOnly) result = result.filter((m) => isUserPromptMessage(m));
     return result;
-  }, [messages, originalChat, userPromptsOnly]);
-
-  const groupedMessages = useMemo(() => {
-    return userPromptsOnly
-      ? filteredMessages.map((m) => [m] as Message[])
-      : groupConsecutiveByRole(filteredMessages);
-  }, [filteredMessages, userPromptsOnly]);
+  }, [displayMessages, originalChat, userPromptsOnly]);
 
   // A round = one user prompt (plus its following assistant turn). Count user messages from the
   // chat-only view so meta/tool entries don't inflate the number.
   const roundCount = useMemo(
-    () => messages.filter((m) => !m.is_meta && !m.is_tool && m.role === "user").length,
-    [messages],
+    () => displayMessages.filter((m) => !m.is_meta && !m.is_tool && m.role === "user").length,
+    [displayMessages],
   );
 
   const handleCopyContent = useCallback((content: string) => {
@@ -2242,7 +2357,7 @@ export function SessionDetail({
       cwd={canResume ? session.project_path ?? null : null}
       resetKey={session.id}
       defaultTerminalType={session.source === "codex" ? "codex" : "claude"}
-      layout={effectiveDisplayMode === "pty" ? "pane" : "dock"}
+      layout={effectiveDisplayMode === "cli" ? "pane" : "dock"}
       emptyMessage={
         canResume
           ? undefined
@@ -2351,7 +2466,7 @@ export function SessionDetail({
         <CwdMissingBanner from={session.project_path} />
       )}
 
-      {effectiveDisplayMode === "chat" ? (
+      {effectiveDisplayMode === "standard" ? (
         <>
           <div ref={scrollRef} className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain">
             <div ref={contentRef}>
@@ -2372,8 +2487,8 @@ export function SessionDetail({
                 </div>
               ) : (
                 <div className="border-t border-border/40">
-                  <StickyPromptList
-                    groupedMessages={groupedMessages}
+                  <StandardMessageList
+                    messages={filteredMessages}
                     userPromptsOnly={userPromptsOnly}
                     originalChat={originalChat}
                     markdownPreview={markdownPreview}

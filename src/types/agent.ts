@@ -5,6 +5,7 @@ export type AgentRuntime =
   | "claude-cli-pty"
   | "codex-cli-pty"
   | "claude-cli-json"
+  | "codex-cli-json"
   | "claude-sdk"
   | "codex-app-server";
 
@@ -13,6 +14,21 @@ export type AgentSessionStatus = "idle" | "running" | "completed" | "needs-revie
 export type AgentWorkState = "idle" | "working" | "stopped";
 
 export type AgentHistoryLinkStatus = "pending" | "linked" | "not-found";
+
+export type AgentLaunchMode = "standard" | "cli";
+
+export type AgentHarnessMessageRole = "user" | "assistant" | "system" | "tool" | "error";
+
+export interface AgentHarnessMessage {
+  id: string;
+  role: AgentHarnessMessageRole;
+  content: string;
+  timestamp: number;
+  kind?: string | null;
+  stream?: "stdout" | "stderr" | null;
+  raw?: unknown;
+  transient?: boolean;
+}
 
 export interface AgentRuntimeStatus {
   provider: AgentProvider;
@@ -55,6 +71,9 @@ export interface AgentSession {
   status: AgentSessionStatus;
   workState?: AgentWorkState | null;
   ptyId?: string | null;
+  harnessMessages?: AgentHarnessMessage[];
+  harnessRunId?: string | null;
+  harnessExitCode?: number | null;
   title: string;
   linkedHistorySessionId?: string | null;
   historyLinkStatus?: AgentHistoryLinkStatus | null;
@@ -104,7 +123,7 @@ export interface WorkbenchConversationMeta {
   pinned?: boolean;
   unread?: boolean;
   needsReview?: boolean;
-  displayMode?: "chat" | "pty";
+  displayMode?: "standard" | "cli" | "chat" | "pty";
 }
 
 export interface NewAgentSessionInput {

@@ -1,21 +1,25 @@
 import { useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { ChevronDown } from "lucide-react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { Button } from "../../components/ui/button";
-import { Progress } from "../../components/ui/progress";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "../../components/ui/dropdown-menu";
-import type { CodexCliVersionInfo } from "../../types";
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "../../components/ui/popover";
+import { Progress } from "../../components/ui/progress";
+import { Switch } from "../../components/ui/switch";
+import type { CodexCliInstallType, CodexCliVersionInfo } from "../../types";
 import { queryKeys, useInvokeMutation, useInvokeQuery, useQueryClient } from "../../hooks";
-import { useI18n } from "../../i18n";
+import { useI18n, type TranslationKey } from "../../i18n";
+import { cn } from "../../lib/utils";
 import { AgentCliRuntimeCard, agentRuntimeStatusKey } from "./AgentCliRuntimeCard";
 import { getInstallLogClassName, getInstallLogDisplayText } from "./installLogDisplay";
+import {
+  getDefaultNpmInstallRegistry,
+  NpmInstallSourceControl,
+  type NpmInstallRegistry,
+} from "./NpmInstallSourceControl";
 
 function formatDownloads(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -23,8 +27,47 @@ function formatDownloads(n: number): string {
   return String(n);
 }
 
+const INSTALL_TYPES: { value: CodexCliInstallType; labelKey: TranslationKey }[] = [
+  { value: "native", labelKey: "agentRuntime.installTypeNative" },
+  { value: "npm", labelKey: "agentRuntime.installTypeNpm" },
+];
+
+function VersionChoice({
+  active,
+  disabled,
+  label,
+  meta,
+  onClick,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  label: string;
+  meta?: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "flex h-8 w-full min-w-0 items-center justify-between gap-3 rounded-md border px-2 text-left text-xs transition-colors disabled:opacity-50",
+        active
+          ? "border-primary/40 bg-primary/10 text-primary"
+          : "border-border bg-background text-foreground hover:bg-accent",
+      )}
+    >
+      <span className="min-w-0 truncate">{label}</span>
+      <span className="flex shrink-0 items-center gap-2">
+        {meta && <span className="text-xs text-muted-foreground">{meta}</span>}
+        {active && <Check className="h-3.5 w-3.5" />}
+      </span>
+    </button>
+  );
+}
+
 export function CodexCliVersionSection() {
-  const { t } = useI18n();
+  const { activeLanguage, t } = useI18n();
   const {
     data: versionInfo,
     error: queryError,
@@ -35,12 +78,23 @@ export function CodexCliVersionSection() {
     "get_codex_cli_version_info",
   );
   const queryClient = useQueryClient();
-  const installMutation = useInvokeMutation<string, { version: string }>(
-    "install_codex_cli_version",
-    [queryKeys.codexCliVersionInfo],
+  const installMutation = useInvokeMutation<
+    string,
+    { version: string; installType: CodexCliInstallType; npmRegistry?: NpmInstallRegistry }
+  >("install_codex_cli_version", [queryKeys.codexCliVersionInfo]);
+  const autoupdaterMutation = useInvokeMutation<void, { disabled: boolean }>(
+    "set_codex_cli_autoupdater",
   );
   const [installing, setInstalling] = useState(false);
   const [selectedVersion, setSelectedVersion] = useState("latest");
+  const [selectedInstallType, setSelectedInstallType] = useState<CodexCliInstallType>(() =>
+    activeLanguage === "zh" ? "npm" : "native",
+  );
+  const [selectedNpmRegistry, setSelectedNpmRegistry] = useState<NpmInstallRegistry>(() =>
+    getDefaultNpmInstallRegistry(activeLanguage),
+  );
+  const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean | null>(null);
+  const [versionPopoverOpen, setVersionPopoverOpen] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [installLogs, setInstallLogs] = useState<string[]>([]);
@@ -55,8 +109,16 @@ export function CodexCliVersionSection() {
     if (versionInfo.current_version) {
       setSelectedVersion(versionInfo.current_version);
     }
+    if (versionInfo.install_type !== "none") {
+      setSelectedInstallType(versionInfo.install_type);
+    }
     initializedFromInfoRef.current = true;
   }, [versionInfo]);
+
+  useEffect(() => {
+    if (!versionInfo) return;
+    setAutoUpdateEnabled(!versionInfo.autoupdater_disabled);
+  }, [versionInfo?.autoupdater_disabled, versionInfo]);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -68,8 +130,17 @@ export function CodexCliVersionSection() {
     };
   }, []);
 
-  const handleInstall = async (version: string = selectedVersion) => {
+  const getInstallTypeLabel = (installType: CodexCliInstallType) => {
+    const typeLabelKey = INSTALL_TYPES.find((type) => type.value === installType)?.labelKey;
+    return typeLabelKey ? t(typeLabelKey) : installType;
+  };
+
+  const handleInstall = async (
+    version: string = selectedVersion,
+    installType: CodexCliInstallType = selectedInstallType,
+  ) => {
     setSelectedVersion(version);
+    setSelectedInstallType(installType);
     unlistenRef.current?.();
     unlistenRef.current = null;
 
@@ -95,8 +166,12 @@ export function CodexCliVersionSection() {
         setInstallLogs((prev) => [...prev, payload]);
       });
 
-      await installMutation.mutateAsync({ version });
-      setSuccess(t("agentRuntime.codexInstallSuccess", { version }));
+      await installMutation.mutateAsync({
+        version,
+        installType,
+        npmRegistry: installType === "npm" ? selectedNpmRegistry : undefined,
+      });
+      setSuccess(t("agentRuntime.codexInstallSuccess", { version, type: getInstallTypeLabel(installType) }));
       await Promise.all([
         refetch(),
         queryClient.invalidateQueries({ queryKey: agentRuntimeStatusKey("codex") }),
@@ -110,75 +185,197 @@ export function CodexCliVersionSection() {
     }
   };
 
-  const error = actionError ?? (queryError ? queryError.message : null);
+  const handleSetAutoupdater = async (enabled: boolean) => {
+    if (!versionInfo) return;
+    const previousEnabled = autoUpdateEnabled ?? !versionInfo.autoupdater_disabled;
+    setAutoUpdateEnabled(enabled);
+    queryClient.setQueryData<CodexCliVersionInfo>(queryKeys.codexCliVersionInfo, {
+      ...versionInfo,
+      autoupdater_disabled: !enabled,
+    });
+    try {
+      setActionError(null);
+      await autoupdaterMutation.mutateAsync({ disabled: !enabled });
+    } catch (e) {
+      setAutoUpdateEnabled(previousEnabled);
+      queryClient.setQueryData<CodexCliVersionInfo>(queryKeys.codexCliVersionInfo, {
+        ...versionInfo,
+        autoupdater_disabled: !previousEnabled,
+      });
+      setActionError(String(e));
+    }
+  };
+
+  const externalError = queryError?.message ?? (!versionPopoverOpen ? actionError : null);
+
+  if (isLoading) {
+    return (
+      <AgentCliRuntimeCard provider="codex">
+        <p className="text-xs text-muted-foreground">{t("common.loading")}</p>
+      </AgentCliRuntimeCard>
+    );
+  }
+
+  const isNotInstalled = versionInfo?.install_type === "none";
+  const resolveSelectedVersion = (version: string) =>
+    version === "latest" ? versionInfo?.available_versions[0]?.version ?? version : version;
+  const isInstalledSelection = (version: string, installType: CodexCliInstallType) =>
+    versionInfo?.current_version === resolveSelectedVersion(version) && versionInfo?.install_type === installType;
 
   const getCurrentVersionLabel = () => {
     if (installing) return t("agentRuntime.installing");
     if (!versionInfo?.current_version) return t("agentRuntime.notInstalled");
-    return `v${versionInfo.current_version}`;
+    const installType = versionInfo.install_type === "none" ? selectedInstallType : versionInfo.install_type;
+    return `v${versionInfo.current_version} · ${getInstallTypeLabel(installType)}`;
+  };
+
+  const handleInstallTypeChange = (value: string) => {
+    const nextInstallType = value as CodexCliInstallType;
+    setSelectedInstallType(nextInstallType);
   };
 
   const handleVersionChange = (version: string) => {
     setSelectedVersion(version);
-    if (!versionInfo || installing) return;
-    if (version !== versionInfo.current_version) {
-      void handleInstall(version);
-    }
+  };
+
+  const canInstallSelectedVersion =
+    Boolean(versionInfo) && !installing && !isInstalledSelection(selectedVersion, selectedInstallType);
+
+  const handleInstallSelectedVersion = () => {
+    if (!canInstallSelectedVersion) return;
+    setVersionPopoverOpen(true);
+    void handleInstall(selectedVersion, selectedInstallType);
   };
 
   return (
     <AgentCliRuntimeCard
       provider="codex"
       managementTitle={t("agentRuntime.currentVersion")}
+      settingsSections={versionInfo && !isNotInstalled ? [
+        {
+          value: "auto-update",
+          title: t("agentRuntime.autoUpdate"),
+          children: (
+            <div className="flex h-8 items-center justify-end">
+              <Switch
+                checked={autoUpdateEnabled ?? !versionInfo.autoupdater_disabled}
+                onCheckedChange={handleSetAutoupdater}
+                disabled={installing || autoupdaterMutation.isPending}
+              />
+            </div>
+          ),
+        },
+      ] : undefined}
     >
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={isLoading || installing}
-            className="h-8 w-full min-w-0 justify-start gap-2 px-2.5 text-left"
-          >
-            <span className="min-w-0 flex-1 truncate font-mono text-xs">
-              {isLoading ? t("agentRuntime.loadingVersions") : getCurrentVersionLabel()}
-            </span>
-            <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="start"
-          className="w-[var(--radix-dropdown-menu-trigger-width)] min-w-64 max-w-[calc(100vw-2rem)]"
+      <Popover className="block w-full" open={versionPopoverOpen} onOpenChange={setVersionPopoverOpen}>
+        <PopoverTrigger
+          className="inline-flex h-8 w-full min-w-0 items-center justify-start gap-2 rounded-md border border-input bg-background px-2.5 text-left text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <DropdownMenuLabel className="text-xs text-muted-foreground">
-            {t("agentRuntime.availableVersions")}
-          </DropdownMenuLabel>
-          <DropdownMenuRadioGroup value={selectedVersion} onValueChange={handleVersionChange}>
-            <DropdownMenuRadioItem value="latest" disabled={installing}>
-              {t("agentRuntime.latestNewest")}
-            </DropdownMenuRadioItem>
-            {versionInfo?.available_versions.map((v) => {
-              const current = v.version === versionInfo.current_version;
-              return (
-                <DropdownMenuRadioItem
-                  key={v.version}
-                  value={v.version}
-                  disabled={installing || current}
+          <span className="min-w-0 flex-1 truncate font-mono text-xs">{getCurrentVersionLabel()}</span>
+          <ChevronDown className="ml-auto h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          className="w-[min(20rem,calc(100vw-2rem))] p-2"
+        >
+          <div className="space-y-3">
+            <div className="flex min-h-0 flex-col gap-3">
+              <section className="space-y-1.5">
+                <p className="px-1 text-xs font-medium text-muted-foreground">
+                  {t("agentRuntime.installMethod")}
+                </p>
+                <div className="grid grid-cols-2 gap-1">
+                  {INSTALL_TYPES.map((type) => {
+                    const active = selectedInstallType === type.value;
+                    return (
+                      <button
+                        key={type.value}
+                        type="button"
+                        disabled={installing}
+                        onClick={() => handleInstallTypeChange(type.value)}
+                        className={cn(
+                          "flex h-8 items-center justify-between rounded-md border px-2 text-left text-xs transition-colors disabled:opacity-50",
+                          active
+                            ? "border-primary/40 bg-primary/10 text-primary"
+                            : "border-border bg-background text-foreground hover:bg-accent",
+                        )}
+                      >
+                        <span>{t(type.labelKey)}</span>
+                        {active && <Check className="h-3.5 w-3.5" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+
+              {selectedInstallType === "npm" && (
+                <section>
+                  <NpmInstallSourceControl
+                    value={selectedNpmRegistry}
+                    onValueChange={setSelectedNpmRegistry}
+                    disabled={installing}
+                  />
+                </section>
+              )}
+
+              <section className="space-y-1.5">
+                <p className="px-1 text-xs font-medium text-muted-foreground">
+                  {t("agentRuntime.availableVersions")}
+                </p>
+                <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+                  <VersionChoice
+                    active={selectedVersion === "latest"}
+                    disabled={installing}
+                    label={t("agentRuntime.latestNewest")}
+                    onClick={() => handleVersionChange("latest")}
+                  />
+                  {versionInfo?.available_versions.map((v) => {
+                    const isCurrent = v.version === versionInfo.current_version;
+                    return (
+                      <VersionChoice
+                        key={v.version}
+                        active={selectedVersion === v.version}
+                        disabled={installing}
+                        label={isCurrent ? t("agentRuntime.versionCurrent", { version: v.version }) : v.version}
+                        meta={`↓${formatDownloads(v.downloads)}`}
+                        onClick={() => handleVersionChange(v.version)}
+                      />
+                    );
+                  })}
+                </div>
+              </section>
+
+              <div className="mt-auto space-y-2 border-t border-border pt-2">
+                <Button
+                  type="button"
+                  variant={installing ? "outline" : "default"}
+                  size="sm"
+                  className={cn(
+                    "w-full gap-1.5",
+                    installing && "pointer-events-none",
+                  )}
+                  onClick={handleInstallSelectedVersion}
+                  disabled={installing || !canInstallSelectedVersion}
+                  title={
+                    installing
+                      ? t("agentRuntime.installing")
+                      : canInstallSelectedVersion
+                        ? t("common.install")
+                        : t("common.installed")
+                  }
                 >
-                  <span className="flex min-w-0 flex-1 items-center justify-between gap-3">
-                    <span className="truncate">
-                      {current ? t("agentRuntime.versionCurrent", { version: v.version }) : v.version}
-                    </span>
-                    <span className="shrink-0 text-xs text-muted-foreground">
-                      ↓{formatDownloads(v.downloads)}
-                    </span>
-                  </span>
-                </DropdownMenuRadioItem>
-              );
-            })}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+                  {installing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  {installing
+                    ? t("agentRuntime.installing")
+                    : canInstallSelectedVersion
+                      ? t("common.install")
+                      : t("common.installed")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </PopoverContent>
+      </Popover>
 
       {downloadProgress !== null && (
         <div className="space-y-1">
@@ -204,7 +401,7 @@ export function CodexCliVersionSection() {
         </div>
       )}
 
-      {error && <p className="rounded-lg bg-destructive/5 p-2 text-xs text-destructive">{error}</p>}
+      {externalError && <p className="rounded-lg bg-destructive/5 p-2 text-xs text-destructive">{externalError}</p>}
       {success && <p className="rounded-lg bg-primary/5 p-2 text-xs text-primary">{success}</p>}
     </AgentCliRuntimeCard>
   );

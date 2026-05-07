@@ -168,6 +168,12 @@ pub(crate) struct AgentWorkspaceSession {
     pub work_state: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pty_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub harness_messages: Vec<AgentHarnessMessage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_exit_code: Option<i32>,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub linked_history_session_id: Option<String>,
@@ -195,6 +201,23 @@ pub(crate) struct AgentWorkspaceSession {
     pub last_viewed_at: Option<u64>,
     pub created_at: u64,
     pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AgentHarnessMessage {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+    pub timestamp: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stream: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<Value>,
+    #[serde(default)]
+    pub transient: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

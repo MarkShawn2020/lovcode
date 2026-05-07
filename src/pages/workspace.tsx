@@ -73,11 +73,22 @@ import { useInvokeQuery, usePtyStatus, useStreamedSessions } from "@/hooks";
 import { useResize } from "@/hooks/useResize";
 import { useI18n } from "@/i18n";
 import { sidebarCollapsedAtom } from "@/store";
-import { SessionDetail, type SessionDetailDisplayMode, type SessionForkPayload } from "@/views/Chat/ProjectList";
+import {
+  normalizeSessionDetailDisplayMode,
+  SESSION_ACTIVITY_EVENT,
+  SessionDetail,
+  StandardMessageList,
+  type SessionDetailDisplayMode,
+  type SessionForkPayload,
+} from "@/views/Chat/ProjectList";
 import { ExportDialog } from "@/views/Chat/ExportDialog";
+import { useReadableText } from "@/views/Chat/utils";
 import type {
   AgentHistoryLinkStatus,
+  AgentHarnessMessage,
+  AgentLaunchMode,
   AgentProvider,
+  AgentRuntime,
   AgentSession,
   AgentWorkspaceSidebarState,
   AgentWorkspaceState,
@@ -101,6 +112,22 @@ interface PtyDataEvent {
 interface PtyExitEvent {
   id: string;
 }
+
+type AgentHarnessEvent =
+  | { kind: "started"; sessionId: string; provider: AgentProvider; command: string }
+  | {
+      kind: "json";
+      sessionId: string;
+      stream: "stdout" | "stderr";
+      eventType?: string | null;
+      role?: string | null;
+      text?: string | null;
+      raw: unknown;
+    }
+  | { kind: "stdout"; sessionId: string; text: string }
+  | { kind: "stderr"; sessionId: string; text: string }
+  | { kind: "exit"; sessionId: string; code?: number | null; success: boolean }
+  | { kind: "error"; sessionId: string; message: string };
 
 interface AgentWorkspaceHookConfig {
   eventsDir: string;
@@ -340,15 +367,15 @@ function getRuntimeConversationId(session: AgentSession, transcript?: Session) {
 }
 
 function normalizeDisplayMode(mode?: string | null): WorkbenchDisplayMode | null {
-  return mode === "chat" || mode === "pty" ? mode : null;
+  return normalizeSessionDetailDisplayMode(mode);
 }
 
-function getStoredDisplayMode(meta: WorkbenchConversationMeta | undefined, hasRuntime: boolean): WorkbenchDisplayMode {
-  return normalizeDisplayMode(meta?.displayMode) ?? (hasRuntime ? "pty" : "chat");
+function getStoredDisplayMode(meta: WorkbenchConversationMeta | undefined, runtime?: AgentSession | null): WorkbenchDisplayMode {
+  return normalizeDisplayMode(meta?.displayMode) ?? (runtime ? (isHarnessSession(runtime) ? "standard" : "cli") : "standard");
 }
 
 function getConversationDisplayMode(row: Pick<WorkbenchConversation, "displayMode" | "runtime">): WorkbenchDisplayMode {
-  return row.displayMode ?? (row.runtime ? "pty" : "chat");
+  return row.displayMode ?? (row.runtime ? (isHarnessSession(row.runtime) ? "standard" : "cli") : "standard");
 }
 
 function getConversationTitle(row: WorkbenchConversation, labels?: { untitledConversation?: string; shell?: string; newSession?: string }) {
@@ -418,6 +445,20 @@ function formatCost(value: number) {
   }).format(value);
 }
 
+function runtimeForLaunch(provider: AgentProvider, launchMode: AgentLaunchMode): AgentRuntime {
+  if (provider === "terminal") return "terminal-pty";
+  if (launchMode === "standard") return provider === "claude" ? "claude-cli-json" : "codex-cli-json";
+  return runtimeForProvider(provider);
+}
+
+function isHarnessRuntime(runtime?: string | null) {
+  return runtime === "claude-cli-json" || runtime === "codex-cli-json";
+}
+
+function isHarnessSession(session?: AgentSession | null) {
+  return Boolean(session && isAgentProvider(session.provider) && isHarnessRuntime(session.runtime));
+}
+
 function getSessionCommand(provider: AgentProvider, prompt: string, env?: Record<string, string>, resumeSessionId?: string) {
   if (provider === "terminal") return undefined;
   const extraArgs = resumeSessionId
@@ -431,6 +472,16 @@ function getSessionCommand(provider: AgentProvider, prompt: string, env?: Record
 function getInitialInput(provider: AgentProvider, prompt: string) {
   if (provider !== "terminal") return undefined;
   return prompt.trim() ? prompt.trim() : undefined;
+}
+
+function getHarnessDisplayCommand(provider: AgentProvider, prompt: string, resumeSessionId?: string) {
+  if (!isAgentProvider(provider)) return null;
+  if (provider === "claude") {
+    const resume = resumeSessionId ? ` --resume ${resumeSessionId}` : "";
+    return `claude --print --output-format stream-json${resume} ${prompt ? "\"...\"" : ""}`.trim();
+  }
+  const resume = resumeSessionId ? ` resume ${resumeSessionId}` : "";
+  return `codex exec --json${resume} ${prompt ? "\"...\"" : ""}`.trim();
 }
 
 function isAgentProvider(provider: AgentProvider) {
@@ -454,6 +505,7 @@ function hasAgentPrompt(provider: AgentProvider, prompt: string) {
 }
 
 function hasReusableAgentPrompt(session: AgentSession) {
+  if (isHarnessSession(session)) return Boolean(getSessionSubmittedPrompt(session));
   const command = stripLovcodeHookEnvPrefix(session.command?.trim() ?? "");
   return isAgentProvider(session.provider) && Boolean(command) && command !== session.provider;
 }
@@ -560,6 +612,183 @@ function getRuntimeLinkDebugSignature(sessions: AgentSession[], recentHistory: S
       lastPrompt: session.last_prompt?.slice(0, 160),
     })),
   });
+}
+
+function createHarnessUserMessage(sessionId: string, prompt: string, timestamp: number): AgentHarnessMessage {
+  return {
+    id: `${sessionId}:user`,
+    role: "user",
+    content: prompt.trim(),
+    timestamp,
+  };
+}
+
+function mergeHarnessText(current: string, nextText: string, separator = "\n") {
+  const next = nextText.replace(/\r/g, "");
+  if (!next) return current;
+  if (!current) return next;
+  if (next.startsWith(current)) return next;
+  if (current.endsWith(next)) return current;
+  return `${current}${current.endsWith("\n") || next.startsWith("\n") ? "" : separator}${next}`;
+}
+
+function inferHarnessRole(event: AgentHarnessEvent): AgentHarnessMessage["role"] {
+  if (event.kind === "stderr" || event.kind === "error") return "error";
+  if (event.kind !== "json") return "assistant";
+  if (event.stream === "stderr") return "error";
+  if (event.role === "assistant") return "assistant";
+  if (event.role === "user") return "user";
+  const eventType = event.eventType?.toLowerCase() ?? "";
+  if (eventType.includes("tool") || eventType.includes("exec") || eventType.includes("patch")) return "tool";
+  if (eventType.includes("error") || eventType.includes("failed")) return "error";
+  if (event.text) return "assistant";
+  return "system";
+}
+
+function upsertHarnessMessage(
+  messages: AgentHarnessMessage[],
+  message: AgentHarnessMessage,
+  options?: { merge?: boolean; removeTransient?: boolean; separator?: string },
+) {
+  const base = options?.removeTransient ? messages.filter((item) => !item.transient) : messages;
+  const index = base.findIndex((item) => item.id === message.id);
+  if (index === -1) return [...base, message];
+  const next = [...base];
+  next[index] = {
+    ...next[index],
+    ...message,
+    content: options?.merge ? mergeHarnessText(next[index].content, message.content, options.separator) : message.content,
+    raw: message.raw ?? next[index].raw,
+    transient: message.transient ?? next[index].transient,
+  };
+  return next;
+}
+
+function appendHarnessMessage(messages: AgentHarnessMessage[], message: AgentHarnessMessage) {
+  return [...messages.filter((item) => !item.transient), message];
+}
+
+function harnessMessageToStandardMessage(message: AgentHarnessMessage, index: number): Message {
+  return {
+    uuid: message.id,
+    role: message.role === "tool" ? "assistant" : message.role,
+    content: message.content,
+    timestamp: new Date(message.timestamp).toISOString(),
+    is_meta: false,
+    is_tool: message.role === "tool",
+    line_number: index + 1,
+  };
+}
+
+function applyHarnessEventToSession(
+  session: AgentSession,
+  event: AgentHarnessEvent,
+  activeSessionId: string | null | undefined,
+): AgentSession {
+  const timestamp = now();
+  const isActive = session.id === activeSessionId;
+  const existing = session.harnessMessages ?? [];
+
+  if (event.kind === "started") {
+    return {
+      ...session,
+      command: event.command,
+      status: "running",
+      workState: "working",
+      unread: false,
+      lastActivityAt: timestamp,
+      lastViewedAt: isActive ? timestamp : session.lastViewedAt ?? null,
+      updatedAt: timestamp,
+      harnessMessages: existing,
+    };
+  }
+
+  if (event.kind === "exit") {
+    if (session.status === "completed" && session.workState === "stopped") {
+      return {
+        ...session,
+        harnessExitCode: event.code ?? session.harnessExitCode ?? null,
+        updatedAt: timestamp,
+        harnessMessages: existing.filter((message) => !message.transient),
+      };
+    }
+    return {
+      ...session,
+      status: event.success ? "completed" : "error",
+      workState: "stopped",
+      unread: isActive ? false : true,
+      lastActivityAt: timestamp,
+      lastViewedAt: isActive ? timestamp : session.lastViewedAt ?? null,
+      updatedAt: timestamp,
+      harnessExitCode: event.code ?? null,
+      harnessMessages: event.success
+        ? existing.filter((message) => !message.transient)
+        : appendHarnessMessage(existing, {
+            id: `${session.id}:exit:${timestamp}`,
+            role: "error",
+            content: `Agent exited with code ${event.code ?? "unknown"}.`,
+            timestamp,
+            kind: "exit",
+          }),
+    };
+  }
+
+  if (event.kind === "error") {
+    return {
+      ...session,
+      status: "error",
+      workState: "stopped",
+      unread: isActive ? false : true,
+      lastActivityAt: timestamp,
+      lastViewedAt: isActive ? timestamp : session.lastViewedAt ?? null,
+      updatedAt: timestamp,
+      harnessMessages: appendHarnessMessage(existing, {
+        id: `${session.id}:error:${timestamp}`,
+        role: "error",
+        content: event.message,
+        timestamp,
+        kind: "error",
+      }),
+    };
+  }
+
+  const role = inferHarnessRole(event);
+  const content =
+    event.kind === "json"
+      ? event.text?.trim()
+      : event.kind === "stdout" || event.kind === "stderr"
+        ? event.text.trim()
+        : "";
+  if (!content) {
+    return session;
+  }
+
+  const eventType = event.kind === "json" ? event.eventType?.toLowerCase() ?? "" : "";
+  const merge = role === "assistant" && (event.kind !== "json" || eventType.includes("partial") || eventType.includes("delta"));
+  const mergeSeparator = event.kind === "json" && (eventType.includes("partial") || eventType.includes("delta")) ? "" : "\n";
+  const messageId = role === "assistant" ? `${session.id}:assistant:live` : `${session.id}:${role}:${timestamp}`;
+  return {
+    ...session,
+    status: "running",
+    workState: "working",
+    unread: !isActive,
+    lastActivityAt: timestamp,
+    lastViewedAt: isActive ? timestamp : session.lastViewedAt ?? null,
+    updatedAt: timestamp,
+    harnessMessages: upsertHarnessMessage(
+      existing,
+      {
+        id: messageId,
+        role,
+        content,
+        timestamp,
+        kind: event.kind === "json" ? event.eventType ?? "json" : event.kind,
+        stream: event.kind === "json" ? event.stream : event.kind === "stdout" || event.kind === "stderr" ? event.kind : null,
+        raw: event.kind === "json" ? event.raw : undefined,
+      },
+      { merge, removeTransient: true, separator: mergeSeparator },
+    ),
+  };
 }
 
 function logLinkDebug(label: string, payload: unknown) {
@@ -1190,7 +1419,7 @@ export default function AgentWorkspacePage() {
           agentRunning: Boolean(externalRun),
           agentRunningSource: externalRun?.source ?? null,
           agentRunningAt: externalRun?.updatedAt ?? null,
-          displayMode: getStoredDisplayMode(meta, false),
+          displayMode: getStoredDisplayMode(meta),
           meta,
           transcript: session,
         });
@@ -1224,7 +1453,7 @@ export default function AgentWorkspacePage() {
         agentRunning: runtimeRunning || Boolean(externalRun) || Boolean(current?.agentRunning),
         agentRunningSource: runtimeRunning ? "runtime" : externalRun?.source ?? current?.agentRunningSource ?? null,
         agentRunningAt: runtimeRunning ? runtimeTimestamp : externalRun?.updatedAt ?? current?.agentRunningAt ?? null,
-        displayMode: getStoredDisplayMode(meta, true),
+        displayMode: getStoredDisplayMode(meta, session),
         meta,
         transcript: current?.transcript ?? linkedTranscript,
         runtime: session,
@@ -1320,6 +1549,9 @@ export default function AgentWorkspacePage() {
           sessionActivitySnapshotRef.current = next;
           cachedSessionActivitySnapshot = next;
           if (changedConversationIds.length > 0) {
+            window.dispatchEvent(new CustomEvent(SESSION_ACTIVITY_EVENT, {
+              detail: { conversationIds: changedConversationIds },
+            }));
             markExternalAgentRunning(changedConversationIds, "watch", { ttlMs: WATCH_AGENT_RUNNING_MS, timestamp });
           }
         })
@@ -1714,6 +1946,37 @@ export default function AgentWorkspacePage() {
     return config;
   }
 
+  function startHarnessSession(session: AgentSession, promptOverride?: string | null, resumeSessionId?: string | null) {
+    const prompt = (promptOverride ?? getSessionSubmittedPrompt(session) ?? "").trim();
+    if (!isHarnessSession(session) || !prompt) return;
+    invoke("start_agent_harness_session", {
+      sessionId: session.id,
+      provider: session.provider,
+      cwd: session.cwd,
+      prompt,
+      resumeSessionId: resumeSessionId ?? session.linkedHistorySessionId ?? null,
+    }).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const event: AgentHarnessEvent = {
+        kind: "error",
+        sessionId: session.id,
+        message,
+      };
+      setState((prev) => {
+        let changed = false;
+        const sessions = prev.sessions.map((item) => {
+          if (item.id !== session.id) return item;
+          changed = true;
+          return applyHarnessEventToSession(item, event, prev.activeSessionId);
+        });
+        if (!changed) return prev;
+        const next = { ...prev, sessions };
+        schedulePersist(next);
+        return next;
+      });
+    });
+  }
+
   function clearAgentIdleTimer(sessionId: string) {
     const timer = agentIdleTimersRef.current.get(sessionId);
     if (!timer) return;
@@ -1867,6 +2130,28 @@ export default function AgentWorkspacePage() {
   }, [hookEventsDir]);
 
   useEffect(() => {
+    const unlistenHarness = listen<AgentHarnessEvent>("agent-harness-event", (event) => {
+      const payload = event.payload;
+      setState((prev) => {
+        let changed = false;
+        const sessions = prev.sessions.map((session) => {
+          if (session.id !== payload.sessionId) return session;
+          changed = true;
+          return applyHarnessEventToSession(session, payload, prev.activeSessionId);
+        });
+        if (!changed) return prev;
+        const next = { ...prev, sessions };
+        schedulePersist(next);
+        return next;
+      });
+    });
+
+    return () => {
+      unlistenHarness.then((fn) => fn());
+    };
+  }, []);
+
+  useEffect(() => {
     const unlistenData = listen<PtyDataEvent>("pty-data", (event) => {
       if (event.payload.data.length === 0) return;
       const timestamp = now();
@@ -1939,7 +2224,7 @@ export default function AgentWorkspacePage() {
             const conversationId = getRuntimeConversationId(session, linkedTranscript);
             conversationMeta[conversationId] = {
               ...(conversationMeta[conversationId] ?? {}),
-              displayMode: "chat",
+              displayMode: "standard",
               id: conversationId,
             };
             conversationMetaChanged = true;
@@ -2001,7 +2286,7 @@ export default function AgentWorkspacePage() {
     persist({
       ...base,
       conversationMeta: withConversationMeta(conversationId, {
-        displayMode: "chat",
+        displayMode: "standard",
       }, base.conversationMeta ?? {}),
       sidebar: nextSidebar,
       sessions: base.sessions.map((current) =>
@@ -2280,6 +2565,7 @@ export default function AgentWorkspacePage() {
   const createSession = async (
     provider: AgentProvider,
     prompt: string,
+    launchMode: AgentLaunchMode = "standard",
     options?: {
       cwd?: string | null;
       title?: string;
@@ -2292,6 +2578,7 @@ export default function AgentWorkspacePage() {
       focusRuntime?: boolean;
     },
   ) => {
+    if (provider !== "terminal" && launchMode === "standard" && !prompt.trim()) return;
     setSelectedProjectDetailsPath(null);
     const requestedCwd = options?.cwd ?? options?.resumeHistorySession?.project_path ?? selectedCwd;
     let cwd = requestedCwd;
@@ -2303,7 +2590,10 @@ export default function AgentWorkspacePage() {
         return;
       }
     }
-    if (options?.resumeHistorySession && !options.focusRuntime) {
+    const effectiveLaunchMode: AgentLaunchMode = provider === "terminal" ? "cli" : launchMode;
+    const runtime = runtimeForLaunch(provider, effectiveLaunchMode);
+    const harness = isHarnessRuntime(runtime);
+    if (options?.resumeHistorySession && (harness || !options.focusRuntime)) {
       setSelectedHistorySession(options.resumeHistorySession);
     } else {
       setSelectedHistorySession(null);
@@ -2311,10 +2601,10 @@ export default function AgentWorkspacePage() {
     setMainPanelClosed(false);
     const timestamp = now();
     const id = crypto.randomUUID();
-    const ptyId = crypto.randomUUID();
+    const ptyId = harness ? null : crypto.randomUUID();
     const startsWorking = hasAgentPrompt(provider, prompt);
     let hookEnv: Record<string, string> | undefined;
-    if (usesAgentHooks(provider)) {
+    if (!harness && usesAgentHooks(provider)) {
       try {
         hookEnv = getAgentHookEnv(await ensureAgentHookConfig(provider, id), id);
       } catch (error) {
@@ -2324,14 +2614,21 @@ export default function AgentWorkspacePage() {
     const session: AgentSession = {
       id,
       provider,
-      runtime: runtimeForProvider(provider),
+      runtime,
       cwd,
-      command: getSessionCommand(provider, prompt, hookEnv, options?.resumeHistorySession?.id) ?? null,
-      initialInput: getInitialInput(provider, prompt) ?? null,
+      command: harness
+        ? getHarnessDisplayCommand(provider, prompt, options?.resumeHistorySession?.id)
+        : getSessionCommand(provider, prompt, hookEnv, options?.resumeHistorySession?.id) ?? null,
+      initialInput: harness ? null : getInitialInput(provider, prompt) ?? null,
       submittedPrompt: prompt.trim() || null,
       status: startsWorking ? "running" : "idle",
       workState: startsWorking ? "working" : "idle",
       ptyId,
+      harnessMessages: harness && prompt.trim()
+        ? [createHarnessUserMessage(id, prompt, timestamp)]
+        : [],
+      harnessRunId: harness ? id : null,
+      harnessExitCode: null,
       title: options?.title ?? makeSessionTitle(provider, prompt),
       linkedHistorySessionId: options?.resumeHistorySession?.id ?? null,
       historyLinkStatus: options?.resumeHistorySession ? "linked" : isAgentProvider(provider) && prompt.trim() ? "pending" : null,
@@ -2349,7 +2646,7 @@ export default function AgentWorkspacePage() {
       updatedAt: timestamp,
     };
     const linkedConversationId = options?.resumeHistorySession ? getHistoryConversationId(options.resumeHistorySession) : `runtime:${id}`;
-    setLaunchingIds((prev) => new Set(prev).add(id));
+    if (!harness) setLaunchingIds((prev) => new Set(prev).add(id));
     setPersistedActiveConversation(linkedConversationId, { immediate: false });
     setMainPanelClosed(false);
     setCreatingSession(false);
@@ -2360,10 +2657,11 @@ export default function AgentWorkspacePage() {
       conversationMeta: withConversationMeta(linkedConversationId, {
         archived: false,
         archivedAt: null,
-        ...(options?.focusRuntime ? { displayMode: "pty" as const } : {}),
+        displayMode: harness ? "standard" as const : options?.focusRuntime ? "cli" as const : "standard" as const,
       }),
       activeSessionId: id,
     }).catch(console.error);
+    if (harness) startHarnessSession(session, prompt, options?.resumeHistorySession?.id ?? null);
   };
 
   const createRuntimeForHistorySession = async (historySession: Session) => {
@@ -2381,7 +2679,10 @@ export default function AgentWorkspacePage() {
     const conversationId = getHistoryConversationId(historySession);
     const timestamp = now();
     const existingRuntime = latestStateRef.current.sessions.find(
-      (session) => session.linkedHistorySessionId === historySession.id && transcriptMatchesProvider(session, historySession),
+      (session) =>
+        session.linkedHistorySessionId === historySession.id &&
+        transcriptMatchesProvider(session, historySession) &&
+        !isHarnessSession(session),
     );
 
     if (existingRuntime) {
@@ -2396,7 +2697,7 @@ export default function AgentWorkspacePage() {
         conversationMeta: withConversationMeta(conversationId, {
           archived: false,
           archivedAt: null,
-          displayMode: "pty",
+          displayMode: "cli",
         }, base.conversationMeta ?? {}),
         sidebar: normalizeSidebarState({
           ...(base.sidebar ?? {}),
@@ -2474,7 +2775,7 @@ export default function AgentWorkspacePage() {
       conversationMeta: withConversationMeta(conversationId, {
         archived: false,
         archivedAt: null,
-        displayMode: "pty",
+        displayMode: "cli",
       }, base.conversationMeta ?? {}),
       sidebar: normalizeSidebarState({
         ...(base.sidebar ?? {}),
@@ -2486,6 +2787,27 @@ export default function AgentWorkspacePage() {
   };
 
   const relaunchSession = async (session: AgentSession) => {
+    if (isHarnessSession(session)) {
+      const prompt = getSessionSubmittedPrompt(session);
+      if (!prompt) return;
+      const timestamp = now();
+      updateSession(session.id, (current) => ({
+        ...current,
+        status: "running",
+        workState: "working",
+        command: getHarnessDisplayCommand(current.provider, prompt, current.linkedHistorySessionId ?? undefined),
+        harnessRunId: crypto.randomUUID(),
+        harnessExitCode: null,
+        harnessMessages: [createHarnessUserMessage(current.id, prompt, timestamp)],
+        unread: false,
+        lastActivityAt: timestamp,
+        lastViewedAt: timestamp,
+        updatedAt: timestamp,
+      }));
+      startHarnessSession(session, prompt, session.linkedHistorySessionId ?? null);
+      return;
+    }
+
     const ptyId = crypto.randomUUID();
     const startsWorking = hasReusableAgentPrompt(session);
     let hookEnv: Record<string, string> | undefined;
@@ -2515,6 +2837,19 @@ export default function AgentWorkspacePage() {
   };
 
   const stopSession = (session: AgentSession) => {
+    if (isHarnessSession(session)) {
+      invoke("cancel_agent_harness_session", { sessionId: session.id }).catch(() => {});
+      clearAgentIdleTimer(session.id);
+      updateSession(session.id, (current) => ({
+        ...current,
+        status: "completed",
+        workState: "stopped",
+        unread: false,
+        updatedAt: now(),
+      }));
+      return;
+    }
+
     if (session.ptyId) {
       disposeTerminal(session.ptyId);
       invoke("pty_kill", { id: session.ptyId }).catch(() => {});
@@ -2565,6 +2900,9 @@ export default function AgentWorkspacePage() {
   };
 
   const archiveSession = (session: AgentSession) => {
+    if (isHarnessSession(session) && isAgentRunning(session)) {
+      invoke("cancel_agent_harness_session", { sessionId: session.id }).catch(() => {});
+    }
     if (session.ptyId) {
       disposeTerminal(session.ptyId);
       invoke("pty_kill", { id: session.ptyId }).catch(() => {});
@@ -2769,14 +3107,19 @@ export default function AgentWorkspacePage() {
   const activePtyExists = activePtyId ? Boolean(ptyStatus.get(activePtyId)) : false;
   const activePtyAttached = activePtyId ? attachedPtyIds.has(activePtyId) : false;
   const activeLaunching = activeSession ? launchingIds.has(activeSession.id) : false;
-  const activeConnected = activePtyExists || activePtyAttached || activeLaunching;
-  const shouldMountTerminal = Boolean(activeSession?.ptyId && activeConnected);
-  const terminalRestoreOnly = Boolean(activeSession?.ptyId) && !activeConnected;
+  const activeHarnessRunning = isHarnessSession(activeSession) && Boolean(activeSession && isAgentRunning(activeSession));
+  const activeConnected = activeHarnessRunning || activePtyExists || activePtyAttached || activeLaunching;
+  const shouldMountTerminal = Boolean(activeSession?.ptyId && !isHarnessSession(activeSession) && activeConnected);
+  const terminalRestoreOnly = Boolean(activeSession?.ptyId) && !isHarnessSession(activeSession) && !activeConnected;
   const showProjectDetailsView = Boolean(selectedProjectDetailsPath) && !mainPanelClosed && !creatingSession;
   const showNewSessionView = !showProjectDetailsView && !selectedHistorySession && (creatingSession || mainPanelClosed || !activeSession);
 
   const getSessionConnected = (session: AgentSession) =>
-    session.ptyId ? Boolean(ptyStatus.get(session.ptyId)) || attachedPtyIds.has(session.ptyId) || launchingIds.has(session.id) : false;
+    isHarnessSession(session)
+      ? isAgentRunning(session)
+      : session.ptyId
+        ? Boolean(ptyStatus.get(session.ptyId)) || attachedPtyIds.has(session.ptyId) || launchingIds.has(session.id)
+        : false;
   const activeConversationCount = allWorkbenchRows.filter((row) => !row.archived).length;
   const archivedConversationCount = allWorkbenchRows.filter((row) => row.archived).length;
   const conversationListInitialLoading = !loaded || !historySessionsComplete;
@@ -2799,15 +3142,23 @@ export default function AgentWorkspacePage() {
     setSelectedProjectDetailsPath(null);
     setMainPanelClosed(false);
     const displayMode = getConversationDisplayMode(row);
-    if (displayMode === "pty" && row.runtime && row.transcript && !getSessionConnected(row.runtime)) {
-      setConversationDisplayMode(row, "chat");
-      return;
-    }
-    if (displayMode === "pty" && !row.runtime && row.transcript) {
+    if (displayMode === "cli" && row.runtime && isHarnessSession(row.runtime) && row.transcript) {
       void createRuntimeForHistorySession(row.transcript);
       return;
     }
-    if (displayMode === "chat" && row.transcript) {
+    if (row.runtime && isHarnessSession(row.runtime)) {
+      setActiveSession(row.runtime.id);
+      return;
+    }
+    if (displayMode === "cli" && row.runtime && row.transcript && !getSessionConnected(row.runtime)) {
+      setConversationDisplayMode(row, "standard");
+      return;
+    }
+    if (displayMode === "cli" && !row.runtime && row.transcript) {
+      void createRuntimeForHistorySession(row.transcript);
+      return;
+    }
+    if (displayMode === "standard" && row.transcript) {
       setPersistedActiveConversationId(row.conversationId);
       setSelectedHistorySession(row.transcript);
       setSelectedCwd(row.transcript.project_path ?? row.runtime?.cwd ?? row.projectPath);
@@ -2826,7 +3177,12 @@ export default function AgentWorkspacePage() {
     }
   };
   const setConversationDisplayMode = (row: WorkbenchConversation, displayMode: WorkbenchDisplayMode) => {
-    if (displayMode === "pty" && !row.runtime && row.transcript) {
+    if (displayMode === "cli" && row.runtime && isHarnessSession(row.runtime)) {
+      if (row.transcript) void createRuntimeForHistorySession(row.transcript);
+      else setConversationDisplayMode(row, "standard");
+      return;
+    }
+    if (displayMode === "cli" && !row.runtime && row.transcript) {
       void createRuntimeForHistorySession(row.transcript);
       return;
     }
@@ -2843,8 +3199,8 @@ export default function AgentWorkspacePage() {
         sessionListMode: "active",
         activeConversationId: row.conversationId,
       }),
-      activeSessionId: displayMode === "pty" && row.runtime ? row.runtime.id : base.activeSessionId ?? null,
-      sessions: displayMode === "pty" && row.runtime
+      activeSessionId: displayMode === "cli" && row.runtime ? row.runtime.id : base.activeSessionId ?? null,
+      sessions: displayMode === "cli" && row.runtime
         ? base.sessions.map((item) =>
             item.id === row.runtime!.id
               ? {
@@ -2857,7 +3213,7 @@ export default function AgentWorkspacePage() {
         : base.sessions,
     };
     persist(nextState).catch(console.error);
-    if (displayMode === "pty" && row.runtime) {
+    if (displayMode === "cli" && row.runtime) {
       setSelectedHistorySession(null);
       setSelectedCwd(row.runtime.cwd);
       setSelectedProjectDetailsPath(null);
@@ -3149,17 +3505,41 @@ export default function AgentWorkspacePage() {
   const activeSessionProjectPath = activeSession ? getProjectGroupPath(activeSession.cwd, mergeWorktrees) : null;
   const activeHeaderProjectPath = activeSessionProjectPath ?? activeSession?.cwd ?? null;
   const selectedHistoryConversationId = selectedHistorySession ? getHistoryConversationId(selectedHistorySession) : null;
-  const selectedHistoryProjectPath = selectedHistorySession?.project_path
-    ? getProjectGroupPath(selectedHistorySession.project_path, mergeWorktrees)
-    : null;
   const selectedHistoryRow = selectedHistoryConversationId
     ? allWorkbenchRows.find((row) => row.conversationId === selectedHistoryConversationId)
     : null;
-  const selectedHistoryDisplayMode =
-    selectedHistoryRow?.displayMode ??
-    (selectedHistoryConversationId
-      ? normalizeDisplayMode(state.conversationMeta?.[selectedHistoryConversationId]?.displayMode) ?? "chat"
-      : "chat");
+  const activeStandardTranscript =
+    activeSession &&
+    activeSessionRow?.transcript &&
+    isHarnessSession(activeSession) &&
+    getConversationDisplayMode(activeSessionRow) === "standard"
+      ? activeSessionRow.transcript
+      : null;
+  const standardDetailSession = selectedHistorySession ?? activeStandardTranscript;
+  const standardDetailConversationId = standardDetailSession ? getHistoryConversationId(standardDetailSession) : null;
+  const standardDetailProjectPath = standardDetailSession?.project_path
+    ? getProjectGroupPath(standardDetailSession.project_path, mergeWorktrees)
+    : null;
+  const standardDetailRow = selectedHistorySession
+    ? selectedHistoryRow
+    : activeStandardTranscript
+      ? activeSessionRow
+      : null;
+  const standardDetailDisplayMode =
+    standardDetailRow?.displayMode ??
+    (standardDetailConversationId
+      ? normalizeDisplayMode(state.conversationMeta?.[standardDetailConversationId]?.displayMode) ?? "standard"
+      : "standard");
+  const standardDetailPendingMessages = useMemo(() => {
+    if (!activeSession || !standardDetailSession || !isHarnessSession(activeSession)) return [];
+    const linkedToStandardDetail =
+      activeSession.linkedHistorySessionId === standardDetailSession.id ||
+      activeSessionRow?.transcript?.id === standardDetailSession.id;
+    if (!linkedToStandardDetail) return [];
+    return (activeSession.harnessMessages ?? [])
+      .filter((message) => !message.transient)
+      .map(harnessMessageToStandardMessage);
+  }, [activeSession, activeSessionRow?.transcript?.id, standardDetailSession]);
   const currentWorkbenchRow = allWorkbenchRows.find(isConversationActive) ?? null;
 
   useEffect(() => {
@@ -3224,6 +3604,7 @@ export default function AgentWorkspacePage() {
 
   useEffect(() => {
     if (!activeSession || selectedHistorySession || mainPanelClosed || creatingSession) return;
+    if (isHarnessSession(activeSession)) return;
     if (!activePtyStatusKnown || activeConnected) return;
     if (!activeSessionRow?.transcript) return;
     openLinkedChatAfterRuntimeExit(activeSession, activeSessionRow.transcript);
@@ -3251,9 +3632,9 @@ export default function AgentWorkspacePage() {
     getMostRecentProviderForProject(selectedCwd ?? selectedProjectPath) ?? activeSession?.provider ?? "claude";
   const newSessionProviderContextKey = `new:${getProjectGroupKey(selectedCwd ?? selectedProjectPath, mergeWorktrees) || "general"}`;
   const selectedHistoryDefaultProvider =
-    selectedHistoryRow
-      ? getConversationProvider(selectedHistoryRow) ?? "claude"
-      : providerForTranscript(selectedHistorySession ?? undefined) ?? "claude";
+    standardDetailRow
+      ? getConversationProvider(standardDetailRow) ?? "claude"
+      : providerForTranscript(standardDetailSession ?? undefined) ?? "claude";
   const openProjectInEditor = async (path: string) => {
     try {
       await invoke("open_in_editor", { path });
@@ -3272,12 +3653,17 @@ export default function AgentWorkspacePage() {
       onConfigureRuntimeEnvironment={openProjectEnvironmentDialog}
     />
   );
-  const continueHistorySession = async (session: Session, provider: AgentProvider, prompt: string) => {
+  const continueHistorySession = async (
+    session: Session,
+    provider: AgentProvider,
+    prompt: string,
+    launchMode: AgentLaunchMode,
+  ) => {
     const sourceProvider = providerForTranscript(session);
     const nativeResume = provider !== "terminal" && provider === sourceProvider && canResumeTranscriptLocally(session);
 
     if (nativeResume) {
-      void createSession(provider, prompt, {
+      void createSession(provider, prompt, launchMode, {
         cwd: session.project_path,
         title: getHistorySessionTitle(session, t("common.untitledConversation")),
         resumeHistorySession: session,
@@ -3287,7 +3673,7 @@ export default function AgentWorkspacePage() {
     }
 
     if (provider === "terminal") {
-      void createSession(provider, prompt, {
+      void createSession(provider, prompt, "cli", {
         cwd: session.project_path,
         title: getHistorySessionTitle(session, t("common.untitledConversation")),
       });
@@ -3313,7 +3699,7 @@ export default function AgentWorkspacePage() {
       ...prev,
       [getHistoryConversationId(runtimeFork.targetSession)]: runtimeFork.targetSession,
     }));
-    void createSession(provider, prompt, {
+    void createSession(provider, prompt, launchMode, {
       cwd: runtimeFork.projectPath,
       title: historyTitle.slice(0, 80),
       resumeHistorySession: runtimeFork.targetSession,
@@ -3337,7 +3723,7 @@ export default function AgentWorkspacePage() {
       payload.context,
       "</fork-context>",
     ].join("\n");
-    void createSession(provider, prompt, {
+    void createSession(provider, prompt, "standard", {
       cwd: payload.session.project_path,
       title,
       fork: {
@@ -3696,30 +4082,31 @@ export default function AgentWorkspacePage() {
               />
             </div>
           </div>
-        ) : selectedHistorySession ? (
+        ) : standardDetailSession ? (
           <SessionDetail
-            session={selectedHistorySession}
-            projectPath={selectedHistoryProjectPath}
+            session={standardDetailSession}
+            projectPath={standardDetailProjectPath}
             projectPathMenuItems={
-              selectedHistoryProjectPath ? renderProjectPathMenuItems(selectedHistoryProjectPath, "context") : undefined
+              standardDetailProjectPath ? renderProjectPathMenuItems(standardDetailProjectPath, "context") : undefined
             }
             onClose={closeCurrentConversation}
             onFork={forkHistorySession}
-            displayMode={selectedHistoryDisplayMode}
-            onDisplayModeChange={(mode) => setHistorySessionDisplayMode(selectedHistorySession, mode)}
+            displayMode={standardDetailDisplayMode}
+            onDisplayModeChange={(mode) => setHistorySessionDisplayMode(standardDetailSession, mode)}
+            pendingMessages={standardDetailPendingMessages}
             composerOverride={
               <AgentComposer
-                cwd={selectedHistorySession.project_path}
-                cwdLabel={getComposerCwdLabel(selectedHistorySession.project_path)}
-                hasProjectPath={Boolean(selectedHistorySession.project_path && !isPlainChatWorkspace(selectedHistorySession.project_path))}
+                cwd={standardDetailSession.project_path}
+                cwdLabel={getComposerCwdLabel(standardDetailSession.project_path)}
+                hasProjectPath={Boolean(standardDetailSession.project_path && !isPlainChatWorkspace(standardDetailSession.project_path))}
                 pathOptions={composerPathOptions}
                 variant="dock"
                 placeholder={t("workspace.messageConversation")}
                 defaultProvider={selectedHistoryDefaultProvider}
-                providerContextKey={selectedHistoryConversationId ?? selectedHistorySession.id}
+                providerContextKey={standardDetailConversationId ?? standardDetailSession.id}
                 onPickFolder={pickFolder}
                 onSelectCwd={selectComposerCwd}
-                onCreate={(provider, prompt) => continueHistorySession(selectedHistorySession, provider, prompt)}
+                onCreate={(provider, prompt, launchMode) => continueHistorySession(standardDetailSession, provider, prompt, launchMode)}
               />
             }
           />
@@ -3755,7 +4142,7 @@ export default function AgentWorkspacePage() {
                         onClose={closeCurrentConversation}
                         displayMode={getConversationDisplayMode(activeSessionRow)}
                         onDisplayModeChange={(mode) => setConversationDisplayMode(activeSessionRow, mode)}
-                        onOpenConversation={() => setConversationDisplayMode(activeSessionRow, "chat")}
+                        onOpenConversation={() => setConversationDisplayMode(activeSessionRow, "standard")}
                         onEnvironment={() => openConversationEnvironmentDialog(activeSessionRow)}
 	                        environmentActionLabel={t("environment.runAction", { name: primaryEnvironmentAction?.name || t("environment.actionFallback") })}
                         environmentActionDisabled={!primaryEnvironmentAction || !primaryEnvironmentConfig}
@@ -3839,8 +4226,34 @@ export default function AgentWorkspacePage() {
               }
             />
 
-            <div className="min-h-0 flex-1 bg-terminal">
-              {shouldMountTerminal && activeSession.ptyId ? (
+            <div className={`min-h-0 flex-1 ${isHarnessSession(activeSession) ? "flex flex-col bg-background" : "bg-terminal"}`}>
+              {isHarnessSession(activeSession) ? (
+                <>
+                  <HarnessChatPane
+                    session={activeSession}
+                    cwd={activeSession.cwd}
+                  />
+                  <AgentComposer
+                    cwd={activeSession.cwd}
+                    cwdLabel={getComposerCwdLabel(activeSession.cwd)}
+                    hasProjectPath={Boolean(activeSession.cwd && !isPlainChatWorkspace(activeSession.cwd))}
+                    pathOptions={composerPathOptions}
+                    variant="dock"
+                    placeholder={t("workspace.messageConversation")}
+                    defaultProvider={activeSession.provider}
+                    providerContextKey={`runtime:${activeSession.id}`}
+                    disabled={isAgentRunning(activeSession)}
+                    onPickFolder={pickFolder}
+                    onSelectCwd={selectComposerCwd}
+                    onCreate={(provider, prompt, launchMode) =>
+                      createSession(provider, prompt, launchMode, {
+                        cwd: activeSession.cwd,
+                        title: makeSessionTitle(provider, prompt),
+                      })
+                    }
+                  />
+                </>
+              ) : shouldMountTerminal && activeSession.ptyId ? (
                 <TerminalPane
                   key={activeSession.ptyId}
                   ptyId={activeSession.ptyId}
@@ -4777,6 +5190,48 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+function HarnessChatPane({
+  session,
+  cwd,
+}: {
+  session: AgentSession;
+  cwd?: string | null;
+}) {
+  const toReadable = useReadableText();
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const messages = (session.harnessMessages ?? [])
+    .filter((message) => !message.transient)
+    .map(harnessMessageToStandardMessage);
+  const handleCopyContent = useCallback((content: string) => {
+    invoke("copy_to_clipboard", { text: content });
+  }, []);
+
+  useEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+    scroller.scrollTop = scroller.scrollHeight;
+  }, [messages.length, messages[messages.length - 1]?.content]);
+
+  return (
+    <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-background">
+      {messages.length > 0 ? (
+        <div className="border-t border-border/40">
+          <StandardMessageList
+            messages={messages}
+            userPromptsOnly={false}
+            originalChat
+            markdownPreview
+            expandMessages
+            toReadable={toReadable}
+            onCopy={handleCopyContent}
+            cwd={cwd ?? undefined}
+          />
+        </div>
+      ) : null}
+    </div>
   );
 }
 

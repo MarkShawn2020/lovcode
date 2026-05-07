@@ -12,6 +12,14 @@ pub(crate) enum ClaudeCodeInstallType {
     None,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum CodexCliInstallType {
+    Native,
+    Npm,
+    None,
+}
+
 #[derive(Debug, Serialize)]
 pub(crate) struct VersionWithDownloads {
     pub(crate) version: String,
@@ -28,8 +36,10 @@ pub(crate) struct ClaudeCodeVersionInfo {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct CodexCliVersionInfo {
+    pub(crate) install_type: CodexCliInstallType,
     pub(crate) current_version: Option<String>,
     pub(crate) available_versions: Vec<VersionWithDownloads>,
+    pub(crate) autoupdater_disabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -44,6 +54,9 @@ pub(crate) struct AgentRuntimeStatus {
     pub(crate) install_route: Option<String>,
 }
 
+const NPM_CHINA_MIRROR_REGISTRY: &str = "https://registry.npmmirror.com";
+const NPM_REGISTRY_FALLBACKS: [&str; 2] = ["https://registry.npmjs.org", NPM_CHINA_MIRROR_REGISTRY];
+
 fn install_stderr_progress_payload(line: &str) -> String {
     let trimmed = line.trim_start();
     let lower = trimmed.to_ascii_lowercase();
@@ -57,6 +70,35 @@ fn install_stderr_progress_payload(line: &str) -> String {
     } else {
         format!("[error] {}", line)
     }
+}
+
+fn npm_package_metadata_url(registry: &str, package_name: &str) -> String {
+    format!(
+        "{}/{}",
+        registry.trim_end_matches('/'),
+        package_name.replace('/', "%2F")
+    )
+}
+
+fn npm_install_registry_arg(npm_registry: Option<&str>) -> Result<Option<&'static str>, String> {
+    match npm_registry.unwrap_or("default") {
+        "default" | "official" => Ok(None),
+        "china_mirror" => Ok(Some(NPM_CHINA_MIRROR_REGISTRY)),
+        value => Err(format!("Unsupported npm registry: {}", value)),
+    }
+}
+
+fn build_npm_global_install_command(
+    package: &str,
+    npm_registry: Option<&str>,
+) -> Result<String, String> {
+    let registry_arg = npm_install_registry_arg(npm_registry)?
+        .map(|registry| format!(" --registry={}", registry))
+        .unwrap_or_default();
+    Ok(format!(
+        "npm install -g --force{} {}",
+        registry_arg, package
+    ))
 }
 
 /// Run a command in user's interactive login shell (to get proper PATH with nvm, etc.)
@@ -126,6 +168,133 @@ pub(crate) fn detect_claude_code_install_type() -> (ClaudeCodeInstallType, Optio
     (ClaudeCodeInstallType::None, None)
 }
 
+fn detect_codex_cli_install_type() -> (CodexCliInstallType, Option<String>) {
+    let (path, version, _, _, _) = detect_cli_runtime("codex", "codex");
+    let Some(path) = path else {
+        return (CodexCliInstallType::None, version);
+    };
+
+    let resolved_path = std::fs::canonicalize(&path).unwrap_or_else(|_| PathBuf::from(&path));
+    let path_text = resolved_path.to_string_lossy();
+    if path_text.contains("node_modules/@openai/codex") {
+        return (CodexCliInstallType::Npm, version);
+    }
+
+    (CodexCliInstallType::Native, version)
+}
+
+fn read_codex_config_doc() -> Result<(PathBuf, toml_edit::DocumentMut), String> {
+    let config_path = get_codex_config_path();
+    let content = if config_path.exists() {
+        fs::read_to_string(&config_path).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+    let doc = if content.trim().is_empty() {
+        toml_edit::DocumentMut::new()
+    } else {
+        content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("parse Codex config.toml: {}", e))?
+    };
+    Ok((config_path, doc))
+}
+
+fn read_codex_autoupdater_disabled() -> bool {
+    let Ok((_, doc)) = read_codex_config_doc() else {
+        return false;
+    };
+    doc["check_for_update_on_startup"]
+        .as_bool()
+        .map(|enabled| !enabled)
+        .unwrap_or(false)
+}
+
+fn codex_native_asset_target() -> Result<&'static str, String> {
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        return Ok("aarch64-apple-darwin");
+    }
+    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+    {
+        return Ok("x86_64-apple-darwin");
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    {
+        return Ok("aarch64-unknown-linux-musl");
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        return Ok("x86_64-unknown-linux-musl");
+    }
+    #[allow(unreachable_code)]
+    Err(
+        "Native Codex install is only supported on macOS arm64/x64 and Linux arm64/x64."
+            .to_string(),
+    )
+}
+
+fn validate_codex_version(version: &str) -> Result<(), String> {
+    if version == "latest" {
+        return Ok(());
+    }
+    let version_re =
+        regex::Regex::new(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$").map_err(|e| e.to_string())?;
+    if version_re.is_match(version) {
+        Ok(())
+    } else {
+        Err(format!("Invalid Codex version: {}", version))
+    }
+}
+
+fn codex_native_install_command(version: &str) -> Result<String, String> {
+    validate_codex_version(version)?;
+    let target = codex_native_asset_target()?;
+    let url = if version == "latest" {
+        format!(
+            "https://github.com/openai/codex/releases/latest/download/codex-{}.tar.gz",
+            target
+        )
+    } else {
+        format!(
+            "https://github.com/openai/codex/releases/download/rust-v{}/codex-{}.tar.gz",
+            version, target
+        )
+    };
+    let url = shell_escape::unix::escape(url.into()).into_owned();
+
+    Ok(format!(
+        r#"set -e
+echo "Downloading Codex CLI..."
+tmp="$(mktemp -d)"
+cleanup() {{ rm -rf "$tmp"; }}
+trap cleanup EXIT
+curl -fL --progress-bar -o "$tmp/codex.tar.gz" {url}
+tar -xzf "$tmp/codex.tar.gz" -C "$tmp"
+bin="$(find "$tmp" -type f -name 'codex-*' -perm -111 | head -n 1)"
+if [ -z "$bin" ]; then
+  bin="$(find "$tmp" -type f -name 'codex-*' | head -n 1)"
+fi
+if [ -z "$bin" ]; then
+  echo "Codex binary not found in archive" >&2
+  exit 1
+fi
+mkdir -p "$HOME/.local/bin"
+install -m 755 "$bin" "$HOME/.local/bin/codex"
+echo "Done!""#,
+    ))
+}
+
+fn codex_npm_install_command(version: &str, npm_registry: Option<&str>) -> Result<String, String> {
+    validate_codex_version(version)?;
+    let package = if version == "latest" {
+        "@openai/codex@latest".to_string()
+    } else {
+        format!("@openai/codex@{}", version)
+    };
+    build_npm_global_install_command(&package, npm_registry)
+}
+
 pub(crate) fn parse_semver_from_cli_output(output: &str) -> Option<String> {
     regex::Regex::new(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?")
         .ok()?
@@ -152,12 +321,16 @@ pub(crate) async fn fetch_npm_versions_with_downloads(
         .build()
         .unwrap_or_default();
 
-    let versions: Vec<String> = match client
-        .get(format!("https://registry.npmjs.org/{}", package_name))
-        .send()
-        .await
-    {
-        Ok(resp) => resp
+    let mut versions: Vec<String> = vec![];
+    for registry in NPM_REGISTRY_FALLBACKS {
+        let url = npm_package_metadata_url(registry, package_name);
+        let Ok(resp) = client.get(url).send().await else {
+            continue;
+        };
+        if !resp.status().is_success() {
+            continue;
+        }
+        versions = resp
             .json::<serde_json::Value>()
             .await
             .ok()
@@ -175,9 +348,11 @@ pub(crate) async fn fetch_npm_versions_with_downloads(
                     versions.into_iter().take(limit).collect()
                 })
             })
-            .unwrap_or_default(),
-        Err(_) => vec![],
-    };
+            .unwrap_or_default();
+        if !versions.is_empty() {
+            break;
+        }
+    }
 
     let downloads_package = package_name.replace('/', "%2F");
     let downloads_map: std::collections::HashMap<String, u64> = match client
@@ -353,10 +528,37 @@ pub(crate) fn set_agent_runtime_path_override_inner(
     save_agent_runtime_path_overrides(&overrides)
 }
 
+pub(crate) fn get_agent_chat_harness_path() -> Option<String> {
+    #[cfg(debug_assertions)]
+    {
+        return std::env::var("LOVCODE_AGENT_CHAT_HARNESS")
+            .ok()
+            .map(|path| path.trim().to_string())
+            .filter(|path| !path.is_empty() && Path::new(path).is_file());
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
+}
+
 pub(crate) fn detect_cli_runtime(
     provider: &str,
     command_name: &str,
 ) -> (Option<String>, Option<String>, bool, bool, Option<String>) {
+    if matches!(provider, "claude" | "codex") {
+        if let Some(path) = get_agent_chat_harness_path() {
+            return (
+                Some(path),
+                Some("dev-harness".to_string()),
+                true,
+                true,
+                Some("dev-harness".to_string()),
+            );
+        }
+    }
+
     if let Some(override_path) = get_agent_runtime_path_override(provider) {
         let exists = Path::new(&override_path).is_file();
         let version = if exists {
@@ -469,18 +671,19 @@ pub(crate) async fn set_agent_runtime_path_override(
 
 #[tauri::command]
 pub(crate) async fn get_codex_cli_version_info() -> Result<CodexCliVersionInfo, String> {
-    let current_version = tauri::async_runtime::spawn_blocking(|| {
-        let (_, version, _, _, _) = detect_cli_runtime("codex", "codex");
-        version
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let (install_type, current_version) =
+        tauri::async_runtime::spawn_blocking(detect_codex_cli_install_type)
+            .await
+            .map_err(|e| e.to_string())?;
 
     let available_versions = fetch_npm_versions_with_downloads("@openai/codex", 20).await;
+    let autoupdater_disabled = read_codex_autoupdater_disabled();
 
     Ok(CodexCliVersionInfo {
+        install_type,
         current_version,
         available_versions,
+        autoupdater_disabled,
     })
 }
 
@@ -574,13 +777,15 @@ pub(crate) fn run_codex_install_command(
 pub(crate) async fn install_codex_cli_version(
     app: tauri::AppHandle,
     version: String,
+    install_type: Option<String>,
+    npm_registry: Option<String>,
 ) -> Result<String, String> {
-    let package = if version == "latest" {
-        "@openai/codex@latest".to_string()
-    } else {
-        format!("@openai/codex@{}", version)
+    let install_type = install_type.unwrap_or_else(|| "native".to_string());
+    let cmd = match install_type.as_str() {
+        "native" => codex_native_install_command(&version)?,
+        "npm" => codex_npm_install_command(&version, npm_registry.as_deref())?,
+        other => return Err(format!("Unsupported Codex install type: {}", other)),
     };
-    let cmd = format!("npm install -g --force {}", package);
 
     tauri::async_runtime::spawn_blocking(move || run_codex_install_command(app, cmd))
         .await
@@ -621,6 +826,7 @@ pub(crate) async fn install_claude_code_version(
     app: tauri::AppHandle,
     version: String,
     install_type: Option<String>,
+    npm_registry: Option<String>,
 ) -> Result<String, String> {
     use std::process::{Command, Stdio};
 
@@ -643,7 +849,7 @@ pub(crate) async fn install_claude_code_version(
             } else {
                 format!("@anthropic-ai/claude-code@{}", version)
             };
-            format!("npm install -g --force {}", package)
+            build_npm_global_install_command(&package, npm_registry.as_deref())?
         } else {
             // Clean up stale downloads that may cause "another process installing" error
             if let Some(home) = dirs::home_dir() {
@@ -867,5 +1073,18 @@ pub(crate) fn set_claude_code_autoupdater(disabled: bool) -> Result<(), String> 
     let content = serde_json::to_string_pretty(&config).map_err(|e| e.to_string())?;
     fs::write(&config_path, content).map_err(|e| e.to_string())?;
 
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn set_codex_cli_autoupdater(disabled: bool) -> Result<(), String> {
+    let (config_path, mut doc) = read_codex_config_doc()?;
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+
+    doc["check_for_update_on_startup"] = toml_edit::value(!disabled);
+
+    fs::write(&config_path, doc.to_string()).map_err(|e| e.to_string())?;
     Ok(())
 }

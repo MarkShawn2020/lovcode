@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 const NATIVE_TITLE_ATTRIBUTE = "data-native-title";
+const NATIVE_TITLE_ARIA_ATTRIBUTE = "data-native-title-aria-label";
+const DEFAULT_TOOLTIP_DELAY_MS = 2000;
 const TOOLTIP_OFFSET = 8;
 const VIEWPORT_PADDING = 8;
 
@@ -37,11 +39,28 @@ function isInteractiveElement(element: Element) {
 }
 
 function preserveAccessibleName(element: Element, title: string) {
-  if (!title.trim() || !isInteractiveElement(element)) return;
-  if (element.hasAttribute("aria-label") || element.hasAttribute("aria-labelledby")) return;
-  if (element.textContent?.trim()) return;
+  const ownsAriaLabel = element.getAttribute(NATIVE_TITLE_ARIA_ATTRIBUTE) === "true";
+
+  if (!title.trim() || !isInteractiveElement(element) || element.hasAttribute("aria-labelledby")) {
+    if (ownsAriaLabel) {
+      element.removeAttribute("aria-label");
+      element.removeAttribute(NATIVE_TITLE_ARIA_ATTRIBUTE);
+    }
+    return;
+  }
+
+  if (element.hasAttribute("aria-label") && !ownsAriaLabel) return;
+
+  if (element.textContent?.trim()) {
+    if (ownsAriaLabel) {
+      element.removeAttribute("aria-label");
+      element.removeAttribute(NATIVE_TITLE_ARIA_ATTRIBUTE);
+    }
+    return;
+  }
 
   element.setAttribute("aria-label", title);
+  element.setAttribute(NATIVE_TITLE_ARIA_ATTRIBUTE, "true");
 }
 
 function moveNativeTitle(element: Element) {
@@ -95,22 +114,40 @@ function getTooltipState(target: Element): TooltipState | null {
 
 export function NativeTitleTooltip() {
   const activeTargetRef = useRef<Element | null>(null);
+  const showTimerRef = useRef<number | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   useEffect(() => {
+    const clearShowTimer = () => {
+      if (showTimerRef.current === null) return;
+
+      window.clearTimeout(showTimerRef.current);
+      showTimerRef.current = null;
+    };
+
     const hideTooltip = () => {
+      clearShowTimer();
       activeTargetRef.current = null;
       setTooltip(null);
     };
 
-    const showTooltip = (target: Element) => {
+    const scheduleTooltip = (target: Element) => {
+      clearShowTimer();
       activeTargetRef.current = target;
-      setTooltip(getTooltipState(target));
+      setTooltip(null);
+
+      showTimerRef.current = window.setTimeout(() => {
+        showTimerRef.current = null;
+        if (activeTargetRef.current !== target || !target.isConnected) return;
+
+        setTooltip(getTooltipState(target));
+      }, DEFAULT_TOOLTIP_DELAY_MS);
     };
 
     const handleEnter = (event: PointerEvent | FocusEvent) => {
       const target = findTooltipTarget(event.target);
       if (!target) return;
+      if (activeTargetRef.current === target) return;
 
       const nextTooltip = getTooltipState(target);
       if (!nextTooltip) {
@@ -118,8 +155,7 @@ export function NativeTitleTooltip() {
         return;
       }
 
-      activeTargetRef.current = target;
-      setTooltip(nextTooltip);
+      scheduleTooltip(target);
     };
 
     const handleLeave = (event: PointerEvent | FocusEvent) => {
@@ -139,7 +175,7 @@ export function NativeTitleTooltip() {
         return;
       }
 
-      showTooltip(currentTarget);
+      setTooltip((currentTooltip) => currentTooltip ? getTooltipState(currentTarget) : currentTooltip);
     };
 
     sanitizeTitleTree(document.body);
@@ -157,6 +193,11 @@ export function NativeTitleTooltip() {
           }
         });
       });
+
+      const currentTarget = activeTargetRef.current;
+      if (currentTarget && !currentTarget.isConnected) {
+        hideTooltip();
+      }
     });
 
     observer.observe(document.body, {
@@ -174,6 +215,7 @@ export function NativeTitleTooltip() {
     window.addEventListener("scroll", handleViewportChange, true);
 
     return () => {
+      clearShowTimer();
       observer.disconnect();
       document.removeEventListener("pointerover", handleEnter, true);
       document.removeEventListener("pointerout", handleLeave, true);

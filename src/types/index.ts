@@ -436,6 +436,7 @@ export interface VersionWithDownloads {
 }
 
 export type ClaudeCodeInstallType = "native" | "npm" | "none";
+export type CodexCliInstallType = "native" | "npm" | "none";
 
 export interface ClaudeCodeVersionInfo {
   install_type: ClaudeCodeInstallType;
@@ -445,8 +446,10 @@ export interface ClaudeCodeVersionInfo {
 }
 
 export interface CodexCliVersionInfo {
+  install_type: CodexCliInstallType;
   current_version: string | null;
   available_versions: VersionWithDownloads[];
+  autoupdater_disabled: boolean;
 }
 
 export interface LovcodeRelease {

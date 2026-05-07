@@ -786,6 +786,10 @@ pub(crate) fn is_codex_context_message(text: &str) -> bool {
         || trimmed.contains("<environment_context>")
 }
 
+pub(crate) fn is_codex_no_response_placeholder(text: &str) -> bool {
+    normalize_message_text(text).eq_ignore_ascii_case("No response requested.")
+}
+
 pub(crate) fn collect_jsonl_files_recursive(root: &Path, out: &mut Vec<PathBuf>) {
     let Ok(entries) = fs::read_dir(root) else {
         return;

@@ -756,7 +756,7 @@ export default function SearchOverlay() {
                       </div>
                       <div className="mt-0.5 min-w-0 text-[11px] text-muted-foreground/75">
                         {matchPreview ? (
-                          <span className="block line-clamp-2 leading-4" title={matchPreview.text}>
+	                          <span className="block line-clamp-2 leading-4">
                             <HighlightText text={matchPreview.text} query={matchPreview.highlightQuery} />
                           </span>
                         ) : (
