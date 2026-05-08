@@ -23,6 +23,7 @@
 ---
 
 <p align="center">
+  <a href="https://code.lovstudio.ai/">Website</a> •
   <a href="#release-highlights">Updates</a> •
   <a href="#features">Features</a> •
   <a href="#oh-my-lovcode">oh-my-lovcode</a> •
