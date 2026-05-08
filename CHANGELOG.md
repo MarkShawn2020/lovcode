@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.0
+
+### Minor Changes
+
+- Add scoped chat search fields, improve workspace session browsing, and refine CLI version settings feedback.
+
 ## 0.38.0
 
 ### Minor Changes
