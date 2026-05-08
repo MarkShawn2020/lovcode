@@ -26,6 +26,7 @@ interface ContentBlockRendererProps {
   disableTextCollapse?: boolean;
   cwd?: string;
   transformText?: (text: string) => string;
+  compactToolRuns?: boolean;
 }
 
 const FILE_TOOLS = new Set(["Read", "Write", "Edit", "MultiEdit"]);
@@ -38,6 +39,94 @@ type PathHits = ReturnType<typeof usePathHits>;
 type RenderItem =
   | { kind: "tool_invocation"; key: string; use: ToolUseContentBlock; results: ToolResultContentBlock[] }
   | { kind: "block"; key: string; block: ContentBlock };
+
+type RenderSequenceItem =
+  | { kind: "tool_run"; key: string; items: RenderItem[] }
+  | { kind: "item"; key: string; item: RenderItem };
+
+function plural(count: number, singular: string, pluralLabel = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : pluralLabel}`;
+}
+
+function isToolRenderItem(item: RenderItem) {
+  if (item.kind === "tool_invocation") return true;
+  return item.block.type === "tool_use" || item.block.type === "tool_result";
+}
+
+function groupToolRunItems(items: RenderItem[], compactSingleToolRun = false): RenderSequenceItem[] {
+  const sequence: RenderSequenceItem[] = [];
+  let run: RenderItem[] = [];
+
+  const flushRun = () => {
+    if (run.length >= 2 || (compactSingleToolRun && run.length === 1)) {
+      sequence.push({
+        kind: "tool_run",
+        key: `tool-run-${run[0].key}-${run[run.length - 1].key}`,
+        items: run,
+      });
+    } else if (run.length === 1) {
+      sequence.push({ kind: "item", key: run[0].key, item: run[0] });
+    }
+    run = [];
+  };
+
+  for (const item of items) {
+    if (isToolRenderItem(item)) {
+      run.push(item);
+      continue;
+    }
+
+    flushRun();
+    sequence.push({ kind: "item", key: item.key, item });
+  }
+
+  flushRun();
+  return sequence;
+}
+
+function toolResultHasOutput(result: ToolResultContentBlock) {
+  return Boolean(result.content.trim() || result.raw?.trim() || result.images?.length);
+}
+
+function summarizeToolRun(items: RenderItem[]) {
+  let invocationCount = 0;
+  let resultCount = 0;
+  let imageCount = 0;
+  let outputCount = 0;
+
+  for (const item of items) {
+    if (item.kind === "tool_invocation") {
+      invocationCount += 1;
+      for (const result of item.results) {
+        resultCount += 1;
+        imageCount += result.images?.length ?? 0;
+        if (toolResultHasOutput(result)) outputCount += 1;
+      }
+      continue;
+    }
+
+    if (item.block.type === "tool_use") {
+      invocationCount += 1;
+      continue;
+    }
+
+    if (item.block.type === "tool_result") {
+      resultCount += 1;
+      imageCount += item.block.images?.length ?? 0;
+      if (toolResultHasOutput(item.block)) outputCount += 1;
+    }
+  }
+
+  const countLabel =
+    invocationCount > 0 ? plural(invocationCount, "tool call") : plural(resultCount, "tool output");
+  const metaLabel = [
+    resultCount ? plural(resultCount, "result") : "",
+    outputCount && outputCount !== resultCount ? plural(outputCount, "output") : "",
+    imageCount ? plural(imageCount, "image") : "",
+  ].filter(Boolean).join(" · ");
+
+  return { countLabel, metaLabel };
+}
 
 function fileNameFromSummary(summary: string) {
   const path = summary.match(/^(.+?)(?:\s+\(|$)/)?.[1] ?? summary;
@@ -516,43 +605,179 @@ function ThinkingBlock({ thinking }: { thinking: string }) {
   );
 }
 
-export function ContentBlockRenderer({ blocks, markdown, highlight, disableTextCollapse, cwd, transformText }: ContentBlockRendererProps) {
+type ContentRenderItemProps = Pick<
+  ContentBlockRendererProps,
+  "markdown" | "highlight" | "disableTextCollapse" | "cwd" | "transformText"
+> & {
+  item: RenderItem;
+};
+
+function ContentRenderItem({
+  item,
+  markdown,
+  highlight,
+  disableTextCollapse,
+  cwd,
+  transformText,
+}: ContentRenderItemProps) {
+  if (item.kind === "tool_invocation") {
+    return (
+      <ToolInvocationCard
+        use={item.use}
+        results={item.results}
+        highlight={highlight}
+        cwd={cwd}
+      />
+    );
+  }
+
+  const { block } = item;
+  switch (block.type) {
+    case "text":
+      return (
+        <CollapsibleContent
+          content={transformText ? transformText(block.text) : block.text}
+          markdown={markdown}
+          highlight={highlight}
+          disableCollapse={disableTextCollapse}
+          cwd={cwd}
+        />
+      );
+    case "tool_use":
+      return (
+        <ToolInvocationCard
+          use={block}
+          results={[]}
+          highlight={highlight}
+          cwd={cwd}
+        />
+      );
+    case "tool_result":
+      return <ToolResultCard result={block} highlight={highlight} cwd={cwd} />;
+    case "thinking":
+      return <ThinkingBlock thinking={block.thinking} />;
+  }
+}
+
+type ToolRunClusterProps = Pick<
+  ContentBlockRendererProps,
+  "markdown" | "highlight" | "disableTextCollapse" | "cwd" | "transformText"
+> & {
+  items: RenderItem[];
+};
+
+function ToolRunCluster({
+  items,
+  markdown,
+  highlight,
+  disableTextCollapse,
+  cwd,
+  transformText,
+}: ToolRunClusterProps) {
+  const [expanded, setExpanded] = useState(false);
+  const summary = useMemo(() => summarizeToolRun(items), [items]);
+  const accessibleLabel = [summary.countLabel, summary.metaLabel].filter(Boolean).join(" · ");
+
+  return (
+    <div
+      className={
+        expanded
+          ? "my-0.5 overflow-hidden rounded-xl bg-card-alt/40"
+          : "my-0 overflow-hidden rounded-lg bg-transparent"
+      }
+    >
+      <button
+        type="button"
+        aria-expanded={expanded}
+        aria-label={accessibleLabel}
+        onClick={() => setExpanded(!expanded)}
+        className="flex h-3 w-full min-w-0 items-center justify-start px-0 py-0"
+        title={accessibleLabel}
+      >
+        {expanded ? (
+          <span className="flex min-w-0 flex-1 items-center gap-2">
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+              <Wrench className="h-3.5 w-3.5" />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-left text-[11px] font-medium leading-5 text-muted-foreground">
+              {summary.countLabel}
+              {summary.metaLabel ? ` · ${summary.metaLabel}` : ""}
+            </span>
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 rotate-180 text-muted-foreground transition-transform" />
+          </span>
+        ) : (
+          <span
+            className="block h-px w-10 rounded-full bg-muted-foreground/25"
+            aria-hidden="true"
+          />
+        )}
+      </button>
+      {expanded && (
+        <div className="space-y-1 p-1.5 pt-0">
+          {items.map((item) => (
+            <ContentRenderItem
+              key={item.key}
+              item={item}
+              markdown={markdown}
+              highlight={highlight}
+              disableTextCollapse={disableTextCollapse}
+              cwd={cwd}
+              transformText={transformText}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function ContentBlockRenderer({
+  blocks,
+  markdown,
+  highlight,
+  disableTextCollapse,
+  cwd,
+  transformText,
+  compactToolRuns,
+}: ContentBlockRendererProps) {
   const items = useMemo(() => buildRenderItems(blocks), [blocks]);
+  const shouldCompactToolRuns = compactToolRuns ?? items.filter(isToolRenderItem).length > 1;
+  const sequence = useMemo(
+    () =>
+      shouldCompactToolRuns
+        ? groupToolRunItems(items, compactToolRuns === true)
+        : items.map<RenderSequenceItem>((item) => ({ kind: "item", key: item.key, item })),
+    [compactToolRuns, shouldCompactToolRuns, items],
+  );
 
   return (
     <div className="space-y-1">
-      {items.map((item) => {
-        if (item.kind === "tool_invocation") {
+      {sequence.map((item) => {
+        if (item.kind === "tool_run") {
           return (
-            <ToolInvocationCard
+            <ToolRunCluster
               key={item.key}
-              use={item.use}
-              results={item.results}
+              items={item.items}
+              markdown={markdown}
               highlight={highlight}
+              disableTextCollapse={disableTextCollapse}
               cwd={cwd}
+              transformText={transformText}
             />
           );
         }
 
-        const { block } = item;
-        switch (block.type) {
-          case "text":
-            return <CollapsibleContent key={item.key} content={transformText ? transformText(block.text) : block.text} markdown={markdown} highlight={highlight} disableCollapse={disableTextCollapse} cwd={cwd} />;
-          case "tool_use":
-            return (
-              <ToolInvocationCard
-                key={item.key}
-                use={block}
-                results={[]}
-                highlight={highlight}
-                cwd={cwd}
-              />
-            );
-          case "tool_result":
-            return <ToolResultCard key={item.key} result={block} highlight={highlight} cwd={cwd} />;
-          case "thinking":
-            return <ThinkingBlock key={item.key} thinking={block.thinking} />;
-        }
+        return (
+          <ContentRenderItem
+            key={item.key}
+            item={item.item}
+            markdown={markdown}
+            highlight={highlight}
+            disableTextCollapse={disableTextCollapse}
+            cwd={cwd}
+            transformText={transformText}
+          />
+        );
       })}
     </div>
   );

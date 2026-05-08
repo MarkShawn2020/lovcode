@@ -7,6 +7,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { register, unregister, isRegistered } from "@tauri-apps/plugin-global-shortcut";
 import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
 import { useSessionsCache } from "../hooks";
+import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/searchScopes";
 import { globalChatSearchHotkeyAtom } from "../store";
 import type { Session } from "../types";
 import { useReadableText, formatDate } from "../views/Chat/utils";
@@ -144,12 +145,10 @@ export function GlobalChatSearch() {
     const timer = setTimeout(async () => {
       setSearching(true);
       try {
-        const q = query.toLowerCase();
-        const localMatches = allSessions.filter((s) => {
-          const summary = (s.summary || "").toLowerCase();
-          const title = (s.title || "").toLowerCase();
-          return summary.includes(q) || title.includes(q);
-        });
+        const parsedQuery = parseScopedSearchQuery(query);
+        const localMatches = allSessions.filter((s) =>
+          matchesScopedSessionMetadata(s, parsedQuery)
+        );
 
         if (indexReady) {
           const contentResults = await invoke<{ session_id: string }[]>(
@@ -214,6 +213,7 @@ function SearchModal({
 }) {
   const [activeIdx, setActiveIdx] = useState(0);
   const { t } = useI18n();
+  const highlightQuery = parseScopedSearchQuery(query).highlightQuery;
 
   useEffect(() => { setActiveIdx(0); }, [query, results.length]);
 
@@ -281,11 +281,11 @@ function SearchModal({
                     <span className="shrink-0 inline-block w-1.5 h-1.5 rounded-full border border-current opacity-50" />
                     <div className="truncate flex-1 min-w-0">
                       <div className="truncate">
-                        <HighlightText text={title} query={query} />
+                        <HighlightText text={title} query={highlightQuery} />
                       </div>
                       {projectName && (
                         <div className="text-[11px] text-muted-foreground/70 truncate">
-                          <HighlightText text={projectName} query={query} />
+                          <HighlightText text={projectName} query={highlightQuery} />
                         </div>
                       )}
                     </div>

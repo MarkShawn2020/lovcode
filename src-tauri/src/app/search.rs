@@ -13,6 +13,9 @@ pub(crate) struct SearchResult {
     pub project_path: String,
     pub session_id: String,
     pub session_summary: Option<String>,
+    pub title: Option<String>,
+    pub summary: Option<String>,
+    pub last_prompt: Option<String>,
     pub timestamp: String,
     pub score: f32,
 }
@@ -44,6 +47,13 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
 
         let uuid_field = schema.get_field("uuid").unwrap();
         let content_field = schema.get_field("content").unwrap();
+        let title_field = schema.get_field("title").unwrap();
+        let summary_field = schema.get_field("summary").unwrap();
+        let last_prompt_field = schema.get_field("last_prompt").unwrap();
+        let prompt_field = schema.get_field("prompt").unwrap();
+        let user_field = schema.get_field("user").unwrap();
+        let assistant_field = schema.get_field("assistant").unwrap();
+        let project_field = schema.get_field("project").unwrap();
         let role_field = schema.get_field("role").unwrap();
         let project_id_field = schema.get_field("project_id").unwrap();
         let project_path_field = schema.get_field("project_path").unwrap();
@@ -128,16 +138,21 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
 
                     if name.ends_with(".jsonl") && !name.starts_with("agent-") {
                         let session_id = name.trim_end_matches(".jsonl").to_string();
+                        let session_head = read_session_head(&path, 0);
+                        let session_title = session_head.title.unwrap_or_default();
+                        let session_last_prompt = session_head.last_prompt.unwrap_or_default();
                         let file_content = fs::read_to_string(&path).unwrap_or_default();
 
-                        let mut session_summary: Option<String> = None;
+                        let mut session_summary: Option<String> = session_head.summary;
 
                         // First pass: get summary
-                        for line in file_content.lines() {
-                            if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
-                                if parsed.line_type.as_deref() == Some("summary") {
-                                    session_summary = parsed.summary;
-                                    break;
+                        if session_summary.is_none() {
+                            for line in file_content.lines() {
+                                if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+                                    if parsed.line_type.as_deref() == Some("summary") {
+                                        session_summary = parsed.summary;
+                                        break;
+                                    }
                                 }
                             }
                         }
@@ -155,15 +170,38 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                                             let (text_content, _) = extract_content_with_meta(&msg.content);
                                             let is_meta = parsed.is_meta.unwrap_or(false);
 
-                                            if !is_meta && !text_content.is_empty() {
+                                            if !is_meta
+                                                && !text_content.is_empty()
+                                                && !(role == "assistant"
+                                                    && is_no_response_placeholder(&text_content))
+                                            {
+                                                let prompt_text = if role == "user" {
+                                                    text_content.clone()
+                                                } else {
+                                                    String::new()
+                                                };
+                                                let assistant_text = if role == "assistant" {
+                                                    text_content.clone()
+                                                } else {
+                                                    String::new()
+                                                };
+                                                let summary_text = session_summary.clone().unwrap_or_default();
+
                                                 index_writer.add_document(doc!(
                                                     uuid_field => parsed.uuid.clone().unwrap_or_default(),
                                                     content_field => text_content,
+                                                    title_field => session_title.clone(),
+                                                    summary_field => summary_text.clone(),
+                                                    last_prompt_field => session_last_prompt.clone(),
+                                                    prompt_field => prompt_text.clone(),
+                                                    user_field => prompt_text,
+                                                    assistant_field => assistant_text,
+                                                    project_field => display_path.clone(),
                                                     role_field => role,
                                                     project_id_field => project_id.clone(),
                                                     project_path_field => display_path.clone(),
                                                     session_id_field => session_id.clone(),
-                                                    session_summary_field => session_summary.clone().unwrap_or_default(),
+                                                    session_summary_field => summary_text,
                                                     timestamp_field => parsed.timestamp.clone().unwrap_or_default(),
                                                 )).map_err(|e| e.to_string())?;
 
@@ -210,6 +248,8 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                 Err(_) => continue,
             };
             let project_path = session.project_path.clone().unwrap_or_default();
+            let session_title = session.title.clone().unwrap_or_default();
+            let session_last_prompt = session.last_prompt.clone().unwrap_or_default();
             let session_summary = session
                 .title
                 .clone()
@@ -220,9 +260,27 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                 if message.content.trim().is_empty() {
                     continue;
                 }
+                let prompt_text = if message.role == "user" {
+                    message.content.clone()
+                } else {
+                    String::new()
+                };
+                let assistant_text = if message.role == "assistant" {
+                    message.content.clone()
+                } else {
+                    String::new()
+                };
+
                 index_writer.add_document(doc!(
                     uuid_field => message.uuid,
                     content_field => message.content,
+                    title_field => session_title.clone(),
+                    summary_field => session_summary.clone(),
+                    last_prompt_field => session_last_prompt.clone(),
+                    prompt_field => prompt_text.clone(),
+                    user_field => prompt_text,
+                    assistant_field => assistant_text,
+                    project_field => project_path.clone(),
                     role_field => message.role,
                     project_id_field => session.project_id.clone(),
                     project_path_field => project_path.clone(),
@@ -265,6 +323,182 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
     .map_err(|e| e.to_string())?
 }
 
+fn tokenize_search_query(query: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in query.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            current.push(ch);
+            escaped = true;
+            continue;
+        }
+
+        if matches!(ch, '"' | '\'') {
+            current.push(ch);
+            quote = match quote {
+                Some(open) if open == ch => None,
+                None => Some(ch),
+                other => other,
+            };
+            continue;
+        }
+
+        if ch.is_whitespace() && quote.is_none() {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+
+    tokens
+}
+
+fn split_search_qualifier(token: &str) -> Option<(&str, &str)> {
+    let colon = token.find(':')?;
+    if colon == 0 || colon + 1 >= token.len() {
+        return None;
+    }
+
+    let field = &token[..colon];
+    if !field
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+    {
+        return None;
+    }
+
+    Some((field, &token[colon + 1..]))
+}
+
+fn normalize_scope_name(scope: &str) -> String {
+    scope
+        .chars()
+        .filter(|ch| *ch != '_' && *ch != '-')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn canonical_search_field(scope: &str, schema: &Schema) -> Option<&'static str> {
+    let field = match normalize_scope_name(scope).as_str() {
+        "content" | "body" | "message" | "messages" | "text" => "content",
+        "title" | "name" => "title",
+        "summary" => "summary",
+        "lastprompt" | "latestprompt" => "last_prompt",
+        "prompt" | "prompts" | "user" | "userprompt" | "userprompts" | "question" => "prompt",
+        "ai" | "assistant" | "answer" | "response" | "reply" => "assistant",
+        "project" | "projectpath" | "path" | "cwd" | "directory" => "project",
+        "id" | "session" | "sessionid" => "session_id",
+        "uuid" => "uuid",
+        "role" => "role",
+        _ => return None,
+    };
+
+    schema.get_field(field).ok().map(|_| field)
+}
+
+fn push_unique_scope(scopes: &mut Vec<&'static str>, scope: &'static str) {
+    if !scopes.contains(&scope) {
+        scopes.push(scope);
+    }
+}
+
+fn is_query_operator(token: &str) -> bool {
+    matches!(token.to_ascii_uppercase().as_str(), "AND" | "OR" | "NOT")
+}
+
+fn expand_token_for_scopes(token: &str, scopes: &[&'static str]) -> String {
+    if scopes.is_empty()
+        || is_query_operator(token)
+        || token.starts_with('(')
+        || token.ends_with(')')
+    {
+        return token.to_string();
+    }
+
+    let (prefix, value) = match token.as_bytes().first().copied() {
+        Some(b'+') | Some(b'-') if token.len() > 1 => (&token[..1], &token[1..]),
+        _ => ("", token),
+    };
+
+    if scopes.len() == 1 {
+        return format!("{prefix}{}:{value}", scopes[0]);
+    }
+
+    let clauses = scopes
+        .iter()
+        .map(|scope| format!("{scope}:{value}"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    format!("{prefix}({clauses})")
+}
+
+fn normalize_scoped_search_query(query: &str, schema: &Schema) -> String {
+    let tokens = tokenize_search_query(query);
+    let mut default_scopes = Vec::new();
+
+    for token in &tokens {
+        let Some((field, value)) = split_search_qualifier(token) else {
+            continue;
+        };
+        if normalize_scope_name(field) != "in" {
+            continue;
+        }
+
+        for scope in value.split(',') {
+            if let Some(canonical) = canonical_search_field(scope.trim(), schema) {
+                push_unique_scope(&mut default_scopes, canonical);
+            }
+        }
+    }
+
+    let normalized = tokens
+        .iter()
+        .filter_map(|token| {
+            if let Some((field, value)) = split_search_qualifier(token) {
+                if normalize_scope_name(field) == "in" {
+                    return None;
+                }
+                if let Some(canonical) = canonical_search_field(field, schema) {
+                    return Some(format!("{canonical}:{value}"));
+                }
+            }
+
+            Some(expand_token_for_scopes(token, &default_scopes))
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if normalized.trim().is_empty() {
+        query.trim().to_string()
+    } else {
+        normalized
+    }
+}
+
+fn has_scoped_search_query(query: &str, schema: &Schema) -> bool {
+    tokenize_search_query(query).iter().any(|token| {
+        let Some((field, _)) = split_search_qualifier(token) else {
+            return false;
+        };
+        normalize_scope_name(field) == "in" || canonical_search_field(field, schema).is_some()
+    })
+}
+
 #[tauri::command]
 pub(crate) fn search_chats(
     query: String,
@@ -282,8 +516,8 @@ pub(crate) fn search_chats(
             return Err("Search index not built. Please build index first.".to_string());
         }
 
-        let schema = create_schema();
         let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
+        let schema = index.schema();
         // Register jieba tokenizer for Chinese support
         register_jieba_tokenizer(&index);
         *guard = Some(SearchIndex { index, schema });
@@ -299,15 +533,31 @@ pub(crate) fn search_chats(
 
     let searcher = reader.searcher();
 
-    let content_field = search_index.schema.get_field("content").unwrap();
-    let session_summary_field = search_index.schema.get_field("session_summary").unwrap();
+    let default_fields = [
+        "content",
+        "session_summary",
+        "title",
+        "summary",
+        "last_prompt",
+    ]
+    .iter()
+    .filter_map(|name| search_index.schema.get_field(name).ok())
+    .collect::<Vec<_>>();
 
-    let query_parser = QueryParser::for_index(
-        &search_index.index,
-        vec![content_field, session_summary_field],
-    );
+    let normalized_query = normalize_scoped_search_query(&query, &search_index.schema);
+    let has_scopes = has_scoped_search_query(&query, &search_index.schema);
+    let mut query_parser = QueryParser::for_index(&search_index.index, default_fields);
+    if has_scopes {
+        query_parser.set_conjunction_by_default();
+    }
+    if let Ok(title_field) = search_index.schema.get_field("title") {
+        query_parser.set_field_boost(title_field, 2.0);
+    }
+    if let Ok(prompt_field) = search_index.schema.get_field("prompt") {
+        query_parser.set_field_boost(prompt_field, 1.4);
+    }
     let parsed_query = query_parser
-        .parse_query(&query)
+        .parse_query(&normalized_query)
         .map_err(|e| e.to_string())?;
 
     let top_docs = searcher
@@ -321,9 +571,11 @@ pub(crate) fn search_chats(
             searcher.doc(doc_address).map_err(|e| e.to_string())?;
 
         let get_text = |field_name: &str| -> String {
-            let field = search_index.schema.get_field(field_name).unwrap();
-            retrieved_doc
-                .get_first(field)
+            search_index
+                .schema
+                .get_field(field_name)
+                .ok()
+                .and_then(|field| retrieved_doc.get_first(field))
                 .and_then(|v| TantivyValue::as_str(&v))
                 .unwrap_or("")
                 .to_string()
@@ -339,6 +591,9 @@ pub(crate) fn search_chats(
         }
 
         let summary = get_text("session_summary");
+        let title = get_text("title");
+        let scoped_summary = get_text("summary");
+        let last_prompt = get_text("last_prompt");
 
         results.push(SearchResult {
             uuid: get_text("uuid"),
@@ -351,6 +606,17 @@ pub(crate) fn search_chats(
                 None
             } else {
                 Some(summary)
+            },
+            title: if title.is_empty() { None } else { Some(title) },
+            summary: if scoped_summary.is_empty() {
+                None
+            } else {
+                Some(scoped_summary)
+            },
+            last_prompt: if last_prompt.is_empty() {
+                None
+            } else {
+                Some(last_prompt)
             },
             timestamp: get_text("timestamp"),
             score,

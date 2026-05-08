@@ -325,6 +325,9 @@ pub(crate) fn parse_claude_session_messages(path: &Path) -> Result<Vec<Message>,
                 } else {
                     content
                 };
+                if role == "assistant" && is_no_response_placeholder(&display_content) {
+                    continue;
+                }
                 let is_meta = parsed.is_meta.unwrap_or(false);
 
                 if !display_content.is_empty() || has_content_blocks {

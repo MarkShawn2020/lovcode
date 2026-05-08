@@ -598,13 +598,17 @@ pub(crate) fn count_rounds_and_messages_from_buffers(head: &str, tail: &str) -> 
                 rounds += 1;
                 messages += 1;
             } else if line.contains("\"type\":\"assistant\"") {
-                messages += 1;
+                if !line_contains_no_response_placeholder(line) {
+                    messages += 1;
+                }
             } else if line.contains("\"type\":\"message\"") {
                 if line.contains("\"role\":\"user\"") {
                     rounds += 1;
                     messages += 1;
                 } else if line.contains("\"role\":\"assistant\"") {
-                    messages += 1;
+                    if !line_contains_no_response_placeholder(line) {
+                        messages += 1;
+                    }
                 }
             }
         }
@@ -787,7 +791,15 @@ pub(crate) fn is_codex_context_message(text: &str) -> bool {
 }
 
 pub(crate) fn is_codex_no_response_placeholder(text: &str) -> bool {
+    is_no_response_placeholder(text)
+}
+
+pub(crate) fn is_no_response_placeholder(text: &str) -> bool {
     normalize_message_text(text).eq_ignore_ascii_case("No response requested.")
+}
+
+fn line_contains_no_response_placeholder(line: &str) -> bool {
+    line.contains("\"No response requested.\"")
 }
 
 pub(crate) fn collect_jsonl_files_recursive(root: &Path, out: &mut Vec<PathBuf>) {

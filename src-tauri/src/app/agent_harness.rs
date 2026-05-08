@@ -2,6 +2,7 @@ use super::*;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::Mutex as AsyncMutex;
@@ -13,32 +14,41 @@ static AGENT_HARNESS_PROCESSES: LazyLock<AsyncMutex<HashMap<String, u32>>> =
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub(crate) enum AgentHarnessEvent {
     Started {
+        #[serde(rename = "sessionId")]
         session_id: String,
         provider: String,
         command: String,
     },
     Json {
+        #[serde(rename = "sessionId")]
         session_id: String,
         stream: String,
+        #[serde(rename = "eventType")]
         event_type: Option<String>,
+        #[serde(rename = "itemId")]
+        item_id: Option<String>,
         role: Option<String>,
         text: Option<String>,
         raw: Value,
     },
     Stdout {
+        #[serde(rename = "sessionId")]
         session_id: String,
         text: String,
     },
     Stderr {
+        #[serde(rename = "sessionId")]
         session_id: String,
         text: String,
     },
     Exit {
+        #[serde(rename = "sessionId")]
         session_id: String,
         code: Option<i32>,
         success: bool,
     },
     Error {
+        #[serde(rename = "sessionId")]
         session_id: String,
         message: String,
     },
@@ -47,6 +57,7 @@ pub(crate) enum AgentHarnessEvent {
 struct HarnessCommand {
     program: String,
     args: Vec<String>,
+    source: &'static str,
 }
 
 impl HarnessCommand {
@@ -79,7 +90,11 @@ fn build_harness_command(
             args.push(resume_id.to_string());
         }
         args.push(prompt.to_string());
-        return Ok(HarnessCommand { program, args });
+        return Ok(HarnessCommand {
+            program,
+            args,
+            source: "custom-harness",
+        });
     }
 
     let command_name = match provider {
@@ -99,10 +114,11 @@ fn build_harness_command(
     let args = match provider {
         "claude" => {
             let mut args = vec![
-                "--print".to_string(),
-                "--verbose".to_string(),
                 "--output-format".to_string(),
                 "stream-json".to_string(),
+                "--verbose".to_string(),
+                "-p".to_string(),
+                prompt.to_string(),
                 "--include-partial-messages".to_string(),
             ];
             if let Some(resume_id) = resume_session_id.filter(|id| !id.trim().is_empty()) {
@@ -112,7 +128,6 @@ fn build_harness_command(
                 args.push("--session-id".to_string());
                 args.push(session_id.to_string());
             }
-            args.push(prompt.to_string());
             args
         }
         "codex" => {
@@ -133,11 +148,24 @@ fn build_harness_command(
         _ => unreachable!(),
     };
 
-    Ok(HarnessCommand { program, args })
+    Ok(HarnessCommand {
+        program,
+        args,
+        source: "direct-cli",
+    })
 }
 
 fn emit_harness_event(app: &tauri::AppHandle, event: AgentHarnessEvent) {
-    let _ = app.emit("agent-harness-event", event);
+    if let Err(error) = app.emit("agent-harness-event", event) {
+        eprintln!("[DEBUG][HarnessBackend] emit failed: {}", error);
+    }
+}
+
+fn harness_debug_now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 fn json_string(value: &Value, keys: &[&str]) -> Option<String> {
@@ -160,7 +188,14 @@ fn collect_content_text(value: &Value, out: &mut Vec<String>) {
         Value::Object(map) => {
             if matches!(
                 map.get("type").and_then(Value::as_str),
-                Some("text" | "output_text" | "input_text")
+                Some(
+                    "text"
+                        | "text_delta"
+                        | "output_text"
+                        | "output_text_delta"
+                        | "input_text"
+                        | "agent_message"
+                )
             ) {
                 if let Some(text) = map.get("text").and_then(Value::as_str) {
                     if !text.trim().is_empty() {
@@ -187,6 +222,17 @@ fn collect_content_text(value: &Value, out: &mut Vec<String>) {
 }
 
 fn extract_harness_text(raw: &Value) -> Option<String> {
+    if let Some(text) = raw
+        .get("item")
+        .filter(|item| item.get("type").and_then(Value::as_str) == Some("agent_message"))
+        .and_then(|item| item.get("text").and_then(Value::as_str))
+        .map(str::to_string)
+    {
+        if !text.trim().is_empty() {
+            return Some(text);
+        }
+    }
+
     if let Some(text) = json_string(raw, &["text", "result", "last_message"]) {
         if !text.trim().is_empty() {
             return Some(text);
@@ -194,8 +240,11 @@ fn extract_harness_text(raw: &Value) -> Option<String> {
     }
 
     let mut parts = Vec::new();
-    for key in ["message", "content", "delta", "item", "payload"] {
+    for key in ["message", "content", "delta", "event", "item", "payload"] {
         if let Some(value) = raw.get(key) {
+            if key == "event" && !value.is_object() && !value.is_array() {
+                continue;
+            }
             collect_content_text(value, &mut parts);
         }
     }
@@ -207,10 +256,41 @@ fn extract_harness_text(raw: &Value) -> Option<String> {
     }
 }
 
+fn json_event_type(raw: &Value) -> Option<String> {
+    let event_type = json_string(raw, &["type", "event", "kind"]);
+    if event_type.as_deref() == Some("stream_event") {
+        return raw
+            .get("event")
+            .and_then(|event| json_string(event, &["type", "event", "kind"]))
+            .or(event_type);
+    }
+    event_type
+}
+
+fn json_item_id(raw: &Value) -> Option<String> {
+    json_string(raw, &["id", "message_id", "item_id"])
+        .or_else(|| raw.get("message").and_then(|v| json_string(v, &["id"])))
+        .or_else(|| raw.get("event")?.get("message").and_then(|v| json_string(v, &["id"])))
+        .or_else(|| raw.get("item").and_then(|v| json_string(v, &["id"])))
+        .or_else(|| raw.get("payload").and_then(|v| json_string(v, &["id"])))
+}
+
 fn json_role(raw: &Value) -> Option<String> {
+    if let Some(item_type) = raw.get("item").and_then(|item| item.get("type")).and_then(Value::as_str) {
+        return match item_type {
+            "agent_message" => Some("assistant".to_string()),
+            "command_execution" | "file_change" | "mcp_tool_call" | "web_search" | "todo_list" => {
+                Some("tool".to_string())
+            }
+            "error" => Some("error".to_string()),
+            _ => None,
+        };
+    }
+
     raw.get("role")
         .and_then(Value::as_str)
         .or_else(|| raw.get("message")?.get("role")?.as_str())
+        .or_else(|| raw.get("event")?.get("message")?.get("role")?.as_str())
         .map(str::to_string)
 }
 
@@ -220,15 +300,34 @@ fn emit_harness_line(app: &tauri::AppHandle, session_id: &str, stream: &str, lin
     }
 
     if let Ok(raw) = serde_json::from_str::<Value>(&line) {
-        let event_type = json_string(&raw, &["type", "event", "kind"]);
+        let event_type = json_event_type(&raw);
+        let item_id = json_item_id(&raw);
+        let role = json_role(&raw);
+        let text = extract_harness_text(&raw);
+        let event_type_for_log = event_type.as_deref().unwrap_or("json");
+        if matches!(
+            event_type_for_log,
+            "content_block_delta" | "assistant" | "result" | "message_stop" | "content_block_stop"
+        ) {
+            eprintln!(
+                "[DEBUG][HarnessBackend] emit-json t={} session={} stream={} event_type={} text_len={} line_len={}",
+                harness_debug_now_ms(),
+                session_id,
+                stream,
+                event_type_for_log,
+                text.as_ref().map(|value| value.len()).unwrap_or(0),
+                line.len()
+            );
+        }
         emit_harness_event(
             app,
             AgentHarnessEvent::Json {
                 session_id: session_id.to_string(),
                 stream: stream.to_string(),
                 event_type,
-                role: json_role(&raw),
-                text: extract_harness_text(&raw),
+                item_id,
+                role,
+                text,
                 raw,
             },
         );
@@ -236,11 +335,23 @@ fn emit_harness_line(app: &tauri::AppHandle, session_id: &str, stream: &str, lin
     }
 
     let event = if stream == "stderr" {
+        eprintln!(
+            "[DEBUG][HarnessBackend] emit-stderr t={} session={} text_len={}",
+            harness_debug_now_ms(),
+            session_id,
+            line.len()
+        );
         AgentHarnessEvent::Stderr {
             session_id: session_id.to_string(),
             text: line,
         }
     } else {
+        eprintln!(
+            "[DEBUG][HarnessBackend] emit-stdout t={} session={} text_len={}",
+            harness_debug_now_ms(),
+            session_id,
+            line.len()
+        );
         AgentHarnessEvent::Stdout {
             session_id: session_id.to_string(),
             text: line,
@@ -281,6 +392,16 @@ async fn read_harness_lines<R>(
 }
 
 #[tauri::command]
+pub(crate) async fn list_agent_harness_sessions() -> Vec<String> {
+    AGENT_HARNESS_PROCESSES
+        .lock()
+        .await
+        .keys()
+        .cloned()
+        .collect()
+}
+
+#[tauri::command]
 pub(crate) async fn start_agent_harness_session(
     app: tauri::AppHandle,
     session_id: String,
@@ -312,6 +433,20 @@ pub(crate) async fn start_agent_harness_session(
         resume_session_id.as_deref(),
     )?;
     let display_command = harness.display();
+    eprintln!(
+        "[DEBUG][HarnessBackend] start t={} session={} provider={} source={} prompt_len={} has_resume={} program={} arg_count={}",
+        harness_debug_now_ms(),
+        session_id,
+        provider,
+        harness.source,
+        prompt.len(),
+        resume_session_id
+            .as_deref()
+            .map(|id| !id.trim().is_empty())
+            .unwrap_or(false),
+        harness.program,
+        harness.args.len()
+    );
 
     let mut child = Command::new(&harness.program)
         .args(&harness.args)
@@ -367,21 +502,38 @@ pub(crate) async fn start_agent_harness_session(
         cancelled.store(true, Ordering::Relaxed);
         AGENT_HARNESS_PROCESSES.lock().await.remove(&session_id);
         match status {
-            Ok(status) => emit_harness_event(
-                &app,
-                AgentHarnessEvent::Exit {
+            Ok(status) => {
+                eprintln!(
+                    "[DEBUG][HarnessBackend] exit t={} session={} code={:?} success={}",
+                    harness_debug_now_ms(),
                     session_id,
-                    code: status.code(),
-                    success: status.success(),
-                },
-            ),
-            Err(error) => emit_harness_event(
-                &app,
-                AgentHarnessEvent::Error {
+                    status.code(),
+                    status.success()
+                );
+                emit_harness_event(
+                    &app,
+                    AgentHarnessEvent::Exit {
+                        session_id,
+                        code: status.code(),
+                        success: status.success(),
+                    },
+                );
+            }
+            Err(error) => {
+                eprintln!(
+                    "[DEBUG][HarnessBackend] wait-error t={} session={} message={}",
+                    harness_debug_now_ms(),
                     session_id,
-                    message: error.to_string(),
-                },
-            ),
+                    error
+                );
+                emit_harness_event(
+                    &app,
+                    AgentHarnessEvent::Error {
+                        session_id,
+                        message: error.to_string(),
+                    },
+                );
+            }
         }
     });
 

@@ -312,47 +312,57 @@ pub(crate) fn normalize_cli_version_output(output: &str) -> Option<String> {
         })
 }
 
+async fn fetch_npm_versions_from_registry(
+    client: &reqwest::Client,
+    registry: &str,
+    package_name: &str,
+    limit: usize,
+) -> Vec<String> {
+    let url = npm_package_metadata_url(registry, package_name);
+    let Ok(resp) = client.get(url).send().await else {
+        return vec![];
+    };
+    if !resp.status().is_success() {
+        return vec![];
+    }
+    resp.json::<serde_json::Value>()
+        .await
+        .ok()
+        .and_then(|json| {
+            json.get("versions")?.as_object().map(|obj| {
+                let mut versions: Vec<String> = obj.keys().cloned().collect();
+                versions.sort_by(|a, b| {
+                    let parse = |s: &str| -> Vec<u32> {
+                        s.split(['.', '-'])
+                            .filter_map(|part| part.parse().ok())
+                            .collect()
+                    };
+                    parse(b).cmp(&parse(a))
+                });
+                versions.into_iter().take(limit).collect()
+            })
+        })
+        .unwrap_or_default()
+}
+
 pub(crate) async fn fetch_npm_versions_with_downloads(
     package_name: &str,
     limit: usize,
 ) -> Vec<VersionWithDownloads> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(5))
         .build()
         .unwrap_or_default();
 
-    let mut versions: Vec<String> = vec![];
-    for registry in NPM_REGISTRY_FALLBACKS {
-        let url = npm_package_metadata_url(registry, package_name);
-        let Ok(resp) = client.get(url).send().await else {
-            continue;
-        };
-        if !resp.status().is_success() {
-            continue;
-        }
-        versions = resp
-            .json::<serde_json::Value>()
-            .await
-            .ok()
-            .and_then(|json| {
-                json.get("versions")?.as_object().map(|obj| {
-                    let mut versions: Vec<String> = obj.keys().cloned().collect();
-                    versions.sort_by(|a, b| {
-                        let parse = |s: &str| -> Vec<u32> {
-                            s.split(['.', '-'])
-                                .filter_map(|part| part.parse().ok())
-                                .collect()
-                        };
-                        parse(b).cmp(&parse(a))
-                    });
-                    versions.into_iter().take(limit).collect()
-                })
-            })
-            .unwrap_or_default();
-        if !versions.is_empty() {
-            break;
-        }
-    }
+    let versions = futures::future::join_all(
+        NPM_REGISTRY_FALLBACKS
+            .iter()
+            .map(|registry| fetch_npm_versions_from_registry(&client, registry, package_name, limit)),
+    )
+    .await
+    .into_iter()
+    .find(|versions| !versions.is_empty())
+    .unwrap_or_default();
 
     let downloads_package = package_name.replace('/', "%2F");
     let downloads_map: std::collections::HashMap<String, u64> = match client

@@ -126,6 +126,13 @@ pub(crate) fn create_schema() -> Schema {
 
     schema_builder.add_text_field("uuid", STRING | STORED);
     schema_builder.add_text_field("content", text_options.clone());
+    schema_builder.add_text_field("title", text_options.clone());
+    schema_builder.add_text_field("summary", text_options.clone());
+    schema_builder.add_text_field("last_prompt", text_options.clone());
+    schema_builder.add_text_field("prompt", text_options.clone());
+    schema_builder.add_text_field("user", text_options.clone());
+    schema_builder.add_text_field("assistant", text_options.clone());
+    schema_builder.add_text_field("project", text_options.clone());
     schema_builder.add_text_field("role", STRING | STORED);
     schema_builder.add_text_field("project_id", STRING | STORED);
     schema_builder.add_text_field("project_path", STRING | STORED);

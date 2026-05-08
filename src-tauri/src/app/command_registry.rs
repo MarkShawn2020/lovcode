@@ -54,6 +54,7 @@ pub(crate) fn command_handler() -> Box<tauri::ipc::InvokeHandler<tauri::Wry>> {
         list_distill_documents,
         list_doc_sources,
         list_doc_tree,
+        list_agent_harness_sessions,
         list_extension_marketplaces,
         list_installed_plugins,
         list_local_agents,

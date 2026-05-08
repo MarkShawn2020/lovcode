@@ -40,6 +40,7 @@ const EMPTY_ACTIVITY_STATS: ActivityStats = {
   hourly: {},
   detailed: {},
 };
+const AGENT_RUNNING_STALE_MS = 120000;
 
 function formatNumber(value: number, locale: string) {
   return value.toLocaleString(locale);
@@ -73,7 +74,11 @@ function sessionTitle(session: Session, fallback: string) {
 }
 
 function isAgentRunning(session: AgentSession) {
-  return session.status === "running" || session.workState === "working";
+  if (session.workState) {
+    const lastActivity = Math.max(session.lastActivityAt ?? 0, session.updatedAt ?? 0, session.createdAt ?? 0);
+    return session.workState === "working" && Date.now() - lastActivity < AGENT_RUNNING_STALE_MS;
+  }
+  return session.status === "running";
 }
 
 export default function DashboardPage() {

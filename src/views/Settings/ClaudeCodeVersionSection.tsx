@@ -8,6 +8,7 @@ import {
 } from "../../components/ui/popover";
 import { Switch } from "../../components/ui/switch";
 import type { ClaudeCodeVersionInfo, ClaudeCodeInstallType } from "../../types";
+import type { AgentRuntimeStatus } from "../../types/agent";
 import { queryKeys, useInvokeMutation, useInvokeQuery, useQueryClient } from "../../hooks";
 import { useI18n, type TranslationKey } from "../../i18n";
 import { cn } from "../../lib/utils";
@@ -28,6 +29,7 @@ const INSTALL_TYPES: { value: ClaudeCodeInstallType; labelKey: TranslationKey }[
   { value: "native", labelKey: "agentRuntime.installTypeNative" },
   { value: "npm", labelKey: "agentRuntime.installTypeNpm" },
 ];
+const VERSION_LIST_LOADING_TIMEOUT_MS = 8_000;
 
 function VersionChoice({
   active,
@@ -74,6 +76,15 @@ export function ClaudeCodeVersionSection() {
     queryKeys.claudeCodeVersionInfo,
     "get_claude_code_version_info",
   );
+  const {
+    data: runtimeStatus,
+    isLoading: runtimeStatusLoading,
+    isFetching: runtimeStatusFetching,
+  } = useInvokeQuery<AgentRuntimeStatus>(
+    agentRuntimeStatusKey("claude"),
+    "get_agent_runtime_status",
+    { provider: "claude" },
+  );
   const queryClient = useQueryClient();
   const installMutation = useInvokeMutation<
     string,
@@ -92,6 +103,7 @@ export function ClaudeCodeVersionSection() {
   );
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean | null>(null);
   const [versionPopoverOpen, setVersionPopoverOpen] = useState(false);
+  const [versionListLoadingExpired, setVersionListLoadingExpired] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const initializedFromInfoRef = useRef(false);
 
@@ -110,6 +122,17 @@ export function ClaudeCodeVersionSection() {
     if (!versionInfo) return;
     setAutoUpdateEnabled(!versionInfo.autoupdater_disabled);
   }, [versionInfo?.autoupdater_disabled, versionInfo]);
+
+  useEffect(() => {
+    if (!loading || versionInfo) {
+      setVersionListLoadingExpired(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setVersionListLoadingExpired(true);
+    }, VERSION_LIST_LOADING_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [loading, versionInfo]);
 
   const handleInstall = async (
     version: string = selectedVersion,
@@ -161,28 +184,25 @@ export function ClaudeCodeVersionSection() {
 
   const externalError = queryError?.message ?? (!versionPopoverOpen ? actionError : null);
 
-  if (loading) {
-    return (
-      <AgentCliRuntimeCard
-        provider="claude"
-      >
-        <p className="text-xs text-muted-foreground">{t("common.loading")}</p>
-      </AgentCliRuntimeCard>
-    );
-  }
-
   const isNotInstalled = versionInfo?.install_type === "none";
+  const availableVersions = versionInfo?.available_versions ?? [];
+  const versionsStillLoading = loading && !versionInfo && !versionListLoadingExpired;
+  const versionsUnavailable = !versionsStillLoading && availableVersions.length === 0;
   const resolveSelectedVersion = (version: string) =>
-    version === "latest" ? versionInfo?.available_versions[0]?.version ?? version : version;
+    version === "latest" ? availableVersions[0]?.version ?? version : version;
   const isInstalledSelection = (version: string, installType: ClaudeCodeInstallType) =>
     versionInfo?.current_version === resolveSelectedVersion(version) && versionInfo?.install_type === installType;
 
   const getCurrentVersionLabel = () => {
     if (installing) return t("agentRuntime.installing");
-    if (!versionInfo?.current_version) return t("agentRuntime.notInstalled");
-    const typeLabelKey = INSTALL_TYPES.find((type) => type.value === versionInfo.install_type)?.labelKey;
-    const typeLabel = typeLabelKey ? t(typeLabelKey) : versionInfo.install_type;
-    return `v${versionInfo.current_version} · ${typeLabel}`;
+    if (versionInfo?.current_version) {
+      const typeLabelKey = INSTALL_TYPES.find((type) => type.value === versionInfo.install_type)?.labelKey;
+      const typeLabel = typeLabelKey ? t(typeLabelKey) : versionInfo.install_type;
+      return `v${versionInfo.current_version} · ${typeLabel}`;
+    }
+    if (runtimeStatus?.version) return `v${runtimeStatus.version}`;
+    if (loading || runtimeStatusLoading || runtimeStatusFetching) return t("agentRuntime.loadingVersions");
+    return t("agentRuntime.notInstalled");
   };
 
   const handleInstallTypeChange = (value: string) => {
@@ -194,8 +214,10 @@ export function ClaudeCodeVersionSection() {
     setSelectedVersion(version);
   };
 
+  const hasInstallableSelection =
+    selectedVersion === "latest" || availableVersions.some((version) => version.version === selectedVersion);
   const canInstallSelectedVersion =
-    Boolean(versionInfo) && !installing && !isInstalledSelection(selectedVersion, selectedInstallType);
+    hasInstallableSelection && !installing && !isInstalledSelection(selectedVersion, selectedInstallType);
 
   const handleInstallSelectedVersion = () => {
     if (!canInstallSelectedVersion) return;
@@ -283,14 +305,24 @@ export function ClaudeCodeVersionSection() {
                   {t("agentRuntime.availableVersions")}
                 </p>
                 <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+                  {versionsStillLoading && (
+                    <p className="px-2 py-1 text-xs text-muted-foreground">
+                      {t("agentRuntime.loadingVersions")}
+                    </p>
+                  )}
+                  {versionsUnavailable && (
+                    <p className="px-2 py-1 text-xs text-muted-foreground">
+                      {t("agentRuntime.availableVersionsUnavailable")}
+                    </p>
+                  )}
                   <VersionChoice
                     active={selectedVersion === "latest"}
                     disabled={installing}
                     label={t("agentRuntime.latestNewest")}
                     onClick={() => handleVersionChange("latest")}
                   />
-                  {versionInfo?.available_versions.map((v) => {
-                    const isCurrent = v.version === versionInfo.current_version;
+                  {availableVersions.map((v) => {
+                    const isCurrent = v.version === (versionInfo?.current_version ?? runtimeStatus?.version);
                     return (
                       <VersionChoice
                         key={v.version}

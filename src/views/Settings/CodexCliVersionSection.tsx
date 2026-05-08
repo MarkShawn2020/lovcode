@@ -10,6 +10,7 @@ import {
 import { Progress } from "../../components/ui/progress";
 import { Switch } from "../../components/ui/switch";
 import type { CodexCliInstallType, CodexCliVersionInfo } from "../../types";
+import type { AgentRuntimeStatus } from "../../types/agent";
 import { queryKeys, useInvokeMutation, useInvokeQuery, useQueryClient } from "../../hooks";
 import { useI18n, type TranslationKey } from "../../i18n";
 import { cn } from "../../lib/utils";
@@ -31,6 +32,7 @@ const INSTALL_TYPES: { value: CodexCliInstallType; labelKey: TranslationKey }[] 
   { value: "native", labelKey: "agentRuntime.installTypeNative" },
   { value: "npm", labelKey: "agentRuntime.installTypeNpm" },
 ];
+const VERSION_LIST_LOADING_TIMEOUT_MS = 8_000;
 
 function VersionChoice({
   active,
@@ -77,6 +79,15 @@ export function CodexCliVersionSection() {
     queryKeys.codexCliVersionInfo,
     "get_codex_cli_version_info",
   );
+  const {
+    data: runtimeStatus,
+    isLoading: runtimeStatusLoading,
+    isFetching: runtimeStatusFetching,
+  } = useInvokeQuery<AgentRuntimeStatus>(
+    agentRuntimeStatusKey("codex"),
+    "get_agent_runtime_status",
+    { provider: "codex" },
+  );
   const queryClient = useQueryClient();
   const installMutation = useInvokeMutation<
     string,
@@ -95,6 +106,7 @@ export function CodexCliVersionSection() {
   );
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState<boolean | null>(null);
   const [versionPopoverOpen, setVersionPopoverOpen] = useState(false);
+  const [versionListLoadingExpired, setVersionListLoadingExpired] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [installLogs, setInstallLogs] = useState<string[]>([]);
@@ -119,6 +131,17 @@ export function CodexCliVersionSection() {
     if (!versionInfo) return;
     setAutoUpdateEnabled(!versionInfo.autoupdater_disabled);
   }, [versionInfo?.autoupdater_disabled, versionInfo]);
+
+  useEffect(() => {
+    if (!isLoading || versionInfo) {
+      setVersionListLoadingExpired(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setVersionListLoadingExpired(true);
+    }, VERSION_LIST_LOADING_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [isLoading, versionInfo]);
 
   useEffect(() => {
     logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -208,25 +231,24 @@ export function CodexCliVersionSection() {
 
   const externalError = queryError?.message ?? (!versionPopoverOpen ? actionError : null);
 
-  if (isLoading) {
-    return (
-      <AgentCliRuntimeCard provider="codex">
-        <p className="text-xs text-muted-foreground">{t("common.loading")}</p>
-      </AgentCliRuntimeCard>
-    );
-  }
-
   const isNotInstalled = versionInfo?.install_type === "none";
+  const availableVersions = versionInfo?.available_versions ?? [];
+  const versionsStillLoading = isLoading && !versionInfo && !versionListLoadingExpired;
+  const versionsUnavailable = !versionsStillLoading && availableVersions.length === 0;
   const resolveSelectedVersion = (version: string) =>
-    version === "latest" ? versionInfo?.available_versions[0]?.version ?? version : version;
+    version === "latest" ? availableVersions[0]?.version ?? version : version;
   const isInstalledSelection = (version: string, installType: CodexCliInstallType) =>
     versionInfo?.current_version === resolveSelectedVersion(version) && versionInfo?.install_type === installType;
 
   const getCurrentVersionLabel = () => {
     if (installing) return t("agentRuntime.installing");
-    if (!versionInfo?.current_version) return t("agentRuntime.notInstalled");
-    const installType = versionInfo.install_type === "none" ? selectedInstallType : versionInfo.install_type;
-    return `v${versionInfo.current_version} · ${getInstallTypeLabel(installType)}`;
+    if (versionInfo?.current_version) {
+      const installType = versionInfo.install_type === "none" ? selectedInstallType : versionInfo.install_type;
+      return `v${versionInfo.current_version} · ${getInstallTypeLabel(installType)}`;
+    }
+    if (runtimeStatus?.version) return `v${runtimeStatus.version}`;
+    if (isLoading || runtimeStatusLoading || runtimeStatusFetching) return t("agentRuntime.loadingVersions");
+    return t("agentRuntime.notInstalled");
   };
 
   const handleInstallTypeChange = (value: string) => {
@@ -238,8 +260,10 @@ export function CodexCliVersionSection() {
     setSelectedVersion(version);
   };
 
+  const hasInstallableSelection =
+    selectedVersion === "latest" || availableVersions.some((version) => version.version === selectedVersion);
   const canInstallSelectedVersion =
-    Boolean(versionInfo) && !installing && !isInstalledSelection(selectedVersion, selectedInstallType);
+    hasInstallableSelection && !installing && !isInstalledSelection(selectedVersion, selectedInstallType);
 
   const handleInstallSelectedVersion = () => {
     if (!canInstallSelectedVersion) return;
@@ -323,14 +347,24 @@ export function CodexCliVersionSection() {
                   {t("agentRuntime.availableVersions")}
                 </p>
                 <div className="max-h-56 space-y-1 overflow-y-auto pr-1">
+                  {versionsStillLoading && (
+                    <p className="px-2 py-1 text-xs text-muted-foreground">
+                      {t("agentRuntime.loadingVersions")}
+                    </p>
+                  )}
+                  {versionsUnavailable && (
+                    <p className="px-2 py-1 text-xs text-muted-foreground">
+                      {t("agentRuntime.availableVersionsUnavailable")}
+                    </p>
+                  )}
                   <VersionChoice
                     active={selectedVersion === "latest"}
                     disabled={installing}
                     label={t("agentRuntime.latestNewest")}
                     onClick={() => handleVersionChange("latest")}
                   />
-                  {versionInfo?.available_versions.map((v) => {
-                    const isCurrent = v.version === versionInfo.current_version;
+                  {availableVersions.map((v) => {
+                    const isCurrent = v.version === (versionInfo?.current_version ?? runtimeStatus?.version);
                     return (
                       <VersionChoice
                         key={v.version}

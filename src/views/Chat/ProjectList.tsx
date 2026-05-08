@@ -1394,6 +1394,8 @@ function getMessageRenderVersion(messages: Message[]) {
         message.line_number,
         message.role,
         message.is_tool ? 1 : 0,
+        message.is_streaming ? 1 : 0,
+        message.streaming_mode ?? "",
         message.timestamp ?? "",
         message.content,
         message.content_blocks ? JSON.stringify(message.content_blocks) : "",
@@ -1402,25 +1404,81 @@ function getMessageRenderVersion(messages: Message[]) {
     .join("\u001f");
 }
 
+const HARNESS_STREAM_DEBUG = true;
+
+function logHarnessStreamRenderDebug(stage: string, payload: Record<string, unknown>) {
+  if (!HARNESS_STREAM_DEBUG) return;
+  console.log(`[DEBUG][HarnessStream] ${stage}`, { t: Number(performance.now().toFixed(1)), ...payload });
+}
+
 function normalizeMessageContent(content: string) {
   return content.replace(/\s+/g, " ").trim();
 }
 
+function messageContentMatches(a: Message, b: Message) {
+  const content = normalizeMessageContent(a.content);
+  return (
+    content.length > 0 &&
+    a.role === b.role &&
+    Boolean(a.is_tool) === Boolean(b.is_tool) &&
+    content === normalizeMessageContent(b.content)
+  );
+}
+
+function isCoveredByPendingMessage(message: Message, pendingMessages: Message[]) {
+  return pendingMessages.some((pending) => messageContentMatches(message, pending));
+}
+
 function mergePendingMessages(messages: Message[], pendingMessages: Message[]) {
   if (pendingMessages.length === 0) return messages;
-  const recentMessages = messages.slice(-8);
   const next = [...messages];
   pendingMessages.forEach((pending) => {
     const pendingContent = normalizeMessageContent(pending.content);
-    if (!pendingContent) return;
-    const alreadyVisible = recentMessages.some((message) =>
-      message.role === pending.role &&
-      Boolean(message.is_tool) === Boolean(pending.is_tool) &&
-      normalizeMessageContent(message.content) === pendingContent,
-    );
-    if (!alreadyVisible) next.push(pending);
+    if (!pendingContent && !pending.is_streaming) return;
+    const recentStart = Math.max(0, next.length - 8);
+    let alreadyVisibleIndex = -1;
+    for (let index = next.length - 1; index >= recentStart; index -= 1) {
+      if (messageContentMatches(next[index], pending)) {
+        alreadyVisibleIndex = index;
+        break;
+      }
+    }
+    if (alreadyVisibleIndex !== -1) {
+      if (pending.is_streaming || pending.uuid.includes(":assistant:live")) {
+        next[alreadyVisibleIndex] = pending;
+      }
+      return;
+    }
+    next.push(pending);
   });
   return next;
+}
+
+function getMessageIdentity(message: Pick<Message, "uuid" | "line_number">) {
+  return `${message.uuid || "message"}:${message.line_number}`;
+}
+
+function isAnimatableAssistantMessage(message: Message) {
+  return (
+    message.role === "assistant" &&
+    !message.is_meta &&
+    !message.is_tool &&
+    !message.content_blocks?.some((block) => block.type !== "text") &&
+    message.content.trim().length > 0
+  );
+}
+
+function shouldRenderStreamingText(message: Message) {
+  return (
+    Boolean(message.is_streaming) &&
+    message.role === "assistant" &&
+    !message.is_tool &&
+    !message.content_blocks?.some((block) => block.type !== "text")
+  );
+}
+
+function getTranscriptTypewriterDuration(content: string) {
+  return Math.min(15000, Math.max(1200, content.length * 24 + 600));
 }
 
 export interface SessionForkPayload {
@@ -1633,6 +1691,130 @@ async function openPromptDetailWindow(content: string, title: string) {
   }
 }
 
+function getTypewriterStep(remaining: number) {
+  if (remaining > 480) return 32;
+  if (remaining > 180) return 16;
+  if (remaining > 64) return 8;
+  return 3;
+}
+
+function commonPrefixLength(a: string, b: string) {
+  const limit = Math.min(a.length, b.length);
+  let index = 0;
+  while (index < limit && a[index] === b[index]) index += 1;
+  return index;
+}
+
+function useTypewriterText(target: string, streaming: boolean) {
+  const [visible, setVisible] = useState(() => (streaming ? "" : target));
+  const [done, setDone] = useState(!streaming);
+  const targetRef = useRef(target);
+  const visibleRef = useRef(visible);
+
+  useEffect(() => {
+    targetRef.current = target;
+    if (!streaming) {
+      visibleRef.current = target;
+      setDone(true);
+      setVisible(target);
+      return;
+    }
+
+    setDone(false);
+    setVisible((current) => {
+      if (target.startsWith(current)) return current;
+      const prefixLength = commonPrefixLength(current, target);
+      const next = target.slice(0, prefixLength);
+      visibleRef.current = next;
+      return next;
+    });
+  }, [target, streaming]);
+
+  useEffect(() => {
+    visibleRef.current = visible;
+  }, [visible]);
+
+  useEffect(() => {
+    if (!streaming) return;
+    let frame = 0;
+    let lastTick = 0;
+
+    const tick = (time: number) => {
+      if (time - lastTick >= 24) {
+        lastTick = time;
+        const targetText = targetRef.current;
+        const current = visibleRef.current;
+        if (current !== targetText) {
+          const next = targetText.startsWith(current)
+            ? targetText.slice(0, Math.min(targetText.length, current.length + getTypewriterStep(targetText.length - current.length)))
+            : targetText;
+          visibleRef.current = next;
+          setVisible(next);
+          if (next === targetText) setDone(true);
+        } else if (targetText.length > 0) {
+          setDone(true);
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [streaming]);
+
+  return { text: streaming ? visible : target, done };
+}
+
+function StreamingCollapsibleContent({
+  content,
+  messageId,
+  markdown,
+  highlight,
+  cwd,
+  streaming,
+  streamingMode,
+}: {
+  content: string;
+  messageId?: string;
+  markdown: boolean;
+  highlight?: string;
+  cwd?: string;
+  streaming?: boolean;
+  streamingMode?: Message["streaming_mode"];
+}) {
+  const typewriter = Boolean(streaming && streamingMode !== "live");
+  const { text: typewriterText, done } = useTypewriterText(content, typewriter);
+  const visible = streamingMode === "live" ? content : typewriterText;
+  const showCursor = Boolean(streaming && (streamingMode === "live" || !done));
+  const renderMarkdown = markdown && (streamingMode === "live" || !showCursor);
+  useEffect(() => {
+    if (!streaming || streamingMode !== "live") return;
+    logHarnessStreamRenderDebug("render-live-content", {
+      messageId: messageId ?? null,
+      contentLength: content.length,
+      visibleLength: visible.length,
+      markdownEnabled: renderMarkdown,
+    });
+  }, [content.length, messageId, renderMarkdown, streaming, streamingMode, visible.length]);
+  return (
+    <div className="relative">
+      <CollapsibleContent
+        content={visible || (showCursor ? " " : "")}
+        markdown={renderMarkdown}
+        highlight={highlight}
+        disableCollapse
+        cwd={cwd}
+      />
+      {showCursor ? (
+        <span
+          aria-hidden="true"
+          className="ml-0.5 inline-block h-4 w-1 translate-y-0.5 animate-pulse rounded-sm bg-primary align-text-bottom"
+        />
+      ) : null}
+    </div>
+  );
+}
+
 const MessageGroupCard = memo(function MessageGroupCard({
   group,
   originalChat,
@@ -1669,9 +1851,13 @@ const MessageGroupCard = memo(function MessageGroupCard({
   const userPromptCompressed = isUser ? compressPromptText(userPromptText) : null;
   const canOpenPromptDetail = Boolean(userPromptCompressed);
   const userPathHits = usePathHits(userPromptText, cwd, true);
+  const hasStreamingText = group.some(shouldRenderStreamingText);
   const toolBlocks = useMemo(
-    () => (!isUser && groupHasToolBlocks(group) ? flattenGroupContentBlocks(group) : null),
-    [group, isUser],
+    () => (!isUser && !hasStreamingText && groupHasToolBlocks(group) ? flattenGroupContentBlocks(group) : null),
+    [group, isUser, hasStreamingText],
+  );
+  const isToolOnlyGroup = Boolean(
+    toolBlocks?.length && toolBlocks.every((block) => block.type === "tool_use" || block.type === "tool_result"),
   );
 
   return (
@@ -1689,7 +1875,9 @@ const MessageGroupCard = memo(function MessageGroupCard({
             }
           : undefined
       }
-      className={`group/msg relative py-1.5 pl-4 pr-10 border-b ${
+      className={`group/msg relative pl-4 pr-10 ${
+        isToolOnlyGroup ? "-mt-px py-0 border-b-0" : "py-1.5 border-b"
+      } ${
         isUser
           ? "border-border bg-card before:absolute before:inset-0 before:bg-primary/[0.07] before:pointer-events-none"
           : "bg-card border-border/40"
@@ -1739,17 +1927,51 @@ const MessageGroupCard = memo(function MessageGroupCard({
           >
             <div className="space-y-1.5">
               {toolBlocks ? (
-                <ContentBlockRenderer blocks={toolBlocks} markdown={markdownPreview} highlight={highlight} disableTextCollapse cwd={cwd} transformText={toReadable} />
+                <ContentBlockRenderer
+                  blocks={toolBlocks}
+                  markdown={markdownPreview}
+                  highlight={highlight}
+                  disableTextCollapse
+                  cwd={cwd}
+                  transformText={toReadable}
+                  compactToolRuns
+                />
               ) : (
                 group.map((msg, idx) => (
                   <div
                     key={`${msg.uuid}-${msg.line_number}`}
                     className={idx > 0 ? "pt-1.5 border-t border-border/30" : ""}
                   >
-                    {msg.content_blocks ? (
-                      <ContentBlockRenderer blocks={msg.content_blocks} markdown={markdownPreview} highlight={highlight} disableTextCollapse cwd={cwd} transformText={toReadable} />
+                    {shouldRenderStreamingText(msg) ? (
+                      <StreamingCollapsibleContent
+                        content={toReadable(msg.content)}
+                        messageId={msg.uuid}
+                        markdown={markdownPreview}
+                        highlight={highlight}
+                        cwd={cwd}
+                        streaming={msg.is_streaming}
+                        streamingMode={msg.streaming_mode}
+                      />
+                    ) : msg.content_blocks ? (
+                      <ContentBlockRenderer
+                        blocks={msg.content_blocks}
+                        markdown={markdownPreview}
+                        highlight={highlight}
+                        disableTextCollapse
+                        cwd={cwd}
+                        transformText={toReadable}
+                        compactToolRuns
+                      />
                     ) : (
-                      <CollapsibleContent content={toReadable(msg.content)} markdown={markdownPreview} highlight={highlight} disableCollapse cwd={cwd} />
+                      <StreamingCollapsibleContent
+                        content={toReadable(msg.content)}
+                        messageId={msg.uuid}
+                        markdown={markdownPreview}
+                        highlight={highlight}
+                        cwd={cwd}
+                        streaming={msg.is_streaming}
+                        streamingMode={msg.streaming_mode}
+                      />
                     )}
                   </div>
                 ))
@@ -2103,6 +2325,7 @@ export function SessionDetail({
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [messageLoadError, setMessageLoadError] = useState<string | null>(null);
+  const [streamingMessageIds, setStreamingMessageIds] = useState<Set<string>>(() => new Set());
   const [originalChat] = useAtom(originalChatAtom);
   const [markdownPreview] = useAtom(markdownPreviewAtom);
   const [userPromptsOnly] = useAtom(userPromptsOnlyAtom);
@@ -2138,6 +2361,9 @@ export function SessionDetail({
 
   const selection = useMaasActiveSelection();
   const messageLoadSeqRef = useRef(0);
+  const messagesRef = useRef<Message[]>([]);
+  const streamingClearTimersRef = useRef<number[]>([]);
+  const pendingMessagesRef = useRef<Message[]>(pendingMessages);
   const liveSyncScrollRef = useRef(false);
   const livePollInFlightRef = useRef(false);
   const captureLiveSyncScrollIntent = useCallback(() => {
@@ -2146,6 +2372,10 @@ export function SessionDetail({
       || scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
   }, []);
 
+  useEffect(() => {
+    pendingMessagesRef.current = pendingMessages;
+  }, [pendingMessages]);
+
   const loadMessages = useCallback((reset: boolean) => {
     const seq = messageLoadSeqRef.current + 1;
     messageLoadSeqRef.current = seq;
@@ -2153,6 +2383,8 @@ export function SessionDetail({
     if (reset) {
       setLoading(true);
       setMessages([]);
+      setStreamingMessageIds(new Set());
+      messagesRef.current = [];
       setMessageLoadError(null);
     }
 
@@ -2162,13 +2394,43 @@ export function SessionDetail({
     })
       .then((m) => {
         if (messageLoadSeqRef.current === seq) {
+          if (!reset) {
+            const previousIds = new Set(messagesRef.current.map(getMessageIdentity));
+            const newAssistantIds = m
+              .filter((message) => !previousIds.has(getMessageIdentity(message)))
+              .filter(isAnimatableAssistantMessage)
+              .filter((message) => !isCoveredByPendingMessage(message, pendingMessagesRef.current))
+              .map(getMessageIdentity);
+            if (newAssistantIds.length > 0) {
+              setStreamingMessageIds((current) => {
+                const next = new Set(current);
+                newAssistantIds.forEach((id) => next.add(id));
+                return next;
+              });
+              m.filter((message) => newAssistantIds.includes(getMessageIdentity(message))).forEach((message) => {
+                const id = getMessageIdentity(message);
+                const timer = window.setTimeout(() => {
+                  setStreamingMessageIds((current) => {
+                    if (!current.has(id)) return current;
+                    const next = new Set(current);
+                    next.delete(id);
+                    return next;
+                  });
+                }, getTranscriptTypewriterDuration(message.content));
+                streamingClearTimersRef.current.push(timer);
+              });
+            }
+          }
+          messagesRef.current = m;
           setMessages(m);
           setMessageLoadError(null);
         }
       })
       .catch((error) => {
         if (messageLoadSeqRef.current === seq) {
+          messagesRef.current = [];
           setMessages([]);
+          setStreamingMessageIds(new Set());
           setMessageLoadError(error instanceof Error ? error.message : String(error));
         }
       })
@@ -2182,6 +2444,8 @@ export function SessionDetail({
     void loadMessages(true);
     return () => {
       messageLoadSeqRef.current += 1;
+      streamingClearTimersRef.current.forEach(window.clearTimeout);
+      streamingClearTimersRef.current = [];
     };
   }, [loadMessages]);
 
@@ -2236,9 +2500,21 @@ export function SessionDetail({
     };
   }, [captureLiveSyncScrollIntent, effectiveDisplayMode, loadMessages, queryClient, session.project_id, session.id]);
 
+  const liveMessages = useMemo(
+    () =>
+      streamingMessageIds.size === 0
+        ? messages
+        : messages.map((message) =>
+            streamingMessageIds.has(getMessageIdentity(message))
+              ? { ...message, is_streaming: true, streaming_mode: "replay" as const }
+              : message,
+          ),
+    [messages, streamingMessageIds],
+  );
+
   const displayMessages = useMemo(
-    () => mergePendingMessages(messages, pendingMessages),
-    [messages, pendingMessages],
+    () => mergePendingMessages(liveMessages, pendingMessages),
+    [liveMessages, pendingMessages],
   );
 
   const filteredMessages = useMemo(() => {
@@ -2246,6 +2522,22 @@ export function SessionDetail({
     if (userPromptsOnly) result = result.filter((m) => isUserPromptMessage(m));
     return result;
   }, [displayMessages, originalChat, userPromptsOnly]);
+  const hasRenderableMessages = filteredMessages.length > 0;
+  const showBlockingLoading = loading && !hasRenderableMessages;
+
+  useEffect(() => {
+    const liveAssistant = pendingMessages.find((message) => message.is_streaming && message.role === "assistant");
+    if (!liveAssistant) return;
+    logHarnessStreamRenderDebug("session-detail-live", {
+      sessionId: session.id,
+      loading,
+      hasRenderableMessages,
+      pendingCount: pendingMessages.length,
+      displayCount: displayMessages.length,
+      filteredCount: filteredMessages.length,
+      liveContentLength: liveAssistant.content.length,
+    });
+  }, [displayMessages.length, filteredMessages.length, hasRenderableMessages, loading, pendingMessages, session.id]);
 
   // A round = one user prompt (plus its following assistant turn). Count user messages from the
   // chat-only view so meta/tool entries don't inflate the number.
@@ -2275,7 +2567,7 @@ export function SessionDetail({
   // Count matches from the actual rendered DOM (source of truth) after every render
   useEffect(() => {
     const root = contentRef.current;
-    if (!highlight?.trim() || !root || loading) {
+    if (!highlight?.trim() || !root || showBlockingLoading) {
       setMatchCount(0);
       return;
     }
@@ -2286,7 +2578,7 @@ export function SessionDetail({
       setMatchCount(hits.length);
     });
     return () => cancelAnimationFrame(raf);
-  }, [highlight, filteredMessages, loading, originalChat]);
+  }, [highlight, filteredMessages, showBlockingLoading, originalChat]);
 
   useEffect(() => {
     setActiveMatch(0);
@@ -2297,7 +2589,7 @@ export function SessionDetail({
   }, [session.id]);
 
   useEffect(() => {
-    if (loading || highlight?.trim() || filteredMessages.length === 0) return;
+    if (showBlockingLoading || highlight?.trim() || filteredMessages.length === 0) return;
     const shouldScroll = bottomScrolledSessionRef.current !== session.id || liveSyncScrollRef.current;
     if (!shouldScroll) return;
 
@@ -2309,10 +2601,10 @@ export function SessionDetail({
       liveSyncScrollRef.current = false;
     });
     return () => cancelAnimationFrame(raf);
-  }, [loading, highlight, filteredMessages.length, session.id]);
+  }, [showBlockingLoading, highlight, filteredMessages.length, session.id]);
 
   useEffect(() => {
-    if (!contentRef.current || matchCount === 0 || loading) return;
+    if (!contentRef.current || matchCount === 0 || showBlockingLoading) return;
     const raf = requestAnimationFrame(() => {
       const root = contentRef.current;
       const scroller = scrollRef.current;
@@ -2345,7 +2637,7 @@ export function SessionDetail({
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [activeMatch, matchCount, loading]);
+  }, [activeMatch, matchCount, showBlockingLoading]);
 
   const gotoMatch = (delta: number) => {
     if (matchCount === 0) return;
@@ -2470,17 +2762,17 @@ export function SessionDetail({
         <>
           <div ref={scrollRef} className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain">
             <div ref={contentRef}>
-              {loading ? (
+              {showBlockingLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <p className="text-muted-foreground text-sm">Loading messages...</p>
                 </div>
-              ) : messageLoadError ? (
+              ) : messageLoadError && !hasRenderableMessages ? (
                 <div className="flex flex-col items-center justify-center py-12 gap-1 text-muted-foreground text-sm">
                   <span>Could not load messages</span>
                   <span className="max-w-[36rem] truncate text-xs opacity-60">{messageLoadError}</span>
                   <span className="text-xs opacity-60">{session.id}</span>
                 </div>
-              ) : filteredMessages.length === 0 ? (
+              ) : !hasRenderableMessages ? (
                 <div className="flex flex-col items-center justify-center py-12 gap-1 text-muted-foreground text-sm">
                   <span>No messages in this session</span>
                   <span className="text-xs opacity-60">{session.id}</span>

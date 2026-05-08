@@ -643,6 +643,10 @@ export const TRANSLATIONS = {
   "agentRuntime.chooseNewPath": { en: "Choose new path...", zh: "选择新路径..." },
   "agentRuntime.useDetectedPath": { en: "Use detected PATH", zh: "使用自动检测路径" },
   "agentRuntime.loadingVersions": { en: "Loading versions...", zh: "正在加载版本..." },
+  "agentRuntime.availableVersionsUnavailable": {
+    en: "Version list unavailable. You can still install latest.",
+    zh: "暂时无法获取版本列表，仍可安装 latest。",
+  },
   "agentRuntime.latestNewest": { en: "latest (newest)", zh: "latest（最新）" },
   "agentRuntime.versionCurrent": { en: "{{version}} (current)", zh: "{{version}}（当前）" },
   "agentRuntime.installing": { en: "Installing...", zh: "安装中..." },

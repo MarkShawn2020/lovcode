@@ -120,6 +120,7 @@ type AgentHarnessEvent =
       sessionId: string;
       stream: "stdout" | "stderr";
       eventType?: string | null;
+      itemId?: string | null;
       role?: string | null;
       text?: string | null;
       raw: unknown;
@@ -163,6 +164,7 @@ interface EnvironmentDialogTarget {
 
 const AGENT_OUTPUT_IDLE_MS = 3500;
 const AGENT_SUBMIT_IDLE_FALLBACK_MS = 120000;
+const AGENT_STALE_WORKING_MS = AGENT_SUBMIT_IDLE_FALLBACK_MS;
 const WATCH_AGENT_RUNNING_MS = 45000;
 const RUNTIME_HISTORY_LINK_GRACE_MS = 120000;
 const LINK_DEBUG_HISTORY_LOOKBACK_MS = 60_000;
@@ -177,6 +179,7 @@ const PROJECT_GROUP_INLINE_LIMIT = 8;
 const MENU_ITEM_TOOLTIP_DELAY_MS = 650;
 const LOVCODE_HOOK_ENV_RE = /^(?:LOVCODE_AGENT_SESSION_ID|LOVCODE_AGENT_HOOK_FILE)=(?:'[^']*'|"[^"]*"|\S+)\s*/;
 const AGENT_WORKSPACE_STATE_UPDATED_EVENT = "agent-workspace-state-updated";
+const HARNESS_STREAM_DEBUG = true;
 type SessionListMode = "active" | "archived";
 type WorkbenchOutlineMode = "project" | "recent";
 type WorkbenchDisplayFilter = "all" | "running" | "review";
@@ -231,6 +234,148 @@ type ProjectConversationStats = {
   lastActive: number;
   createdAt: number;
 };
+
+const harnessStreamReceiveCounts = new Map<string, number>();
+const harnessStreamReceiveTotals = new Map<string, number>();
+
+function getHarnessDebugTime() {
+  return Number(performance.now().toFixed(1));
+}
+
+function getHarnessEventDebugType(event: AgentHarnessEvent) {
+  return event.kind === "json" ? event.eventType ?? "json" : event.kind;
+}
+
+function getHarnessEventDebugTextLength(event: AgentHarnessEvent) {
+  if (event.kind === "json") return event.text?.length ?? 0;
+  if (event.kind === "stdout" || event.kind === "stderr") return event.text.length;
+  if (event.kind === "error") return event.message.length;
+  return 0;
+}
+
+function shouldLogHarnessStreamPoint(count: number, eventType: string) {
+  return count <= 12 || count % 20 === 0 || /assistant|result|stop|exit|error|started/i.test(eventType);
+}
+
+function logHarnessStreamDebug(stage: string, payload: Record<string, unknown>) {
+  if (!HARNESS_STREAM_DEBUG) return;
+  console.log(`[DEBUG][HarnessStream] ${stage}`, { t: getHarnessDebugTime(), ...payload });
+}
+
+function logHarnessEventDebug(stage: string, event: AgentHarnessEvent) {
+  if (!HARNESS_STREAM_DEBUG) return;
+  const eventType = getHarnessEventDebugType(event);
+  const key = `${event.sessionId}:${eventType}`;
+  const count = (harnessStreamReceiveCounts.get(key) ?? 0) + 1;
+  const textLength = getHarnessEventDebugTextLength(event);
+  harnessStreamReceiveCounts.set(key, count);
+  harnessStreamReceiveTotals.set(key, (harnessStreamReceiveTotals.get(key) ?? 0) + textLength);
+  if (!shouldLogHarnessStreamPoint(count, eventType)) return;
+  logHarnessStreamDebug(stage, {
+    sessionId: event.sessionId,
+    kind: event.kind,
+    eventType,
+    count,
+    textLength,
+    totalTextLength: harnessStreamReceiveTotals.get(key) ?? textLength,
+  });
+}
+
+function getObjectField(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    if (record[key] !== undefined) return record[key];
+  }
+  return undefined;
+}
+
+function getStringField(record: Record<string, unknown>, ...keys: string[]) {
+  const value = getObjectField(record, ...keys);
+  return typeof value === "string" ? value : null;
+}
+
+function getOptionalStringField(record: Record<string, unknown>, ...keys: string[]) {
+  const value = getObjectField(record, ...keys);
+  return typeof value === "string" ? value : null;
+}
+
+function getOptionalNumberField(record: Record<string, unknown>, ...keys: string[]) {
+  const value = getObjectField(record, ...keys);
+  return typeof value === "number" ? value : null;
+}
+
+function getBooleanField(record: Record<string, unknown>, fallback: boolean, ...keys: string[]) {
+  const value = getObjectField(record, ...keys);
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function normalizeHarnessProvider(value: unknown): AgentProvider {
+  return value === "codex" ? "codex" : "claude";
+}
+
+function normalizeHarnessStream(value: unknown): "stdout" | "stderr" {
+  return value === "stderr" ? "stderr" : "stdout";
+}
+
+function normalizeAgentHarnessEvent(value: unknown): AgentHarnessEvent | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const kind = getStringField(record, "kind");
+  const sessionId = getStringField(record, "sessionId", "session_id");
+  if (!kind || !sessionId) {
+    logHarnessStreamDebug("drop-unrecognized-payload", {
+      kind,
+      hasSessionId: Boolean(sessionId),
+      keys: Object.keys(record).slice(0, 12),
+    });
+    return null;
+  }
+
+  if (kind === "started") {
+    return {
+      kind,
+      sessionId,
+      provider: normalizeHarnessProvider(getObjectField(record, "provider")),
+      command: getStringField(record, "command") ?? "",
+    };
+  }
+  if (kind === "json") {
+    return {
+      kind,
+      sessionId,
+      stream: normalizeHarnessStream(getObjectField(record, "stream")),
+      eventType: getOptionalStringField(record, "eventType", "event_type"),
+      itemId: getOptionalStringField(record, "itemId", "item_id"),
+      role: getOptionalStringField(record, "role"),
+      text: getOptionalStringField(record, "text"),
+      raw: getObjectField(record, "raw") ?? null,
+    };
+  }
+  if (kind === "stdout" || kind === "stderr") {
+    return {
+      kind,
+      sessionId,
+      text: getStringField(record, "text") ?? "",
+    };
+  }
+  if (kind === "exit") {
+    return {
+      kind,
+      sessionId,
+      code: getOptionalNumberField(record, "code"),
+      success: getBooleanField(record, false, "success"),
+    };
+  }
+  if (kind === "error") {
+    return {
+      kind,
+      sessionId,
+      message: getStringField(record, "message") ?? "Unknown harness error",
+    };
+  }
+
+  logHarnessStreamDebug("drop-unknown-kind", { kind, sessionId });
+  return null;
+}
 const AGENT_ICON_SRC: Partial<Record<AgentProvider, string>> = {
   claude: "/agent-icons/claude.png",
   codex: "/agent-icons/openai.png",
@@ -478,7 +623,7 @@ function getHarnessDisplayCommand(provider: AgentProvider, prompt: string, resum
   if (!isAgentProvider(provider)) return null;
   if (provider === "claude") {
     const resume = resumeSessionId ? ` --resume ${resumeSessionId}` : "";
-    return `claude --print --output-format stream-json${resume} ${prompt ? "\"...\"" : ""}`.trim();
+    return `claude --output-format stream-json --verbose -p ${prompt ? "\"...\"" : "\"\""} --include-partial-messages${resume}`.trim();
   }
   const resume = resumeSessionId ? ` resume ${resumeSessionId}` : "";
   return `codex exec --json${resume} ${prompt ? "\"...\"" : ""}`.trim();
@@ -493,7 +638,12 @@ function usesAgentHooks(provider: AgentProvider) {
 }
 
 function isAgentRunning(session: AgentSession) {
-  return isAgentProvider(session.provider) && (session.status === "running" || session.workState === "working");
+  if (!isAgentProvider(session.provider)) return false;
+  if (session.workState) {
+    const lastActivity = Math.max(session.lastActivityAt ?? 0, session.updatedAt ?? 0, session.createdAt ?? 0);
+    return session.workState === "working" && now() - lastActivity < AGENT_STALE_WORKING_MS;
+  }
+  return session.status === "running";
 }
 
 function isConversationAgentRunning(row: WorkbenchConversation) {
@@ -623,6 +773,17 @@ function createHarnessUserMessage(sessionId: string, prompt: string, timestamp: 
   };
 }
 
+function createHarnessAssistantPlaceholderMessage(sessionId: string, timestamp: number): AgentHarnessMessage {
+  return {
+    id: `${sessionId}:assistant:live`,
+    role: "assistant",
+    content: "",
+    timestamp,
+    kind: "typing",
+    transient: true,
+  };
+}
+
 function mergeHarnessText(current: string, nextText: string, separator = "\n") {
   const next = nextText.replace(/\r/g, "");
   if (!next) return current;
@@ -645,19 +806,46 @@ function inferHarnessRole(event: AgentHarnessEvent): AgentHarnessMessage["role"]
   return "system";
 }
 
+function getHarnessJsonEventType(event: AgentHarnessEvent) {
+  return event.kind === "json" ? event.eventType?.toLowerCase() ?? "" : "";
+}
+
+function isHarnessCompletionEvent(event: AgentHarnessEvent) {
+  const eventType = getHarnessJsonEventType(event);
+  return (
+    eventType === "result" ||
+    eventType === "turn.completed" ||
+    eventType === "turn_completed" ||
+    eventType === "task_complete" ||
+    eventType === "task.completed" ||
+    eventType === "agent-turn-complete" ||
+    eventType === "message_stop"
+  );
+}
+
+function isHarnessFailureEvent(event: AgentHarnessEvent) {
+  const eventType = getHarnessJsonEventType(event);
+  return eventType === "error" || eventType === "turn.failed" || eventType === "turn_failed" || eventType.endsWith(".failed");
+}
+
 function upsertHarnessMessage(
   messages: AgentHarnessMessage[],
   message: AgentHarnessMessage,
-  options?: { merge?: boolean; removeTransient?: boolean; separator?: string },
+  options?: { append?: boolean; merge?: boolean; removeTransient?: boolean; separator?: string },
 ) {
   const base = options?.removeTransient ? messages.filter((item) => !item.transient) : messages;
   const index = base.findIndex((item) => item.id === message.id);
   if (index === -1) return [...base, message];
   const next = [...base];
+  const content = options?.append
+    ? `${next[index].content}${message.content}`
+    : options?.merge
+      ? mergeHarnessText(next[index].content, message.content, options.separator)
+      : message.content;
   next[index] = {
     ...next[index],
     ...message,
-    content: options?.merge ? mergeHarnessText(next[index].content, message.content, options.separator) : message.content,
+    content,
     raw: message.raw ?? next[index].raw,
     transient: message.transient ?? next[index].transient,
   };
@@ -668,7 +856,7 @@ function appendHarnessMessage(messages: AgentHarnessMessage[], message: AgentHar
   return [...messages.filter((item) => !item.transient), message];
 }
 
-function harnessMessageToStandardMessage(message: AgentHarnessMessage, index: number): Message {
+function harnessMessageToStandardMessage(message: AgentHarnessMessage, index: number, streaming = false): Message {
   return {
     uuid: message.id,
     role: message.role === "tool" ? "assistant" : message.role,
@@ -677,6 +865,8 @@ function harnessMessageToStandardMessage(message: AgentHarnessMessage, index: nu
     is_meta: false,
     is_tool: message.role === "tool",
     line_number: index + 1,
+    is_streaming: streaming && message.role === "assistant" && message.id.includes(":assistant:"),
+    streaming_mode: streaming && message.role === "assistant" && message.id.includes(":assistant:") ? "live" : undefined,
   };
 }
 
@@ -755,39 +945,74 @@ function applyHarnessEventToSession(
   const role = inferHarnessRole(event);
   const content =
     event.kind === "json"
-      ? event.text?.trim()
+      ? event.text ?? ""
       : event.kind === "stdout" || event.kind === "stderr"
-        ? event.text.trim()
+        ? event.text
         : "";
-  if (!content) {
+  const eventType = getHarnessJsonEventType(event);
+  const turnComplete = isHarnessCompletionEvent(event);
+  const turnFailed = isHarnessFailureEvent(event);
+  if (!content.trim()) {
+    if (turnComplete || turnFailed) {
+      return {
+        ...session,
+        status: turnFailed ? "error" : "completed",
+        workState: "stopped",
+        unread: isActive ? false : true,
+        lastActivityAt: timestamp,
+        lastViewedAt: isActive ? timestamp : session.lastViewedAt ?? null,
+        updatedAt: timestamp,
+        harnessMessages: existing.filter((message) => !message.transient),
+      };
+    }
     return session;
   }
 
-  const eventType = event.kind === "json" ? event.eventType?.toLowerCase() ?? "" : "";
-  const merge = role === "assistant" && (event.kind !== "json" || eventType.includes("partial") || eventType.includes("delta"));
-  const mergeSeparator = event.kind === "json" && (eventType.includes("partial") || eventType.includes("delta")) ? "" : "\n";
-  const messageId = role === "assistant" ? `${session.id}:assistant:live` : `${session.id}:${role}:${timestamp}`;
+  const append = role === "assistant" && event.kind === "json" && eventType.includes("delta");
+  const merge = role === "assistant" && !append && (event.kind !== "json" || eventType.includes("partial"));
+  const mergeSeparator = event.kind === "json" && eventType.includes("partial") ? "" : "\n";
+  const messageId =
+    role === "assistant"
+      ? `${session.id}:assistant:live`
+      : `${session.id}:${role}:${event.kind === "json" && event.itemId ? event.itemId : timestamp}`;
+  const previousContentLength = existing.find((message) => message.id === messageId)?.content.length ?? 0;
+  const nextHarnessMessages = upsertHarnessMessage(
+    existing,
+    {
+      id: messageId,
+      role,
+      content,
+      timestamp,
+      kind: event.kind === "json" ? event.eventType ?? "json" : event.kind,
+      stream: event.kind === "json" ? event.stream : event.kind === "stdout" || event.kind === "stderr" ? event.kind : null,
+      raw: event.kind === "json" ? event.raw : undefined,
+    },
+    { append, merge, removeTransient: true, separator: mergeSeparator },
+  );
+  const nextContentLength = nextHarnessMessages.find((message) => message.id === messageId)?.content.length ?? content.length;
+  if (role === "assistant" && (append || merge || eventType.includes("assistant") || eventType.includes("result"))) {
+    logHarnessStreamDebug("state-update", {
+      sessionId: session.id,
+      eventType: eventType || event.kind,
+      messageId,
+      append,
+      merge,
+      deltaLength: content.length,
+      previousContentLength,
+      nextContentLength,
+      active: isActive,
+    });
+  }
+  const shouldKeepStopped = !turnComplete && !turnFailed && session.workState === "stopped";
   return {
     ...session,
-    status: "running",
-    workState: "working",
+    status: turnFailed ? "error" : turnComplete ? "completed" : shouldKeepStopped ? session.status : "running",
+    workState: turnComplete || turnFailed || shouldKeepStopped ? "stopped" : "working",
     unread: !isActive,
     lastActivityAt: timestamp,
     lastViewedAt: isActive ? timestamp : session.lastViewedAt ?? null,
     updatedAt: timestamp,
-    harnessMessages: upsertHarnessMessage(
-      existing,
-      {
-        id: messageId,
-        role,
-        content,
-        timestamp,
-        kind: event.kind === "json" ? event.eventType ?? "json" : event.kind,
-        stream: event.kind === "json" ? event.stream : event.kind === "stdout" || event.kind === "stderr" ? event.kind : null,
-        raw: event.kind === "json" ? event.raw : undefined,
-      },
-      { merge, removeTransient: true, separator: mergeSeparator },
-    ),
+    harnessMessages: nextHarnessMessages,
   };
 }
 
@@ -1396,6 +1621,7 @@ export default function AgentWorkspacePage() {
       const run = externalAgentRuns[conversationId];
       if (!run) return null;
       if (run.expiresAt && run.expiresAt <= nowMs) return null;
+      if (run.expiresAt === null && run.source === "hook" && nowMs - run.updatedAt >= AGENT_STALE_WORKING_MS) return null;
       return run;
     };
 
@@ -1435,11 +1661,17 @@ export default function AgentWorkspacePage() {
       const conversationId = getRuntimeConversationId(session, linkedTranscript);
       const current = rowsById.get(conversationId);
       const meta = conversationMeta[conversationId] ?? current?.meta;
-      const runtimeTimestamp = session.lastActivityAt ?? session.updatedAt;
-      const runtimeCreatedAt = linkedTranscript ? linkedTranscript.created_at * 1000 : session.createdAt;
-      const runtimeRunning = isAgentRunning(session);
-      const externalRun = getExternalRun(conversationId);
-      rowsById.set(conversationId, {
+	      const runtimeTimestamp = session.lastActivityAt ?? session.updatedAt;
+	      const runtimeCreatedAt = linkedTranscript ? linkedTranscript.created_at * 1000 : session.createdAt;
+	      const runtimeRunning = isAgentRunning(session);
+	      const runtimeFinished =
+	        session.workState === "stopped" ||
+	        session.status === "completed" ||
+	        session.status === "error" ||
+	        session.status === "needs-review";
+	      const externalRun = runtimeFinished ? null : getExternalRun(conversationId);
+	      const currentAgentRunning = runtimeFinished ? false : Boolean(current?.agentRunning);
+	      rowsById.set(conversationId, {
         id: current?.id ?? `agent:${session.id}`,
         conversationId,
         timestamp: Math.max(current?.timestamp ?? 0, runtimeTimestamp),
@@ -1450,7 +1682,7 @@ export default function AgentWorkspacePage() {
         pinned: meta?.pinned ?? current?.pinned ?? false,
         unread: Boolean(session.unread || meta?.unread || current?.unread),
         needsReview: Boolean(session.status === "needs-review" || meta?.needsReview || current?.needsReview),
-        agentRunning: runtimeRunning || Boolean(externalRun) || Boolean(current?.agentRunning),
+	        agentRunning: runtimeRunning || Boolean(externalRun) || currentAgentRunning,
         agentRunningSource: runtimeRunning ? "runtime" : externalRun?.source ?? current?.agentRunningSource ?? null,
         agentRunningAt: runtimeRunning ? runtimeTimestamp : externalRun?.updatedAt ?? current?.agentRunningAt ?? null,
         displayMode: getStoredDisplayMode(meta, session),
@@ -1500,6 +1732,9 @@ export default function AgentWorkspacePage() {
         const next = { ...prev };
         Object.entries(next).forEach(([conversationId, run]) => {
           if (run.expiresAt && run.expiresAt <= timestamp) {
+            delete next[conversationId];
+            changed = true;
+          } else if (run.expiresAt === null && run.source === "hook" && timestamp - run.updatedAt >= AGENT_STALE_WORKING_MS) {
             delete next[conversationId];
             changed = true;
           }
@@ -1815,6 +2050,56 @@ export default function AgentWorkspacePage() {
     invoke<AgentWorkspaceState>("save_agent_workspace_state", { state: latestStateRef.current }).catch(() => {});
   }, []);
 
+  const reconcileHarnessSessionRuntimeState = useCallback((liveSessionIds: Set<string> | null) => {
+    const timestamp = now();
+    setState((prev) => {
+      let changed = false;
+      const sessions = prev.sessions.map((session) => {
+        if (!isHarnessSession(session) || session.workState !== "working") return session;
+        const live = liveSessionIds?.has(session.id) ?? false;
+        const lastActivity = Math.max(session.lastActivityAt ?? 0, session.updatedAt ?? 0, session.createdAt ?? 0);
+        const stale = timestamp - lastActivity >= AGENT_STALE_WORKING_MS;
+        if (live || (liveSessionIds === null && !stale)) return session;
+        changed = true;
+        return {
+          ...session,
+          status: session.status === "error" ? ("error" as const) : ("completed" as const),
+          workState: "stopped" as const,
+          updatedAt: timestamp,
+          harnessMessages: (session.harnessMessages ?? []).filter((message) => !message.transient),
+        };
+      });
+      if (!changed) return prev;
+      const next = { ...prev, sessions };
+      schedulePersist(next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!loaded) return;
+    let cancelled = false;
+
+    const reconcile = () => {
+      invoke<string[]>("list_agent_harness_sessions")
+        .then((sessionIds) => {
+          if (cancelled) return;
+          reconcileHarnessSessionRuntimeState(new Set(sessionIds));
+        })
+        .catch(() => {
+          if (cancelled) return;
+          reconcileHarnessSessionRuntimeState(null);
+        });
+    };
+
+    reconcile();
+    const timer = setInterval(reconcile, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [loaded, reconcileHarnessSessionRuntimeState]);
+
   const updateSidebarState = (patch: Partial<AgentWorkspaceSidebarState>, options?: { immediate?: boolean }) => {
     const currentSidebar = normalizeSidebarState(latestStateRef.current.sidebar);
     const nextSidebar = normalizeSidebarState({
@@ -1949,6 +2234,12 @@ export default function AgentWorkspacePage() {
   function startHarnessSession(session: AgentSession, promptOverride?: string | null, resumeSessionId?: string | null) {
     const prompt = (promptOverride ?? getSessionSubmittedPrompt(session) ?? "").trim();
     if (!isHarnessSession(session) || !prompt) return;
+    logHarnessStreamDebug("invoke-start", {
+      sessionId: session.id,
+      provider: session.provider,
+      promptLength: prompt.length,
+      resumeSessionId: resumeSessionId ?? session.linkedHistorySessionId ?? null,
+    });
     invoke("start_agent_harness_session", {
       sessionId: session.id,
       provider: session.provider,
@@ -1996,8 +2287,12 @@ export default function AgentWorkspacePage() {
         changed = true;
         return {
           ...session,
+          status: isHarnessSession(session) && session.status === "running" ? ("completed" as const) : session.status,
           workState: "stopped" as const,
           updatedAt: timestamp,
+          harnessMessages: isHarnessSession(session)
+            ? (session.harnessMessages ?? []).filter((message) => !message.transient)
+            : session.harnessMessages,
         };
       });
       if (!changed) return prev;
@@ -2075,7 +2370,7 @@ export default function AgentWorkspacePage() {
     const provider = event.provider === "claude" || event.provider === "codex" ? event.provider : null;
     if (event.event === "UserPromptSubmit") {
       if (event.sessionId) markAgentWorking(event.sessionId);
-      markExternalAgentRunning(conversationIds, "hook", { provider, ttlMs: null, timestamp: normalizeAgentEventTimestamp(event.timestamp) });
+      markExternalAgentRunning(conversationIds, "hook", { provider, ttlMs: AGENT_STALE_WORKING_MS, timestamp: normalizeAgentEventTimestamp(event.timestamp) });
       return;
     }
     if (event.event === "Stop" || event.event === "agent-turn-complete" || event.event === "TurnComplete") {
@@ -2131,7 +2426,15 @@ export default function AgentWorkspacePage() {
 
   useEffect(() => {
     const unlistenHarness = listen<AgentHarnessEvent>("agent-harness-event", (event) => {
-      const payload = event.payload;
+      const payload = normalizeAgentHarnessEvent(event.payload);
+      if (!payload) return;
+      logHarnessEventDebug("receive", payload);
+      if (payload.kind === "exit" || payload.kind === "error" || isHarnessCompletionEvent(payload) || isHarnessFailureEvent(payload)) {
+        clearAgentIdleTimer(payload.sessionId);
+        clearExternalAgentRunning(getHookConversationIds({ sessionId: payload.sessionId, event: "Stop" }));
+      } else if (payload.kind === "started" || getHarnessEventDebugTextLength(payload) > 0) {
+        scheduleAgentIdle(payload.sessionId, AGENT_STALE_WORKING_MS);
+      }
       setState((prev) => {
         let changed = false;
         const sessions = prev.sessions.map((session) => {
@@ -2625,7 +2928,10 @@ export default function AgentWorkspacePage() {
       workState: startsWorking ? "working" : "idle",
       ptyId,
       harnessMessages: harness && prompt.trim()
-        ? [createHarnessUserMessage(id, prompt, timestamp)]
+        ? [
+            createHarnessUserMessage(id, prompt, timestamp),
+            createHarnessAssistantPlaceholderMessage(id, timestamp),
+          ]
         : [],
       harnessRunId: harness ? id : null,
       harnessExitCode: null,
@@ -2798,7 +3104,10 @@ export default function AgentWorkspacePage() {
         command: getHarnessDisplayCommand(current.provider, prompt, current.linkedHistorySessionId ?? undefined),
         harnessRunId: crypto.randomUUID(),
         harnessExitCode: null,
-        harnessMessages: [createHarnessUserMessage(current.id, prompt, timestamp)],
+        harnessMessages: [
+          createHarnessUserMessage(current.id, prompt, timestamp),
+          createHarnessAssistantPlaceholderMessage(current.id, timestamp),
+        ],
         unread: false,
         lastActivityAt: timestamp,
         lastViewedAt: timestamp,
@@ -3537,9 +3846,19 @@ export default function AgentWorkspacePage() {
       activeSessionRow?.transcript?.id === standardDetailSession.id;
     if (!linkedToStandardDetail) return [];
     return (activeSession.harnessMessages ?? [])
-      .filter((message) => !message.transient)
-      .map(harnessMessageToStandardMessage);
+      .filter((message) => !message.transient || isAgentRunning(activeSession))
+      .map((message, index) => harnessMessageToStandardMessage(message, index, isAgentRunning(activeSession)));
   }, [activeSession, activeSessionRow?.transcript?.id, standardDetailSession]);
+  useEffect(() => {
+    const liveAssistant = standardDetailPendingMessages.find((message) => message.is_streaming && message.role === "assistant");
+    if (!liveAssistant) return;
+    logHarnessStreamDebug("pending-props", {
+      runtimeSessionId: activeSession?.id ?? null,
+      transcriptSessionId: standardDetailSession?.id ?? null,
+      pendingCount: standardDetailPendingMessages.length,
+      liveContentLength: liveAssistant.content.length,
+    });
+  }, [activeSession?.id, standardDetailPendingMessages, standardDetailSession?.id]);
   const currentWorkbenchRow = allWorkbenchRows.find(isConversationActive) ?? null;
 
   useEffect(() => {
@@ -5203,8 +5522,8 @@ function HarnessChatPane({
   const toReadable = useReadableText();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const messages = (session.harnessMessages ?? [])
-    .filter((message) => !message.transient)
-    .map(harnessMessageToStandardMessage);
+    .filter((message) => !message.transient || isAgentRunning(session))
+    .map((message, index) => harnessMessageToStandardMessage(message, index, isAgentRunning(session)));
   const handleCopyContent = useCallback((content: string) => {
     invoke("copy_to_clipboard", { text: content });
   }, []);

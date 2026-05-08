@@ -128,6 +128,8 @@ export interface Message {
   is_tool: boolean;
   line_number: number;
   content_blocks?: ContentBlock[];
+  is_streaming?: boolean;
+  streaming_mode?: "live" | "replay";
 }
 
 export interface SessionHandoff {
@@ -176,6 +178,9 @@ export interface SearchResult {
   project_path: string;
   session_id: string;
   session_summary: string | null;
+  title?: string | null;
+  summary?: string | null;
+  last_prompt?: string | null;
   timestamp: string;
   score: number;
 }

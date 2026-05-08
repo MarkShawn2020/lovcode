@@ -150,7 +150,11 @@ pub(crate) async fn list_all_chats(
                                 let is_meta = parsed.is_meta.unwrap_or(false);
 
                                 // Skip meta messages and empty content
-                                if !is_meta && !text_content.is_empty() {
+                                if !is_meta
+                                    && !text_content.is_empty()
+                                    && !(role == "assistant"
+                                        && is_no_response_placeholder(&text_content))
+                                {
                                     session_messages.push(ChatMessage {
                                         uuid: parsed.uuid.unwrap_or_default(),
                                         role,

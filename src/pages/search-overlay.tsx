@@ -3,7 +3,8 @@ import { invoke } from "@/lib/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { Loader2, Search } from "lucide-react";
-import type { Message, Session } from "../types";
+import type { Session } from "../types";
+import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/searchScopes";
 import { formatDate, formatRelativeTime } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
 
@@ -11,6 +12,9 @@ interface SearchChatHit {
   session_id: string;
   content?: string;
   session_summary?: string | null;
+  title?: string | null;
+  summary?: string | null;
+  last_prompt?: string | null;
 }
 
 interface ContentMatchPreview {
@@ -18,95 +22,21 @@ interface ContentMatchPreview {
   highlightQuery: string;
 }
 
-interface PromptPreviewState {
-  status: "loading" | "ready" | "error";
-  first: string[];
-  last: string[];
-  total: number;
-}
-
-interface PromptPreviewPlacement {
-  sessionId: string;
-  top: number;
-  left: number;
-  width: number;
-  maxHeight: number;
-}
-
 const RECENT_SEARCH_LIMIT = 20;
 const RECENT_SEARCH_BADGE_LIMIT = 8;
 const RECENT_SEARCH_STORAGE_KEY = "lovcode:search-overlay:recent-searches";
 const FULL_TEXT_SEARCH_LIMIT = 600;
 const MATCH_CONTEXT_RADIUS = 96;
-const PROMPT_PREVIEW_EDGE_COUNT = 3;
-const PROMPT_PREVIEW_TEXT_LIMIT = 180;
-const PROMPT_PREVIEW_HOVER_DELAY_MS = 2000;
 
-const SEARCH_PLACEHOLDER = "Search conversations, content, or session id...";
+const SEARCH_PLACEHOLDER = "Search conversations, title:..., prompt:..., or in:title,prompt";
 const SEARCH_EMPTY_LABEL = "Search all conversations";
 
 function getProjectName(session: Session) {
   return session.project_path?.split("/").filter(Boolean).pop() ?? "";
 }
 
-function normalizeSearchValue(value: string | null | undefined) {
-  return (value ?? "").toLowerCase();
-}
-
-function compactSearchValue(value: string) {
-  return value.replace(/[-_\s]/g, "");
-}
-
 function normalizeSnippetValue(value: string) {
   return value.replace(/\s+/g, " ").trim();
-}
-
-function truncatePreviewText(value: string, limit = PROMPT_PREVIEW_TEXT_LIMIT) {
-  const normalized = normalizeSnippetValue(value);
-  return normalized.length > limit ? `${normalized.slice(0, limit).trim()}...` : normalized;
-}
-
-function contentBlockText(block: NonNullable<Message["content_blocks"]>[number]) {
-  switch (block.type) {
-    case "text":
-      return block.text;
-    case "tool_result":
-      return [block.content, block.raw].filter(Boolean).join("\n");
-    case "tool_use":
-      return [block.summary, block.input].filter(Boolean).join("\n");
-    case "thinking":
-      return block.thinking;
-    default:
-      return "";
-  }
-}
-
-function messageText(message: Message) {
-  const texts = [message.content];
-  for (const block of message.content_blocks ?? []) {
-    const text = contentBlockText(block);
-    if (text) texts.push(text);
-  }
-  return normalizeSnippetValue(texts.filter(Boolean).join("\n"));
-}
-
-function buildPromptPreview(messages: Message[]): PromptPreviewState {
-  const prompts = messages
-    .filter((message) => message.role === "user" && !message.is_meta && !message.is_tool)
-    .map(messageText)
-    .filter(Boolean)
-    .map((text) => truncatePreviewText(text));
-
-  if (prompts.length <= PROMPT_PREVIEW_EDGE_COUNT * 2) {
-    return { status: "ready", first: prompts, last: [], total: prompts.length };
-  }
-
-  return {
-    status: "ready",
-    first: prompts.slice(0, PROMPT_PREVIEW_EDGE_COUNT),
-    last: prompts.slice(-PROMPT_PREVIEW_EDGE_COUNT),
-    total: prompts.length,
-  };
 }
 
 function extractSearchTerms(query: string) {
@@ -170,8 +100,14 @@ function buildContentPreview(
 
 function buildSearchHitPreview(result: SearchChatHit, query: string) {
   return buildContentPreview(result.content, query, false)
+    ?? buildContentPreview(result.title, query, false)
+    ?? buildContentPreview(result.summary, query, false)
+    ?? buildContentPreview(result.last_prompt, query, false)
     ?? buildContentPreview(result.session_summary, query, false)
-    ?? buildContentPreview(result.content || result.session_summary, query);
+    ?? buildContentPreview(
+      result.content || result.title || result.summary || result.last_prompt || result.session_summary,
+      query
+    );
 }
 
 function buildMetadataPreview(session: Session, query: string) {
@@ -190,27 +126,6 @@ function buildMetadataPreview(session: Session, query: string) {
   }
 
   return null;
-}
-
-function matchesSessionId(session: Session, normalizedQuery: string) {
-  const sessionId = normalizeSearchValue(session.id);
-  const compactQuery = compactSearchValue(normalizedQuery);
-  return sessionId.includes(normalizedQuery) || (
-    compactQuery.length > 0 && compactSearchValue(sessionId).includes(compactQuery)
-  );
-}
-
-function matchesMetadata(session: Session, normalizedQuery: string) {
-  const haystack = [
-    session.title,
-    session.summary,
-    session.last_prompt,
-    session.project_path,
-    getProjectName(session),
-    session.source,
-  ].map(normalizeSearchValue).join("\n");
-
-  return haystack.includes(normalizedQuery);
 }
 
 function uniqueSessions(groups: Session[][]) {
@@ -255,126 +170,6 @@ function writeRecentSearches(searches: string[]) {
   }
 }
 
-function getPromptPreviewPlacement(element: HTMLElement, sessionId: string): PromptPreviewPlacement {
-  const rect = element.getBoundingClientRect();
-  const viewportWidth = window.innerWidth;
-  const viewportHeight = window.innerHeight;
-  const width = Math.max(240, Math.min(560, viewportWidth - 24));
-  const maxLeft = Math.max(12, viewportWidth - width - 12);
-  const left = Math.min(Math.max(rect.left + 24, 12), maxLeft);
-  const belowTop = rect.bottom + 6;
-  const spaceBelow = viewportHeight - belowTop - 12;
-
-  if (spaceBelow >= 220 || rect.top < viewportHeight / 2) {
-    return {
-      sessionId,
-      top: belowTop,
-      left,
-      width,
-      maxHeight: Math.max(160, spaceBelow),
-    };
-  }
-
-  const top = 12;
-  const spaceAbove = rect.top - top - 6;
-  return {
-    sessionId,
-    top,
-    left,
-    width,
-    maxHeight: Math.max(160, spaceAbove),
-  };
-}
-
-function PromptPreviewPanel({
-  preview,
-  query,
-  placement,
-}: {
-  preview?: PromptPreviewState;
-  query: string;
-  placement: PromptPreviewPlacement;
-}) {
-  const panelStyle = {
-    top: placement.top,
-    left: placement.left,
-    width: placement.width,
-    maxHeight: placement.maxHeight,
-  };
-
-  if (!preview || preview.status === "loading") {
-    return (
-      <div
-        className="pointer-events-none fixed z-50 overflow-hidden rounded-xl border border-border bg-card px-3 py-2 text-[11px] text-muted-foreground shadow-xl"
-        style={panelStyle}
-      >
-        Loading user prompts...
-      </div>
-    );
-  }
-
-  if (preview.status === "error") {
-    return (
-      <div
-        className="pointer-events-none fixed z-50 overflow-hidden rounded-xl border border-border bg-card px-3 py-2 text-[11px] text-muted-foreground shadow-xl"
-        style={panelStyle}
-      >
-        Could not load user prompts
-      </div>
-    );
-  }
-
-  if (preview.total === 0) {
-    return (
-      <div
-        className="pointer-events-none fixed z-50 overflow-hidden rounded-xl border border-border bg-card px-3 py-2 text-[11px] text-muted-foreground shadow-xl"
-        style={panelStyle}
-      >
-        No user prompts
-      </div>
-    );
-  }
-
-  const omittedCount = Math.max(0, preview.total - preview.first.length - preview.last.length);
-
-  return (
-    <div
-      className="pointer-events-none fixed z-50 overflow-y-auto rounded-xl border border-border bg-card px-3 py-2 text-[11px] text-muted-foreground shadow-xl"
-      style={panelStyle}
-    >
-      <div className="mb-1.5 flex items-center justify-between gap-3">
-        <span className="font-medium text-foreground">User prompts</span>
-        <span>{preview.total} total</span>
-      </div>
-      <div className="space-y-1.5">
-        {preview.first.map((prompt, index) => (
-          <div key={`first-${index}`} className="flex min-w-0 gap-2">
-            <span className="shrink-0 font-mono text-muted-foreground/70">{index + 1}</span>
-            <span className="line-clamp-2 min-w-0 leading-4">
-              <HighlightText text={prompt} query={query} />
-            </span>
-          </div>
-        ))}
-        {omittedCount > 0 && (
-          <div className="pl-5 font-mono text-muted-foreground/70">
-            ... {omittedCount} omitted ...
-          </div>
-        )}
-        {preview.last.map((prompt, index) => (
-          <div key={`last-${index}`} className="flex min-w-0 gap-2">
-            <span className="shrink-0 font-mono text-muted-foreground/70">
-              {preview.total - preview.last.length + index + 1}
-            </span>
-            <span className="line-clamp-2 min-w-0 leading-4">
-              <HighlightText text={prompt} query={query} />
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 export default function SearchOverlay() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Session[]>([]);
@@ -384,13 +179,9 @@ export default function SearchOverlay() {
   const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
   const [contentMatchPreviews, setContentMatchPreviews] = useState<Map<string, ContentMatchPreview>>(new Map());
-  const [promptPreviews, setPromptPreviews] = useState<Map<string, PromptPreviewState>>(new Map());
-  const [promptPreviewPlacement, setPromptPreviewPlacement] = useState<PromptPreviewPlacement | null>(null);
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const indexBuildInFlightRef = useRef(false);
-  const promptPreviewRequestedRef = useRef(new Set<string>());
-  const promptPreviewTimerRef = useRef<number | null>(null);
   const sessionsById = useMemo(() => {
     return new Map(allSessions.map((session) => [session.id, session]));
   }, [allSessions]);
@@ -400,6 +191,8 @@ export default function SearchOverlay() {
   }, [recentSearches]);
   const fullTextIndexing = indexBuilding;
   const fullTextModePending = !indexReady && indexBuilding && !!trimmedQuery && results.length === 0;
+  const parsedQuery = useMemo(() => parseScopedSearchQuery(trimmedQuery), [trimmedQuery]);
+  const highlightQuery = parsedQuery.highlightQuery;
 
   const rememberSearch = useCallback((value: string) => {
     const term = normalizeSnippetValue(value);
@@ -426,38 +219,6 @@ export default function SearchOverlay() {
       .finally(() => {
         indexBuildInFlightRef.current = false;
         setIndexBuilding(false);
-      });
-  }, []);
-
-  const loadPromptPreview = useCallback((session: Session) => {
-    const previewKey = session.id;
-    if (promptPreviewRequestedRef.current.has(previewKey)) return;
-    promptPreviewRequestedRef.current.add(previewKey);
-
-    setPromptPreviews((current) => {
-      const next = new Map(current);
-      next.set(previewKey, { status: "loading", first: [], last: [], total: 0 });
-      return next;
-    });
-
-    invoke<Message[]>("get_session_messages", {
-      projectId: session.project_id,
-      sessionId: session.id,
-    })
-      .then((messages) => {
-        setPromptPreviews((current) => {
-          const next = new Map(current);
-          next.set(previewKey, buildPromptPreview(messages));
-          return next;
-        });
-      })
-      .catch(() => {
-        promptPreviewRequestedRef.current.delete(previewKey);
-        setPromptPreviews((current) => {
-          const next = new Map(current);
-          next.set(previewKey, { status: "error", first: [], last: [], total: 0 });
-          return next;
-        });
       });
   }, []);
 
@@ -492,10 +253,6 @@ export default function SearchOverlay() {
     const unlisten = listen("search-overlay:show", () => {
       setQuery("");
       setActiveIdx(0);
-      clearPromptPreviewTimer();
-      setPromptPreviewPlacement(null);
-      setPromptPreviews(new Map());
-      promptPreviewRequestedRef.current.clear();
       refreshSearchData({ rebuildIndex: true });
       requestAnimationFrame(() => inputRef.current?.focus());
     });
@@ -523,9 +280,9 @@ export default function SearchOverlay() {
     const timer = setTimeout(async () => {
       setSearching(true);
       try {
-        const normalizedQuery = trimmedQuery.toLowerCase();
-        const sessionIdMatches = allSessions.filter((session) => matchesSessionId(session, normalizedQuery));
-        const metadataMatches = allSessions.filter((session) => matchesMetadata(session, normalizedQuery));
+        const metadataMatches = allSessions.filter((session) =>
+          matchesScopedSessionMetadata(session, parsedQuery)
+        );
 
         const nextContentMatchIds = new Set<string>();
         const nextContentMatchPreviews = new Map<string, ContentMatchPreview>();
@@ -541,7 +298,7 @@ export default function SearchOverlay() {
         for (const result of contentResults) {
           if (nextContentMatchIds.has(result.session_id)) continue;
           nextContentMatchIds.add(result.session_id);
-          const preview = buildSearchHitPreview(result, trimmedQuery);
+          const preview = buildSearchHitPreview(result, highlightQuery);
           if (preview) nextContentMatchPreviews.set(result.session_id, preview);
           orderedContentIds.push(result.session_id);
         }
@@ -552,7 +309,7 @@ export default function SearchOverlay() {
 
         if (cancelled) return;
 
-        const combinedMatches = uniqueSessions([sessionIdMatches, metadataMatches, contentMatches]);
+        const combinedMatches = uniqueSessions([metadataMatches, contentMatches]);
         const nextResults = sortByLastModified(combinedMatches);
 
         setContentMatchPreviews(nextContentMatchPreviews);
@@ -566,7 +323,7 @@ export default function SearchOverlay() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [trimmedQuery, allSessions, sessionsById, indexReady]);
+  }, [trimmedQuery, parsedQuery, highlightQuery, allSessions, sessionsById, indexReady]);
 
   useEffect(() => {
     if (!trimmedQuery) return;
@@ -578,37 +335,12 @@ export default function SearchOverlay() {
     setActiveIdx(0);
   }, [query, results.length]);
 
-  useEffect(() => {
-    return () => clearPromptPreviewTimer();
-  }, []);
-
   const hide = () => {
     getCurrentWindow().hide().catch(() => {});
   };
 
-  const clearPromptPreviewTimer = () => {
-    if (promptPreviewTimerRef.current !== null) {
-      window.clearTimeout(promptPreviewTimerRef.current);
-      promptPreviewTimerRef.current = null;
-    }
-  };
-
-  const onResultHover = (event: React.MouseEvent<HTMLButtonElement>, session: Session, index: number) => {
+  const onResultMouseEnter = (index: number) => {
     setActiveIdx(index);
-    clearPromptPreviewTimer();
-    setPromptPreviewPlacement(null);
-    loadPromptPreview(session);
-
-    const placement = getPromptPreviewPlacement(event.currentTarget, session.id);
-    promptPreviewTimerRef.current = window.setTimeout(() => {
-      setPromptPreviewPlacement(placement);
-      promptPreviewTimerRef.current = null;
-    }, PROMPT_PREVIEW_HOVER_DELAY_MS);
-  };
-
-  const onResultLeave = () => {
-    clearPromptPreviewTimer();
-    setPromptPreviewPlacement(null);
   };
 
   const onSelectRecentSearch = (term: string) => {
@@ -729,21 +461,15 @@ export default function SearchOverlay() {
                 const title = s.title || s.summary || s.last_prompt || "Untitled";
                 const projectName = getProjectName(s);
                 const isActive = i === activeIdx;
-                const metadataPreview = matchesMetadata(s, trimmedQuery.toLowerCase())
-                  ? buildMetadataPreview(s, trimmedQuery)
+                const metadataPreview = matchesScopedSessionMetadata(s, parsedQuery)
+                  ? buildMetadataPreview(s, highlightQuery)
                   : null;
                 const matchPreview = contentMatchPreviews.get(s.id) ?? metadataPreview;
                 return (
                   <button
                     key={s.id}
                     onClick={() => onSelect(s)}
-                    onMouseEnter={(event) => onResultHover(event, s, i)}
-                    onMouseMove={(event) => {
-                      if (promptPreviewPlacement?.sessionId === s.id) {
-                        setPromptPreviewPlacement(getPromptPreviewPlacement(event.currentTarget, s.id));
-                      }
-	                    }}
-	                    onMouseLeave={onResultLeave}
+                    onMouseEnter={() => onResultMouseEnter(i)}
                     aria-current={isActive ? "true" : undefined}
                     className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
                       isActive ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-card-alt hover:text-foreground"
@@ -752,22 +478,22 @@ export default function SearchOverlay() {
                     <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-current opacity-50" />
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">
-                        <HighlightText text={title} query={query} />
+                        <HighlightText text={title} query={highlightQuery} />
                       </div>
                       <div className="mt-0.5 min-w-0 text-[11px] text-muted-foreground/75">
                         {matchPreview ? (
-	                          <span className="block line-clamp-2 leading-4">
+                          <span className="block line-clamp-2 leading-4">
                             <HighlightText text={matchPreview.text} query={matchPreview.highlightQuery} />
                           </span>
                         ) : (
                           <div className="flex min-w-0 items-center gap-2">
                             {projectName && (
                               <span className="truncate">
-                                <HighlightText text={projectName} query={query} />
+                                <HighlightText text={projectName} query={highlightQuery} />
                               </span>
                             )}
                             <span className="min-w-0 truncate font-mono">
-                              <HighlightText text={s.id} query={query} />
+                              <HighlightText text={s.id} query={highlightQuery} />
                             </span>
                           </div>
                         )}
@@ -798,13 +524,6 @@ export default function SearchOverlay() {
           </div>
         </div>
       </div>
-      {promptPreviewPlacement && (
-        <PromptPreviewPanel
-          preview={promptPreviews.get(promptPreviewPlacement.sessionId)}
-          query={query}
-          placement={promptPreviewPlacement}
-        />
-      )}
     </div>
   );
 }

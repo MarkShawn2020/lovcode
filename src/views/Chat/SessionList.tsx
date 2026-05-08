@@ -288,7 +288,9 @@ generator: "Lovcode"
                     if (session) onSelect(session);
                   }}
                 >
-                  <p className="text-xs text-muted-foreground mb-1">{result.session_summary || "Untitled session"}</p>
+                  <p className="text-xs text-muted-foreground mb-1">
+                    {result.title || result.summary || result.session_summary || "Untitled session"}
+                  </p>
                   <p className="text-sm text-ink line-clamp-3">{result.content}</p>
                   <p className="text-xs text-muted-foreground mt-2">
                     {result.role} · {result.timestamp}
