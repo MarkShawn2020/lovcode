@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.2
+
+### Patch Changes
+
+- Persist the search overlay view mode and keep recent search chips on a single row.
+
 ## 0.39.1
 
 ### Patch Changes
