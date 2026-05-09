@@ -73,6 +73,7 @@ type SearchResultItem = RoundSearchResultItem | SessionSearchResultItem | Projec
 const RECENT_SEARCH_LIMIT = 20;
 const RECENT_SEARCH_BADGE_LIMIT = 8;
 const RECENT_SEARCH_STORAGE_KEY = "lovcode:search-overlay:recent-searches";
+const SEARCH_VIEW_STORAGE_KEY = "lovcode:search-overlay:view-mode";
 const FULL_TEXT_SEARCH_LIMIT = 600;
 const MATCH_CONTEXT_RADIUS = 96;
 
@@ -348,10 +349,31 @@ function writeRecentSearches(searches: string[]) {
   }
 }
 
+function isSearchViewMode(value: unknown): value is SearchViewMode {
+  return SEARCH_VIEW_MODES.some((mode) => mode.id === value);
+}
+
+function readSearchViewMode(): SearchViewMode {
+  try {
+    const stored = window.localStorage.getItem(SEARCH_VIEW_STORAGE_KEY);
+    return isSearchViewMode(stored) ? stored : "round";
+  } catch {
+    return "round";
+  }
+}
+
+function writeSearchViewMode(mode: SearchViewMode) {
+  try {
+    window.localStorage.setItem(SEARCH_VIEW_STORAGE_KEY, mode);
+  } catch {
+    // Ignore storage failures; the in-memory view switch still works.
+  }
+}
+
 export default function SearchOverlay() {
   const [query, setQuery] = useState("");
   const [sourceResults, setSourceResults] = useState<SearchResultItem[]>([]);
-  const [viewMode, setViewMode] = useState<SearchViewMode>("round");
+  const [viewMode, setViewMode] = useState<SearchViewMode>(readSearchViewMode);
   const [searching, setSearching] = useState(false);
   const [indexBuilding, setIndexBuilding] = useState(false);
   const [indexReady, setIndexReady] = useState(false);
@@ -526,6 +548,10 @@ export default function SearchOverlay() {
   }, [trimmedQuery, rememberSearch]);
 
   useEffect(() => {
+    writeSearchViewMode(viewMode);
+  }, [viewMode]);
+
+  useEffect(() => {
     setActiveIdx(0);
   }, [query, results.length, viewMode]);
 
@@ -623,6 +649,24 @@ export default function SearchOverlay() {
               )}
             </div>
 
+            {!trimmedQuery && recentSearchBadges.length > 0 && (
+              <div className="mt-2 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap" aria-label="Recent searches">
+                <span className="shrink-0 text-[11px] text-muted-foreground">Recent</span>
+                {recentSearchBadges.map((term) => (
+                  <button
+                    key={term}
+                    type="button"
+                    onClick={() => onSelectRecentSearch(term)}
+                    className="max-w-[12rem] shrink-0 truncate rounded-lg border border-border bg-card-alt px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+                    aria-label={`Search for ${term}`}
+                    title={term}
+                  >
+                    {term}
+                  </button>
+                ))}
+              </div>
+            )}
+
             <div className="mt-2 flex items-center justify-between gap-2">
               <div className="inline-flex rounded-lg border border-border bg-card-alt p-0.5" aria-label="Search view">
                 {SEARCH_VIEW_MODES.map((mode) => {
@@ -653,24 +697,6 @@ export default function SearchOverlay() {
                 </span>
               )}
             </div>
-
-            {!trimmedQuery && recentSearchBadges.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-1.5" aria-label="Recent searches">
-                <span className="shrink-0 text-[11px] text-muted-foreground">Recent</span>
-                {recentSearchBadges.map((term) => (
-                  <button
-                    key={term}
-                    type="button"
-                    onClick={() => onSelectRecentSearch(term)}
-                    className="max-w-[12rem] truncate rounded-lg border border-border bg-card-alt px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
-                    aria-label={`Search for ${term}`}
-                    title={term}
-                  >
-                    {term}
-                  </button>
-                ))}
-              </div>
-            )}
           </div>
         </div>
 
