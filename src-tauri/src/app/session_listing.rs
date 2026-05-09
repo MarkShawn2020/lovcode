@@ -590,38 +590,149 @@ pub(crate) fn read_head_tail(path: &Path) -> std::io::Result<(String, String)> {
 /// `rounds == 0` is still a reliable "empty session" signal because the
 /// first user prompt always lands in the head buffer.
 pub(crate) fn count_rounds_and_messages_from_buffers(head: &str, tail: &str) -> (usize, usize) {
-    let count_in = |buf: &str| -> (usize, usize) {
-        let mut rounds = 0usize;
-        let mut messages = 0usize;
+    let mut seen_uuids = std::collections::HashSet::new();
+    let mut rounds = 0usize;
+    let mut messages = 0usize;
+
+    let mut count_in = |buf: &str| {
         for line in buf.lines() {
-            if line.contains("\"type\":\"user\"") {
-                rounds += 1;
-                messages += 1;
-            } else if line.contains("\"type\":\"assistant\"") {
-                if !line_contains_no_response_placeholder(line) {
-                    messages += 1;
-                }
-            } else if line.contains("\"type\":\"message\"") {
-                if line.contains("\"role\":\"user\"") {
-                    rounds += 1;
-                    messages += 1;
-                } else if line.contains("\"role\":\"assistant\"") {
-                    if !line_contains_no_response_placeholder(line) {
-                        messages += 1;
-                    }
+            let (line_rounds, line_messages, uuid) = count_rounds_and_messages_from_line(line);
+            if line_rounds == 0 && line_messages == 0 {
+                continue;
+            }
+            if let Some(uuid) = uuid {
+                if !uuid.is_empty() && !seen_uuids.insert(uuid) {
+                    continue;
                 }
             }
+            rounds += line_rounds;
+            messages += line_messages;
         }
-        (rounds, messages)
     };
-    let (hr, hm) = count_in(head);
-    // For small files, read_head_tail returns the same buffer for both —
-    // detect by content equality to avoid double-counting.
-    if head == tail {
-        return (hr, hm);
+
+    count_in(head);
+    if head != tail {
+        count_in(tail);
     }
-    let (tr, tm) = count_in(tail);
-    (hr + tr, hm + tm)
+
+    (rounds, messages)
+}
+
+fn count_rounds_and_messages_from_line(line: &str) -> (usize, usize, Option<String>) {
+    if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+        let uuid = parsed.uuid.clone();
+        let line_type = parsed.line_type.as_deref();
+        if !matches!(
+            line_type,
+            Some("user") | Some("assistant") | Some("message")
+        ) {
+            return (0, 0, uuid);
+        }
+
+        let Some(msg) = &parsed.message else {
+            return (0, 0, uuid);
+        };
+        let role = msg.role.as_deref().unwrap_or_default();
+        if role != "user" && role != "assistant" {
+            return (0, 0, uuid);
+        }
+        if parsed.is_meta.unwrap_or(false) {
+            return (0, 0, uuid);
+        }
+
+        let (content, is_tool) = extract_content_with_meta(&msg.content);
+        let content_blocks = extract_content_blocks(&msg.content);
+        let has_content_blocks = content_blocks
+            .as_ref()
+            .map(|blocks| !blocks.is_empty())
+            .unwrap_or(false);
+        let display_content = if content.is_empty() {
+            content_blocks
+                .as_deref()
+                .map(content_blocks_to_text)
+                .unwrap_or_default()
+        } else {
+            content
+        };
+
+        if role == "assistant" && is_no_response_placeholder(&display_content) {
+            return (0, 0, uuid);
+        }
+        if display_content.is_empty() && !has_content_blocks {
+            return (0, 0, uuid);
+        }
+
+        let round = usize::from(role == "user" && !is_tool);
+        return (round, 1, uuid);
+    }
+
+    count_rounds_and_messages_from_line_heuristic(line)
+}
+
+fn count_rounds_and_messages_from_line_heuristic(line: &str) -> (usize, usize, Option<String>) {
+    if line_contains_json_bool_true(line, "isMeta") {
+        return (0, 0, None);
+    }
+
+    let is_tool = line_contains_json_string(line, "type", "tool_use")
+        || line_contains_json_string(line, "type", "tool_result");
+    let is_user = line_contains_json_string(line, "type", "user")
+        || (line_contains_json_string(line, "type", "message")
+            && line_contains_json_string(line, "role", "user"));
+    let is_assistant = line_contains_json_string(line, "type", "assistant")
+        || (line_contains_json_string(line, "type", "message")
+            && line_contains_json_string(line, "role", "assistant"));
+
+    if is_user {
+        return (usize::from(!is_tool), 1, None);
+    }
+    if is_assistant && !line_contains_no_response_placeholder(line) {
+        return (0, 1, None);
+    }
+
+    (0, 0, None)
+}
+
+fn line_contains_json_string(line: &str, key: &str, value: &str) -> bool {
+    line.contains(&format!("\"{}\":\"{}\"", key, value))
+        || line.contains(&format!("\"{}\": \"{}\"", key, value))
+}
+
+fn line_contains_json_bool_true(line: &str, key: &str) -> bool {
+    line.contains(&format!("\"{}\":true", key)) || line.contains(&format!("\"{}\": true", key))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SAMPLE_LINES: &str = r#"{"type":"user","message":{"role":"user","content":"create a skill"},"uuid":"human"}
+{"type":"user","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"system prompt"}]},"uuid":"meta"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"ok"}]},"uuid":"tool-result"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{"file_path":"README.md"}}]},"uuid":"tool-use"}
+{"type":"assistant","message":{"role":"assistant","content":"done"},"uuid":"assistant"}"#;
+
+    #[test]
+    fn count_rounds_skips_meta_and_tool_result_users() {
+        let (rounds, messages) = count_rounds_and_messages_from_buffers(SAMPLE_LINES, SAMPLE_LINES);
+
+        assert_eq!(rounds, 1);
+        assert_eq!(messages, 4);
+    }
+
+    #[test]
+    fn count_messages_dedupes_overlapping_buffers_by_uuid() {
+        let tail = format!(
+            "{}\n{}",
+            SAMPLE_LINES,
+            r#"{"type":"assistant","message":{"role":"assistant","content":"second reply"},"uuid":"assistant-2"}"#
+        );
+
+        let (rounds, messages) = count_rounds_and_messages_from_buffers(SAMPLE_LINES, &tail);
+
+        assert_eq!(rounds, 1);
+        assert_eq!(messages, 5);
+    }
 }
 
 /// Convert slug like "soft-petting-wave" to "Soft Petting Wave"

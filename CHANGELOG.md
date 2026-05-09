@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.1
+
+### Patch Changes
+
+- Add round, session, and project aggregation views for global search, support Boolean scoped search syntax, and improve session round counting plus agent trace rendering.
+
 ## 0.39.0
 
 ### Minor Changes

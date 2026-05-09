@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Label } from "../../components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import { useI18n } from "@/i18n";
+import { getMessageDisplayRole, isUserPromptMessage } from "@/lib/messageSemantics";
 import { restoreSlashCommand } from "./utils";
 import type { ExportFormat, MarkdownStyle } from "./types";
 import type { Message } from "../../types";
@@ -44,7 +45,7 @@ export function ExportDialog({
     if (selectPreset === "all") {
       onSelectedIdsChange(new Set(allMessages.map((m) => m.uuid)));
     } else if (selectPreset === "user") {
-      onSelectedIdsChange(new Set(allMessages.filter((m) => m.role === "user").map((m) => m.uuid)));
+      onSelectedIdsChange(new Set(allMessages.filter(isUserPromptMessage).map((m) => m.uuid)));
     }
   }, [selectPreset, allMessages, onSelectedIdsChange]);
 
@@ -70,7 +71,7 @@ export function ExportDialog({
   const generateOutput = () => {
     if (format === "json") {
       const data = messages.map((m) => ({
-        role: m.role,
+        role: getMessageDisplayRole(m),
         content: processContent(m.content),
       }));
       return JSON.stringify(data, null, jsonPretty ? 2 : undefined);
@@ -83,14 +84,14 @@ export function ExportDialog({
       return `${firstLine}${isTruncated ? "..." : ""}`;
     };
 
-    const userIndices = messages.map((m, i) => (m.role === "user" ? i : -1)).filter((i) => i >= 0);
+    const userIndices = messages.map((m, i) => (isUserPromptMessage(m) ? i : -1)).filter((i) => i >= 0);
     const needsSeparator = (i: number) => addSeparator && userIndices.includes(i) && i !== userIndices[0];
 
     let output: string;
     if (mdStyle === "bullet") {
       output = messages
         .map((m, i) => {
-          const prefix = m.role === "user" ? "- **Q:**" : "- **A:**";
+          const prefix = isUserPromptMessage(m) ? "- **Q:**" : "- **A:**";
           const content = truncate(processContent(m.content));
           const line = `${prefix} ${content}`;
           return needsSeparator(i) ? `\n---\n\n${line}` : line;
@@ -99,7 +100,7 @@ export function ExportDialog({
     } else if (mdStyle === "qa") {
       output = messages
         .map((m, i) => {
-          const prefix = m.role === "user" ? "**Q:**" : "**A:**";
+          const prefix = isUserPromptMessage(m) ? "**Q:**" : "**A:**";
           const content = truncate(processContent(m.content));
           const line = `${prefix} ${content}`;
           return needsSeparator(i) ? `---\n\n${line}` : line;
@@ -108,7 +109,8 @@ export function ExportDialog({
     } else {
       output = messages
         .map((m, i) => {
-          const role = m.role.charAt(0).toUpperCase() + m.role.slice(1);
+          const displayRole = getMessageDisplayRole(m);
+          const role = displayRole.charAt(0).toUpperCase() + displayRole.slice(1);
           const content = truncate(processContent(m.content));
           const line = `## ${role}\n\n${content}`;
           return needsSeparator(i) ? `---\n\n${line}` : line;
@@ -157,7 +159,7 @@ export function ExportDialog({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t("export.selectAll", { count: allMessages.length })}</SelectItem>
-              <SelectItem value="user">{t("export.userOnly", { count: allMessages.filter((m) => m.role === "user").length })}</SelectItem>
+              <SelectItem value="user">{t("export.userOnly", { count: allMessages.filter(isUserPromptMessage).length })}</SelectItem>
               <SelectItem value="custom">{t("export.custom", { count: selectedIds.size })}</SelectItem>
             </SelectContent>
           </Select>

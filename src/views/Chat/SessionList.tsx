@@ -7,6 +7,7 @@ import { ContextFileItem } from "../../components/ContextFileItem";
 import { useAtom } from "jotai";
 import { sessionContextTabAtom, sessionSelectModeAtom, hideEmptySessionsAtom, userPromptsOnlyAtom } from "../../store";
 import { useAppConfig } from "../../context";
+import { getMessageDisplayRole, isUserPromptMessage } from "@/lib/messageSemantics";
 import { formatDate, resolveSessionLabel, useReadableText } from "./utils";
 import { useInvokeQuery } from "../../hooks";
 import type { Session, ContextFile, Message, SearchResult, SessionUsageEntry, SessionUsage } from "../../types";
@@ -158,10 +159,11 @@ generator: "Lovcode"
       for (let i = 0; i < selected.length; i++) {
         const session = selected[i];
         const allMessages = await invoke<Message[]>("get_session_messages", { projectId, sessionId: session.id });
-        const messages = userPromptsOnly ? allMessages.filter((m) => m.role === "user") : allMessages;
+        const messages = userPromptsOnly ? allMessages.filter(isUserPromptMessage) : allMessages;
         const sessionMd = messages
           .map((m) => {
-            const role = m.role.charAt(0).toUpperCase() + m.role.slice(1);
+            const displayRole = getMessageDisplayRole(m);
+            const role = displayRole.charAt(0).toUpperCase() + displayRole.slice(1);
             return `### ${role}\n\n${m.content}`;
           })
           .join("\n\n---\n\n");

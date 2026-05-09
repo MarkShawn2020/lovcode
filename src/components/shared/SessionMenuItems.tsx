@@ -46,6 +46,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "@/components/ui/toast";
 import { useI18n } from "@/i18n";
+import { isUserPromptMessage } from "@/lib/messageSemantics";
 import {
   archivedSessionIdsAtom,
   expandMessagesAtom,
@@ -315,7 +316,7 @@ function useSessionInfo(
         messageCount: messagesResult.status === "fulfilled" ? messages.length : undefined,
         userMessageCount:
           messagesResult.status === "fulfilled"
-            ? messages.filter((message) => message.role === "user" && !message.is_tool).length
+            ? messages.filter(isUserPromptMessage).length
             : undefined,
         relatedFiles,
         relatedFilesTruncated: truncated,

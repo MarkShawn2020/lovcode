@@ -23,8 +23,10 @@ import { CollapsibleContent } from "./CollapsibleContent";
 import { ContentBlockRenderer } from "./ContentBlockRenderer";
 import { ChatFilePreviewProvider } from "./FilePreviewContext";
 import { ExportDialog } from "./ExportDialog";
+import { TaskNotificationCard } from "./TaskNotificationCard";
 import { useReadableText } from "./utils";
 import { useAppConfig } from "../../context";
+import { getMessageDisplayRole, isAiAuthoredUserMessage } from "@/lib/messageSemantics";
 import type { Message, Session } from "../../types";
 
 interface MessageViewProps {
@@ -180,11 +182,12 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
         <div className="space-y-4">
           {filteredMessages.map((msg) => {
             const displayContent = processContent(msg.content);
+            const displayRole = getMessageDisplayRole(msg);
             return (
               <div
                 key={msg.uuid}
                 className={`group relative rounded-xl p-4 ${
-                  msg.role === "user" ? "bg-card-alt" : "bg-card border border-border"
+                  displayRole === "user" ? "bg-card-alt" : "bg-card border border-border"
                 }`}
               >
                 <DropdownMenu>
@@ -204,8 +207,17 @@ export function MessageView({ projectId, projectPath, sessionId, summary: initia
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <p className="text-xs text-muted-foreground-foreground mb-2 uppercase tracking-wide">{msg.role}</p>
-                {msg.content_blocks ? (
+                <p className="text-xs text-muted-foreground-foreground mb-2 uppercase tracking-wide">
+                  {displayRole}
+                </p>
+                {isAiAuthoredUserMessage(msg) ? (
+                  <TaskNotificationCard
+                    content={msg.content}
+                    markdown={markdownPreview}
+                    cwd={projectPath}
+                    transformText={processContent}
+                  />
+                ) : msg.content_blocks ? (
                   <ContentBlockRenderer blocks={msg.content_blocks} markdown={markdownPreview} cwd={projectPath} transformText={processContent} />
                 ) : (
                   <CollapsibleContent content={displayContent} markdown={markdownPreview} cwd={projectPath} />

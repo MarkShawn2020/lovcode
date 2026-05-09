@@ -32,6 +32,7 @@ import { useReadableText, formatTokens, inferModelInfo, resolveSessionLabel, tit
 import { useInvokeQuery, useQueryClient, useStreamedSessions, useSessionsCache } from "../../hooks";
 import { CollapsibleContent } from "./CollapsibleContent";
 import { ContentBlockRenderer } from "./ContentBlockRenderer";
+import { TaskNotificationCard } from "./TaskNotificationCard";
 import { ChatFilePreviewProvider } from "./FilePreviewContext";
 import { HighlightText } from "./HighlightText";
 import { PathAwareText } from "./PathAwareText";
@@ -40,6 +41,7 @@ import { useCwdValidity, invalidateCwdValidity } from "./useCwdValidity";
 import { RelocateSessionDialog } from "./RelocateSessionDialog";
 import { normalizeClaudeCodeModelName } from "../../lib/agent/models";
 import { patchSettings } from "../../lib/settingsApi";
+import { getMessageDisplayRole, isAiAuthoredUserMessage, isUserPromptMessage } from "@/lib/messageSemantics";
 import { ProjectLogo } from "../../components/shared/ProjectLogo";
 import { toast } from "../../components/ui/toast";
 import { ActivityCard } from "../../components/home";
@@ -204,6 +206,14 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
   const selectedProjectIdFromUrl = useMemo(() => {
     const params = new URLSearchParams(location.search);
     return params.get("projectId");
+  }, [location.search]);
+  const targetMessageIdFromUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("messageId");
+  }, [location.search]);
+  const searchHighlightFromUrl = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    return params.get("q") ?? undefined;
   }, [location.search]);
   const selectSessionHintId = (location.state as { selectSessionId?: string } | null)
     ?.selectSessionId;
@@ -1140,6 +1150,8 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
             <SessionDetail
               session={selectedSession}
               onClose={clearSelectedSession}
+              targetMessageId={targetMessageIdFromUrl}
+              highlight={searchHighlightFromUrl}
             />
           </ChatFilePreviewProvider>
         ) : (
@@ -1334,10 +1346,6 @@ function SessionItemButton({
 // Session Detail (right panel)
 // ============================================================================
 
-function isUserPromptMessage(msg: Message) {
-  return msg.role === "user" && !msg.is_tool;
-}
-
 function getSessionDetailDisplayModeKey(session: Pick<Session, "project_id" | "id">) {
   return `${session.project_id}:${session.id}`;
 }
@@ -1353,6 +1361,7 @@ function isUserPromptGroup(group: Message[]) {
 function messageGroupKind(msg: Message) {
   if (isUserPromptMessage(msg)) return "user";
   if (msg.is_tool) return "tool";
+  if (isAiAuthoredUserMessage(msg)) return "assistant";
   return msg.role;
 }
 
@@ -1458,6 +1467,14 @@ function getMessageIdentity(message: Pick<Message, "uuid" | "line_number">) {
   return `${message.uuid || "message"}:${message.line_number}`;
 }
 
+function findRenderedMessageElement(root: HTMLElement, messageId: string) {
+  const direct = root.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+  if (direct) return direct;
+  return Array.from(root.querySelectorAll<HTMLElement>("[data-message-ids]")).find((element) =>
+    (element.dataset.messageIds ?? "").split("\n").includes(messageId)
+  ) ?? null;
+}
+
 function isAnimatableAssistantMessage(message: Message) {
   return (
     message.role === "assistant" &&
@@ -1494,7 +1511,7 @@ function buildForkContext(groups: Message[][], throughGroupIndex: number, toRead
     .flat()
     .filter((message) => !message.is_meta)
     .map((message) => {
-      const role = message.is_tool ? "tool" : message.role || "message";
+      const role = message.is_tool ? "tool" : getMessageDisplayRole(message) || "message";
       const content = toReadable(message.content).trim();
       return content ? `[${role}]\n${content}` : "";
     })
@@ -1852,16 +1869,22 @@ const MessageGroupCard = memo(function MessageGroupCard({
   const canOpenPromptDetail = Boolean(userPromptCompressed);
   const userPathHits = usePathHits(userPromptText, cwd, true);
   const hasStreamingText = group.some(shouldRenderStreamingText);
+  const hasTaskNotification = group.some(isAiAuthoredUserMessage);
   const toolBlocks = useMemo(
     () => (!isUser && !hasStreamingText && groupHasToolBlocks(group) ? flattenGroupContentBlocks(group) : null),
     [group, isUser, hasStreamingText],
   );
+  const hasEmbeddedExpandable = Boolean(toolBlocks) || hasTaskNotification;
   const isToolOnlyGroup = Boolean(
     toolBlocks?.length && toolBlocks.every((block) => block.type === "tool_use" || block.type === "tool_result"),
   );
+  const groupMessageIds = group.map((message) => message.uuid).filter(Boolean).join("\n");
 
   return (
     <div
+      data-message-id={group[0].uuid || undefined}
+      data-message-ids={groupMessageIds || undefined}
+      data-line-number={group[0].line_number}
       onDoubleClick={
         canOpenPromptDetail
           ? () => {
@@ -1919,10 +1942,10 @@ const MessageGroupCard = memo(function MessageGroupCard({
           <div
             ref={ref}
             onClick={() => {
-              if (!expanded && isOverflow) setExpanded(true);
+              if (!hasEmbeddedExpandable && !expanded && isOverflow) setExpanded(true);
             }}
             className={`text-sm leading-relaxed text-ink ${
-              expanded ? "" : `max-h-20 overflow-hidden ${isOverflow ? "cursor-pointer" : ""}`
+              expanded || hasEmbeddedExpandable ? "" : `max-h-20 overflow-hidden ${isOverflow ? "cursor-pointer" : ""}`
             }`}
           >
             <div className="space-y-1.5">
@@ -1940,9 +1963,19 @@ const MessageGroupCard = memo(function MessageGroupCard({
                 group.map((msg, idx) => (
                   <div
                     key={`${msg.uuid}-${msg.line_number}`}
+                    data-message-id={msg.uuid || undefined}
+                    data-line-number={msg.line_number}
                     className={idx > 0 ? "pt-1.5 border-t border-border/30" : ""}
                   >
-                    {shouldRenderStreamingText(msg) ? (
+                    {isAiAuthoredUserMessage(msg) ? (
+                      <TaskNotificationCard
+                        content={msg.content}
+                        markdown={markdownPreview}
+                        highlight={highlight}
+                        cwd={cwd}
+                        transformText={toReadable}
+                      />
+                    ) : shouldRenderStreamingText(msg) ? (
                       <StreamingCollapsibleContent
                         content={toReadable(msg.content)}
                         messageId={msg.uuid}
@@ -1999,7 +2032,7 @@ const MessageGroupCard = memo(function MessageGroupCard({
                 <DropdownMenuSeparator />
               </>
             )}
-            {!isUser && isOverflow && (
+            {!isUser && isOverflow && !hasEmbeddedExpandable && (
               <DropdownMenuItem onClick={() => setExpanded(!expanded)} className="gap-2 text-xs">
                 {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                 {expanded ? "Collapse" : "Expand"}
@@ -2298,6 +2331,7 @@ export function SessionDetail({
   session,
   onClose,
   highlight,
+  targetMessageId,
   composerOverride,
   projectPath,
   projectPathMenuItems,
@@ -2309,6 +2343,7 @@ export function SessionDetail({
   session: Session;
   onClose: () => void;
   highlight?: string;
+  targetMessageId?: string | null;
   composerOverride?: ReactNode;
   projectPath?: string | null;
   projectPathMenuItems?: ReactNode;
@@ -2542,7 +2577,7 @@ export function SessionDetail({
   // A round = one user prompt (plus its following assistant turn). Count user messages from the
   // chat-only view so meta/tool entries don't inflate the number.
   const roundCount = useMemo(
-    () => displayMessages.filter((m) => !m.is_meta && !m.is_tool && m.role === "user").length,
+    () => displayMessages.filter((m) => !m.is_meta && isUserPromptMessage(m)).length,
     [displayMessages],
   );
 
@@ -2554,6 +2589,7 @@ export function SessionDetail({
   const [activeMatch, setActiveMatch] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
   const bottomScrolledSessionRef = useRef<string | null>(null);
+  const targetMessageScrollKeyRef = useRef<string | null>(null);
 
   // Resume-conversation state: prompt-box + spawned terminal
   // Only local CLI sessions can be resumed via `claude --resume`/`codex resume`.
@@ -2587,6 +2623,10 @@ export function SessionDetail({
   useEffect(() => {
     bottomScrolledSessionRef.current = null;
   }, [session.id]);
+
+  useEffect(() => {
+    targetMessageScrollKeyRef.current = null;
+  }, [session.id, targetMessageId]);
 
   useEffect(() => {
     if (showBlockingLoading || highlight?.trim() || filteredMessages.length === 0) return;
@@ -2638,6 +2678,34 @@ export function SessionDetail({
     });
     return () => cancelAnimationFrame(raf);
   }, [activeMatch, matchCount, showBlockingLoading]);
+
+  useEffect(() => {
+    if (!targetMessageId || showBlockingLoading || filteredMessages.length === 0) return;
+    const key = `${session.id}:${targetMessageId}`;
+    if (targetMessageScrollKeyRef.current === key) return;
+
+    const raf = requestAnimationFrame(() => {
+      const root = contentRef.current;
+      if (!root) return;
+      const target = findRenderedMessageElement(root, targetMessageId);
+      if (!target) return;
+
+      const scroller = scrollRef.current;
+      if (scroller) {
+        const targetRect = target.getBoundingClientRect();
+        const scrollerRect = scroller.getBoundingClientRect();
+        const delta = targetRect.top - scrollerRect.top - scrollerRect.height / 2 + targetRect.height / 2;
+        scroller.scrollTo({
+          top: scroller.scrollTop + delta,
+          behavior: "smooth",
+        });
+      } else {
+        target.scrollIntoView({ block: "center", behavior: "smooth" });
+      }
+      targetMessageScrollKeyRef.current = key;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [targetMessageId, session.id, filteredMessages, showBlockingLoading]);
 
   const gotoMatch = (delta: number) => {
     if (matchCount === 0) return;

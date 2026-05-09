@@ -5,16 +5,24 @@ import { emitTo, listen } from "@tauri-apps/api/event";
 import { Loader2, Search } from "lucide-react";
 import type { Session } from "../types";
 import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/searchScopes";
-import { formatDate, formatRelativeTime } from "../views/Chat/utils";
+import { formatDate, formatRelativeTime, restoreSlashCommand } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
 
 interface SearchChatHit {
   session_id: string;
+  uuid: string;
   content?: string;
+  role?: string;
+  line_number?: number;
   session_summary?: string | null;
   title?: string | null;
   summary?: string | null;
   last_prompt?: string | null;
+  round_index?: number;
+  round_prompt?: string | null;
+  round_timestamp?: string | null;
+  timestamp?: string;
+  score?: number;
 }
 
 interface ContentMatchPreview {
@@ -22,21 +30,69 @@ interface ContentMatchPreview {
   highlightQuery: string;
 }
 
+type SearchViewMode = "round" | "session" | "project";
+
+const SEARCH_VIEW_MODES: Array<{ id: SearchViewMode; label: string }> = [
+  { id: "round", label: "Round" },
+  { id: "session", label: "Session" },
+  { id: "project", label: "Project" },
+];
+
+interface RoundSearchResultItem {
+  kind: "round";
+  key: string;
+  session: Session;
+  hit: SearchChatHit;
+  preview: ContentMatchPreview | null;
+}
+
+interface SessionSearchResultItem {
+  kind: "session";
+  key: string;
+  session: Session;
+  hit?: SearchChatHit | null;
+  preview: ContentMatchPreview | null;
+  matchedRoundCount?: number;
+}
+
+interface ProjectSearchResultItem {
+  kind: "project";
+  key: string;
+  projectId: string;
+  projectPath: string;
+  projectName: string;
+  session: Session;
+  hit?: SearchChatHit | null;
+  preview: ContentMatchPreview | null;
+  matchedRoundCount: number;
+  matchedSessionCount: number;
+}
+
+type SearchResultItem = RoundSearchResultItem | SessionSearchResultItem | ProjectSearchResultItem;
+
 const RECENT_SEARCH_LIMIT = 20;
 const RECENT_SEARCH_BADGE_LIMIT = 8;
 const RECENT_SEARCH_STORAGE_KEY = "lovcode:search-overlay:recent-searches";
 const FULL_TEXT_SEARCH_LIMIT = 600;
 const MATCH_CONTEXT_RADIUS = 96;
 
-const SEARCH_PLACEHOLDER = "Search conversations, title:..., prompt:..., or in:title,prompt";
-const SEARCH_EMPTY_LABEL = "Search all conversations";
+const SEARCH_PLACEHOLDER = "Search rounds, title:..., round:..., AND/OR, -exclude";
+const SEARCH_EMPTY_LABEL = "Search conversations";
 
 function getProjectName(session: Session) {
   return session.project_path?.split("/").filter(Boolean).pop() ?? "";
 }
 
+function getSessionTitle(session: Session) {
+  return session.title || session.summary || session.last_prompt || "Untitled";
+}
+
 function normalizeSnippetValue(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function normalizePreviewValue(value: string) {
+  return normalizeSnippetValue(restoreSlashCommand(value));
 }
 
 function extractSearchTerms(query: string) {
@@ -74,7 +130,7 @@ function buildContentPreview(
   query: string,
   allowFallback = true
 ): ContentMatchPreview | null {
-  const normalizedContent = normalizeSnippetValue(content ?? "");
+  const normalizedContent = normalizePreviewValue(content ?? "");
   if (!normalizedContent) return null;
 
   const match = findSnippetMatch(normalizedContent, query);
@@ -100,6 +156,7 @@ function buildContentPreview(
 
 function buildSearchHitPreview(result: SearchChatHit, query: string) {
   return buildContentPreview(result.content, query, false)
+    ?? buildContentPreview(result.round_prompt, query, false)
     ?? buildContentPreview(result.title, query, false)
     ?? buildContentPreview(result.summary, query, false)
     ?? buildContentPreview(result.last_prompt, query, false)
@@ -128,23 +185,144 @@ function buildMetadataPreview(session: Session, query: string) {
   return null;
 }
 
-function uniqueSessions(groups: Session[][]) {
-  const seen = new Set<string>();
-  const ordered: Session[] = [];
-
-  for (const group of groups) {
-    for (const session of group) {
-      if (seen.has(session.id)) continue;
-      seen.add(session.id);
-      ordered.push(session);
-    }
-  }
-
-  return ordered;
-}
-
 function sortByLastModified(sessions: Session[]) {
   return [...sessions].sort((a, b) => b.last_modified - a.last_modified);
+}
+
+function timestampToSeconds(timestamp: string | null | undefined, fallback: number) {
+  if (!timestamp) return fallback;
+  const millis = Date.parse(timestamp);
+  if (!Number.isFinite(millis)) return fallback;
+  return Math.floor(millis / 1000);
+}
+
+function getItemHit(item: SearchResultItem) {
+  return item.kind === "round" ? item.hit : item.hit ?? null;
+}
+
+function itemTimestampSeconds(item: SearchResultItem) {
+  const hit = getItemHit(item);
+  if (hit) return timestampToSeconds(hit.round_timestamp ?? hit.timestamp, item.session.last_modified);
+  return item.session.last_modified;
+}
+
+function sortSearchItems(items: SearchResultItem[]) {
+  return [...items].sort((a, b) => itemTimestampSeconds(b) - itemTimestampSeconds(a));
+}
+
+function getItemRoundKey(item: SearchResultItem) {
+  const hit = getItemHit(item);
+  if (!hit) return null;
+  return `${hit.session_id}:${hit.round_index ?? 0}`;
+}
+
+function aggregateSessionItems(items: SearchResultItem[]): SearchResultItem[] {
+  const bySession = new Map<
+    string,
+    {
+      item: SessionSearchResultItem;
+      roundKeys: Set<string>;
+    }
+  >();
+
+  for (const item of sortSearchItems(items)) {
+    const sessionId = item.session.id;
+    const hit = getItemHit(item);
+    const existing = bySession.get(sessionId);
+    if (!existing) {
+      bySession.set(sessionId, {
+        item: {
+          kind: "session",
+          key: `session:${sessionId}`,
+          session: item.session,
+          hit,
+          preview: item.preview,
+          matchedRoundCount: 0,
+        },
+        roundKeys: new Set(),
+      });
+    } else {
+      if (!existing.item.hit && hit) existing.item.hit = hit;
+      if (!existing.item.preview && item.preview) existing.item.preview = item.preview;
+    }
+
+    const roundKey = getItemRoundKey(item);
+    if (roundKey) bySession.get(sessionId)?.roundKeys.add(roundKey);
+  }
+
+  return sortSearchItems(
+    Array.from(bySession.values()).map(({ item, roundKeys }) => ({
+      ...item,
+      matchedRoundCount: roundKeys.size,
+    }))
+  );
+}
+
+function aggregateProjectItems(items: SearchResultItem[]): SearchResultItem[] {
+  const byProject = new Map<
+    string,
+    {
+      item: ProjectSearchResultItem;
+      sessionIds: Set<string>;
+      roundKeys: Set<string>;
+    }
+  >();
+
+  for (const item of sortSearchItems(items)) {
+    const session = item.session;
+    const projectId = session.project_id;
+    const projectPath = session.project_path || "";
+    const projectKey = projectPath || projectId || session.id;
+    const projectName = getProjectName(session) || projectPath || projectId;
+    const hit = getItemHit(item);
+    const existing = byProject.get(projectKey);
+
+    if (!existing) {
+      byProject.set(projectKey, {
+        item: {
+          kind: "project",
+          key: `project:${projectKey}`,
+          projectId,
+          projectPath,
+          projectName,
+          session,
+          hit,
+          preview: item.preview,
+          matchedRoundCount: 0,
+          matchedSessionCount: 0,
+        },
+        sessionIds: new Set(),
+        roundKeys: new Set(),
+      });
+    } else {
+      if (!existing.item.hit && hit) existing.item.hit = hit;
+      if (!existing.item.preview && item.preview) existing.item.preview = item.preview;
+    }
+
+    const bucket = byProject.get(projectKey);
+    bucket?.sessionIds.add(session.id);
+    const roundKey = getItemRoundKey(item);
+    if (roundKey) bucket?.roundKeys.add(roundKey);
+  }
+
+  return sortSearchItems(
+    Array.from(byProject.values()).map(({ item, sessionIds, roundKeys }) => ({
+      ...item,
+      matchedSessionCount: sessionIds.size,
+      matchedRoundCount: roundKeys.size,
+    }))
+  );
+}
+
+function aggregateSearchItems(items: SearchResultItem[], viewMode: SearchViewMode) {
+  if (viewMode === "session") return aggregateSessionItems(items);
+  if (viewMode === "project") return aggregateProjectItems(items);
+  return items;
+}
+
+function roundLabel(hit: SearchChatHit) {
+  const index = hit.round_index ?? 0;
+  return index > 0 ? `Round ${index}` : "Session prelude";
 }
 
 function readRecentSearches() {
@@ -172,13 +350,13 @@ function writeRecentSearches(searches: string[]) {
 
 export default function SearchOverlay() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<Session[]>([]);
+  const [sourceResults, setSourceResults] = useState<SearchResultItem[]>([]);
+  const [viewMode, setViewMode] = useState<SearchViewMode>("round");
   const [searching, setSearching] = useState(false);
   const [indexBuilding, setIndexBuilding] = useState(false);
   const [indexReady, setIndexReady] = useState(false);
   const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
-  const [contentMatchPreviews, setContentMatchPreviews] = useState<Map<string, ContentMatchPreview>>(new Map());
   const [activeIdx, setActiveIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const indexBuildInFlightRef = useRef(false);
@@ -189,10 +367,17 @@ export default function SearchOverlay() {
   const recentSearchBadges = useMemo(() => {
     return recentSearches.slice(0, RECENT_SEARCH_BADGE_LIMIT);
   }, [recentSearches]);
+  const results = useMemo(() => aggregateSearchItems(sourceResults, viewMode), [sourceResults, viewMode]);
+  const viewCounts = useMemo(() => ({
+    round: sourceResults.length,
+    session: aggregateSessionItems(sourceResults).length,
+    project: aggregateProjectItems(sourceResults).length,
+  }), [sourceResults]);
   const fullTextIndexing = indexBuilding;
-  const fullTextModePending = !indexReady && indexBuilding && !!trimmedQuery && results.length === 0;
+  const fullTextModePending = !indexReady && indexBuilding && !!trimmedQuery && sourceResults.length === 0;
   const parsedQuery = useMemo(() => parseScopedSearchQuery(trimmedQuery), [trimmedQuery]);
   const highlightQuery = parsedQuery.highlightQuery;
+  const currentViewLabel = SEARCH_VIEW_MODES.find((mode) => mode.id === viewMode)?.label ?? "Result";
 
   const rememberSearch = useCallback((value: string) => {
     const term = normalizeSnippetValue(value);
@@ -270,8 +455,7 @@ export default function SearchOverlay() {
 
   useEffect(() => {
     if (!trimmedQuery) {
-      setResults([]);
-      setContentMatchPreviews(new Map());
+      setSourceResults([]);
       setSearching(false);
       return;
     }
@@ -284,36 +468,46 @@ export default function SearchOverlay() {
           matchesScopedSessionMetadata(session, parsedQuery)
         );
 
-        const nextContentMatchIds = new Set<string>();
-        const nextContentMatchPreviews = new Map<string, ContentMatchPreview>();
-        let contentMatches: Session[] = [];
-
         const contentResults = await invoke<SearchChatHit[]>(
           "search_chats",
           { query: trimmedQuery, limit: FULL_TEXT_SEARCH_LIMIT }
         ).catch(() => []);
 
-        const orderedContentIds: string[] = [];
+        const seenRoundKeys = new Set<string>();
+        const contentSessionIds = new Set<string>();
+        const roundItems: SearchResultItem[] = [];
 
         for (const result of contentResults) {
-          if (nextContentMatchIds.has(result.session_id)) continue;
-          nextContentMatchIds.add(result.session_id);
+          const session = sessionsById.get(result.session_id);
+          if (!session) continue;
+          const roundKey = `${result.session_id}:${result.round_index ?? 0}`;
+          if (seenRoundKeys.has(roundKey)) continue;
+          seenRoundKeys.add(roundKey);
+          contentSessionIds.add(result.session_id);
           const preview = buildSearchHitPreview(result, highlightQuery);
-          if (preview) nextContentMatchPreviews.set(result.session_id, preview);
-          orderedContentIds.push(result.session_id);
+          roundItems.push({
+            kind: "round",
+            key: `round:${roundKey}`,
+            session,
+            hit: result,
+            preview,
+          });
         }
 
-        contentMatches = orderedContentIds
-          .map((id) => sessionsById.get(id))
-          .filter((session): session is Session => session !== undefined);
+        const metadataItems: SearchResultItem[] = sortByLastModified(
+          metadataMatches.filter((session) => !contentSessionIds.has(session.id))
+        ).map((session) => ({
+          kind: "session",
+          key: `session:${session.id}`,
+          session,
+          preview: buildMetadataPreview(session, highlightQuery),
+        }));
 
         if (cancelled) return;
 
-        const combinedMatches = uniqueSessions([metadataMatches, contentMatches]);
-        const nextResults = sortByLastModified(combinedMatches);
+        const nextResults = sortSearchItems([...roundItems, ...metadataItems]);
 
-        setContentMatchPreviews(nextContentMatchPreviews);
-        setResults(nextResults);
+        setSourceResults(nextResults);
       } finally {
         if (!cancelled) setSearching(false);
       }
@@ -333,7 +527,7 @@ export default function SearchOverlay() {
 
   useEffect(() => {
     setActiveIdx(0);
-  }, [query, results.length]);
+  }, [query, results.length, viewMode]);
 
   const hide = () => {
     getCurrentWindow().hide().catch(() => {});
@@ -349,13 +543,28 @@ export default function SearchOverlay() {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const onSelect = (s: Session) => {
+  const onSelect = (item: SearchResultItem) => {
+    const s = item.session;
+    const hit = getItemHit(item);
     rememberSearch(query);
+
+    if (item.kind === "project" && item.projectPath) {
+      emitTo("main", "open-project", {
+        projectId: item.projectId,
+        projectPath: item.projectPath,
+      }).catch(() => {});
+      hide();
+      return;
+    }
+
     emitTo("main", "open-chat", {
       projectId: s.project_id,
       projectPath: s.project_path || "",
       sessionId: s.id,
       summary: s.summary,
+      messageId: hit?.uuid ?? null,
+      lineNumber: hit?.line_number ?? null,
+      highlight: highlightQuery,
     }).catch(() => {});
     hide();
   };
@@ -370,8 +579,8 @@ export default function SearchOverlay() {
       setActiveIdx((i) => Math.max(i - 1, 0));
     } else if (e.key === "Enter") {
       e.preventDefault();
-      const s = results[activeIdx];
-      if (s) onSelect(s);
+      const item = results[activeIdx];
+      if (item) onSelect(item);
     }
   };
 
@@ -411,6 +620,37 @@ export default function SearchOverlay() {
               />
               {(searching || fullTextIndexing) && (
                 <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+              )}
+            </div>
+
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <div className="inline-flex rounded-lg border border-border bg-card-alt p-0.5" aria-label="Search view">
+                {SEARCH_VIEW_MODES.map((mode) => {
+                  const active = viewMode === mode.id;
+                  return (
+                    <button
+                      key={mode.id}
+                      type="button"
+                      onClick={() => setViewMode(mode.id)}
+                      aria-pressed={active}
+                      className={`flex min-w-[5rem] items-center justify-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-card hover:text-foreground"
+                      }`}
+                    >
+                      <span>{mode.label}</span>
+                      <span className={active ? "text-primary-foreground/80" : "text-muted-foreground/70"}>
+                        {viewCounts[mode.id]}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {trimmedQuery && (
+                <span className="hidden text-[11px] text-muted-foreground sm:inline">
+                  {currentViewLabel} view
+                </span>
               )}
             </div>
 
@@ -454,21 +694,46 @@ export default function SearchOverlay() {
                 <span>
                   {searching
                     ? "Searching"
-                    : `${results.length} result${results.length === 1 ? "" : "s"}`}
+                    : `${results.length} ${currentViewLabel.toLowerCase()}${results.length === 1 ? "" : "s"}`}
                 </span>
               </div>
-              {results.map((s, i) => {
-                const title = s.title || s.summary || s.last_prompt || "Untitled";
+              {results.map((item, i) => {
+                const s = item.session;
+                const title = getSessionTitle(s);
                 const projectName = getProjectName(s);
                 const isActive = i === activeIdx;
-                const metadataPreview = matchesScopedSessionMetadata(s, parsedQuery)
-                  ? buildMetadataPreview(s, highlightQuery)
-                  : null;
-                const matchPreview = contentMatchPreviews.get(s.id) ?? metadataPreview;
+                let label = title;
+                let contextLabel = [projectName, s.id].filter(Boolean).join(" · ");
+                let metaLabel = `${s.rounds} rounds`;
+                let metaTitle = `${s.message_count} messages total`;
+
+                if (item.kind === "round") {
+                  label = `${roundLabel(item.hit)}${item.hit.role ? ` · ${item.hit.role}` : ""}`;
+                  contextLabel = [title, projectName].filter(Boolean).join(" · ");
+                  metaLabel = roundLabel(item.hit);
+                  metaTitle = item.hit.round_prompt || `${s.message_count} messages total`;
+                } else if (item.kind === "session") {
+                  const matchedRounds = item.matchedRoundCount ?? 0;
+                  metaLabel = matchedRounds > 0
+                    ? `${matchedRounds} matching round${matchedRounds === 1 ? "" : "s"}`
+                    : `${s.rounds} rounds`;
+                  metaTitle = `${s.message_count} messages total`;
+                } else {
+                  label = item.projectName;
+                  contextLabel = [item.projectPath, title].filter(Boolean).join(" · ");
+                  metaLabel = `${item.matchedSessionCount} session${item.matchedSessionCount === 1 ? "" : "s"}`;
+                  if (item.matchedRoundCount > 0) {
+                    metaLabel += ` · ${item.matchedRoundCount} round${item.matchedRoundCount === 1 ? "" : "s"}`;
+                  }
+                  metaTitle = item.projectPath || item.projectId;
+                }
+
+                const matchPreview = item.preview;
+                const timestamp = itemTimestampSeconds(item);
                 return (
                   <button
-                    key={s.id}
-                    onClick={() => onSelect(s)}
+                    key={item.key}
+                    onClick={() => onSelect(item)}
                     onMouseEnter={() => onResultMouseEnter(i)}
                     aria-current={isActive ? "true" : undefined}
                     className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
@@ -478,7 +743,7 @@ export default function SearchOverlay() {
                     <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-current opacity-50" />
                     <div className="min-w-0 flex-1">
                       <div className="truncate font-medium">
-                        <HighlightText text={title} query={highlightQuery} />
+                        <HighlightText text={label} query={highlightQuery} />
                       </div>
                       <div className="mt-0.5 min-w-0 text-[11px] text-muted-foreground/75">
                         {matchPreview ? (
@@ -487,21 +752,23 @@ export default function SearchOverlay() {
                           </span>
                         ) : (
                           <div className="flex min-w-0 items-center gap-2">
-                            {projectName && (
+                            {contextLabel && (
                               <span className="truncate">
-                                <HighlightText text={projectName} query={highlightQuery} />
+                                <HighlightText text={contextLabel} query={highlightQuery} />
                               </span>
                             )}
-                            <span className="min-w-0 truncate font-mono">
-                              <HighlightText text={s.id} query={highlightQuery} />
-                            </span>
                           </div>
                         )}
                       </div>
+                      {contextLabel && matchPreview ? (
+                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground/60">
+                          <HighlightText text={contextLabel} query={highlightQuery} />
+                        </div>
+                      ) : null}
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-0.5 text-[10px] text-muted-foreground tabular-nums">
-                      <span title={formatDate(s.last_modified)}>{formatRelativeTime(s.last_modified)}</span>
-                      <span title={`${s.message_count} messages total`}>{s.rounds} rounds</span>
+                      <span title={formatDate(timestamp)}>{formatRelativeTime(timestamp)}</span>
+                      <span title={metaTitle}>{metaLabel}</span>
                     </div>
                   </button>
                 );

@@ -4,6 +4,7 @@ export type SearchScope =
   | "content"
   | "title"
   | "summary"
+  | "round"
   | "prompt"
   | "assistant"
   | "project"
@@ -15,12 +16,19 @@ export interface ScopedSearchTerm {
   text: string;
 }
 
+type SearchExpression =
+  | { type: "term"; term: ScopedSearchTerm }
+  | { type: "and"; children: SearchExpression[] }
+  | { type: "or"; children: SearchExpression[] }
+  | { type: "not"; child: SearchExpression };
+
 export interface ParsedScopedSearchQuery {
   raw: string;
   terms: ScopedSearchTerm[];
   defaultScopes: SearchScope[];
   highlightQuery: string;
   hasScopes: boolean;
+  expression: SearchExpression | null;
 }
 
 const SEARCH_SCOPE_ALIASES: Record<string, SearchScope> = {
@@ -32,6 +40,10 @@ const SEARCH_SCOPE_ALIASES: Record<string, SearchScope> = {
   name: "title",
   title: "title",
   summary: "summary",
+  round: "round",
+  roundprompt: "round",
+  turn: "round",
+  turnprompt: "round",
   latestprompt: "prompt",
   lastprompt: "prompt",
   prompt: "prompt",
@@ -84,6 +96,15 @@ function tokenizeSearchQuery(query: string) {
       continue;
     }
 
+    if (!quote && (ch === "(" || ch === ")")) {
+      if (current) {
+        tokens.push(current);
+        current = "";
+      }
+      tokens.push(ch);
+      continue;
+    }
+
     if (/\s/.test(ch) && !quote) {
       if (current) {
         tokens.push(current);
@@ -123,6 +144,188 @@ function stripQueryValue(value: string) {
     .trim();
 }
 
+function normalizeSearchOperator(token: string) {
+  if (token === "&&") return "AND";
+  if (token === "|" || token === "||") return "OR";
+  if (SEARCH_OPERATORS.has(token)) return token;
+  return null;
+}
+
+function combineExpression(
+  type: "and" | "or",
+  children: Array<SearchExpression | null>
+): SearchExpression | null {
+  const compact = children.filter((child): child is SearchExpression => Boolean(child));
+  if (compact.length === 0) return null;
+  if (compact.length === 1) return compact[0];
+  return { type, children: compact };
+}
+
+function negateExpression(child: SearchExpression | null): SearchExpression | null {
+  if (!child) return null;
+  if (child.type === "not") return child.child;
+  return { type: "not", child };
+}
+
+function parseScopedGroupToken(token: string) {
+  let value = token;
+  let negated = false;
+
+  while (value.startsWith("+") || value.startsWith("-")) {
+    if (value.startsWith("-")) negated = !negated;
+    value = value.slice(1);
+  }
+
+  if (!value.endsWith(":")) return null;
+  const scope = canonicalSearchScope(value.slice(0, -1));
+  if (!scope) return null;
+  return { scope, negated };
+}
+
+function parseTermToken(token: string, groupScope: SearchScope | null): SearchExpression | null {
+  let value = token;
+  let negated = false;
+
+  while (value.startsWith("+") || value.startsWith("-")) {
+    if (value.startsWith("-")) negated = !negated;
+    value = value.slice(1);
+  }
+
+  const qualifier = splitQualifier(value);
+  if (qualifier) {
+    const [field, qualifierValue] = qualifier;
+    if (normalizeScopeName(field) === "in") return null;
+
+    const scope = canonicalSearchScope(field);
+    if (scope) {
+      const text = stripQueryValue(qualifierValue);
+      if (!text) return null;
+      const expression: SearchExpression = { type: "term", term: { scope, text } };
+      return negated ? negateExpression(expression) : expression;
+    }
+  }
+
+  const text = stripQueryValue(value);
+  if (!text || normalizeSearchOperator(value)) return null;
+
+  const expression: SearchExpression = { type: "term", term: { scope: groupScope, text } };
+  return negated ? negateExpression(expression) : expression;
+}
+
+class SearchExpressionParser {
+  private index = 0;
+
+  constructor(private readonly tokens: string[]) {}
+
+  parse() {
+    return this.parseOr(null);
+  }
+
+  private peek() {
+    return this.tokens[this.index];
+  }
+
+  private advance() {
+    return this.tokens[this.index++];
+  }
+
+  private matchOperator(operator: "AND" | "OR" | "NOT") {
+    if (normalizeSearchOperator(this.peek() ?? "") !== operator) return false;
+    this.index += 1;
+    return true;
+  }
+
+  private parseOr(groupScope: SearchScope | null): SearchExpression | null {
+    const children: Array<SearchExpression | null> = [this.parseAnd(groupScope)];
+
+    while (this.matchOperator("OR")) {
+      children.push(this.parseAnd(groupScope));
+    }
+
+    return combineExpression("or", children);
+  }
+
+  private parseAnd(groupScope: SearchScope | null): SearchExpression | null {
+    const children: Array<SearchExpression | null> = [];
+
+    while (this.index < this.tokens.length) {
+      const token = this.peek();
+      if (!token || token === ")" || normalizeSearchOperator(token) === "OR") break;
+      if (this.matchOperator("AND")) continue;
+      children.push(this.parseUnary(groupScope));
+    }
+
+    return combineExpression("and", children);
+  }
+
+  private parseUnary(groupScope: SearchScope | null): SearchExpression | null {
+    if (this.matchOperator("NOT")) {
+      return negateExpression(this.parseUnary(groupScope));
+    }
+
+    if (this.peek() === "-") {
+      this.advance();
+      return negateExpression(this.parseUnary(groupScope));
+    }
+
+    if (this.peek() === "+") {
+      this.advance();
+      return this.parseUnary(groupScope);
+    }
+
+    return this.parsePrimary(groupScope);
+  }
+
+  private parsePrimary(groupScope: SearchScope | null): SearchExpression | null {
+    const token = this.peek();
+    if (!token) return null;
+
+    const scopedGroup = parseScopedGroupToken(token);
+    if (scopedGroup && this.tokens[this.index + 1] === "(") {
+      this.index += 2;
+      const expression = this.parseOr(scopedGroup.scope);
+      if (this.peek() === ")") this.advance();
+      return scopedGroup.negated ? negateExpression(expression) : expression;
+    }
+
+    if (token === "(") {
+      this.advance();
+      const expression = this.parseOr(groupScope);
+      if (this.peek() === ")") this.advance();
+      return expression;
+    }
+
+    if (token === ")") return null;
+
+    return parseTermToken(this.advance(), groupScope);
+  }
+}
+
+function isDefaultScopeDirective(token: string) {
+  const qualifier = splitQualifier(token);
+  return Boolean(qualifier && normalizeScopeName(qualifier[0]) === "in");
+}
+
+function collectExpressionTerms(
+  expression: SearchExpression | null,
+  options: { positiveOnly?: boolean } = {},
+  positive = true
+): ScopedSearchTerm[] {
+  if (!expression) return [];
+
+  switch (expression.type) {
+    case "term":
+      return !options.positiveOnly || positive ? [expression.term] : [];
+    case "not":
+      return collectExpressionTerms(expression.child, options, !positive);
+    case "and":
+    case "or":
+      return expression.children.flatMap((child) =>
+        collectExpressionTerms(child, options, positive)
+      );
+  }
+}
+
 function uniqueScopes(scopes: SearchScope[]) {
   return scopes.filter((scope, index) => scopes.indexOf(scope) === index);
 }
@@ -139,32 +342,18 @@ export function parseScopedSearchQuery(query: string): ParsedScopedSearchQuery {
       .filter((scope): scope is SearchScope => Boolean(scope));
   }));
 
-  const terms: ScopedSearchTerm[] = [];
-  let hasScopes = defaultScopes.length > 0;
+  const expressionTokens = tokens.filter((token) => !isDefaultScopeDirective(token));
+  const expression = new SearchExpressionParser(expressionTokens).parse();
+  const terms = collectExpressionTerms(expression);
+  const highlightTerms = collectExpressionTerms(expression, { positiveOnly: true });
+  const hasScopes = defaultScopes.length > 0 || terms.some((term) => Boolean(term.scope));
 
-  for (const token of tokens) {
-    const qualifier = splitQualifier(token);
-    if (qualifier) {
-      const [field, value] = qualifier;
-      if (normalizeScopeName(field) === "in") continue;
+  const highlightQuery = (highlightTerms.length > 0 ? highlightTerms : terms)
+    .map((term) => term.text)
+    .join(" ")
+    .trim() || raw;
 
-      const scope = canonicalSearchScope(field);
-      if (scope) {
-        const text = stripQueryValue(value);
-        if (text) terms.push({ scope, text });
-        hasScopes = true;
-        continue;
-      }
-    }
-
-    const text = stripQueryValue(token);
-    if (text && !SEARCH_OPERATORS.has(text.toUpperCase())) {
-      terms.push({ scope: null, text });
-    }
-  }
-
-  const highlightQuery = terms.map((term) => term.text).join(" ").trim() || raw;
-  return { raw, terms, defaultScopes, highlightQuery, hasScopes };
+  return { raw, terms, defaultScopes, highlightQuery, hasScopes, expression };
 }
 
 function normalizeSearchValue(value: string | null | undefined) {
@@ -194,6 +383,7 @@ function scopedSessionValues(session: Session, scope: SearchScope) {
     case "source":
       return [session.source];
     case "content":
+    case "round":
     case "assistant":
       return [];
   }
@@ -215,16 +405,74 @@ function termMatchesScope(session: Session, scope: SearchScope, text: string) {
   );
 }
 
-export function matchesScopedSessionMetadata(session: Session, parsed: ParsedScopedSearchQuery) {
-  if (parsed.terms.length === 0) return false;
+type MetadataMatchState = "match" | "miss" | "unknown";
 
-  return parsed.terms.every((term) => {
-    const scopes = term.scope
-      ? [term.scope]
-      : parsed.defaultScopes.length > 0
-        ? parsed.defaultScopes
-        : METADATA_SCOPES;
+function invertMetadataMatchState(state: MetadataMatchState): MetadataMatchState {
+  if (state === "unknown") return "unknown";
+  return state === "match" ? "miss" : "match";
+}
 
-    return scopes.some((scope) => termMatchesScope(session, scope, term.text));
+function combineAndMatchState(states: MetadataMatchState[]): MetadataMatchState {
+  if (states.some((state) => state === "miss")) return "miss";
+  if (states.some((state) => state === "unknown")) return "unknown";
+  return "match";
+}
+
+function combineOrMatchState(states: MetadataMatchState[]): MetadataMatchState {
+  if (states.some((state) => state === "match")) return "match";
+  if (states.some((state) => state === "unknown")) return "unknown";
+  return "miss";
+}
+
+function termMatchesMetadata(
+  session: Session,
+  parsed: ParsedScopedSearchQuery,
+  term: ScopedSearchTerm
+): MetadataMatchState {
+  const scopes = term.scope
+    ? [term.scope]
+    : parsed.defaultScopes.length > 0
+      ? parsed.defaultScopes
+      : METADATA_SCOPES;
+
+  const canMatchContent = term.scope === null
+    ? parsed.defaultScopes.length === 0
+      || parsed.defaultScopes.some((scope) => scope === "content" || scope === "round" || scope === "assistant")
+    : term.scope === "content" || term.scope === "round" || term.scope === "assistant";
+
+  const matched = scopes.some((scope) => {
+    if (scope === "content" || scope === "round" || scope === "assistant") return false;
+    return termMatchesScope(session, scope, term.text);
   });
+
+  if (matched) return "match";
+  return canMatchContent ? "unknown" : "miss";
+}
+
+function evaluateMetadataExpression(
+  session: Session,
+  parsed: ParsedScopedSearchQuery,
+  expression: SearchExpression
+): MetadataMatchState {
+  switch (expression.type) {
+    case "term":
+      return termMatchesMetadata(session, parsed, expression.term);
+    case "not":
+      return invertMetadataMatchState(
+        evaluateMetadataExpression(session, parsed, expression.child)
+      );
+    case "and":
+      return combineAndMatchState(
+        expression.children.map((child) => evaluateMetadataExpression(session, parsed, child))
+      );
+    case "or":
+      return combineOrMatchState(
+        expression.children.map((child) => evaluateMetadataExpression(session, parsed, child))
+      );
+  }
+}
+
+export function matchesScopedSessionMetadata(session: Session, parsed: ParsedScopedSearchQuery) {
+  if (!parsed.expression) return false;
+  return evaluateMetadataExpression(session, parsed, parsed.expression) === "match";
 }

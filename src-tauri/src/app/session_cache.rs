@@ -56,7 +56,7 @@ pub(crate) struct SessionsCache {
     pub(crate) entries: Vec<SessionCacheEntry>,
 }
 
-pub(crate) const SESSIONS_CACHE_VERSION: u32 = 2;
+pub(crate) const SESSIONS_CACHE_VERSION: u32 = 3;
 
 pub(crate) fn sessions_cache_path() -> PathBuf {
     get_lovstudio_dir().join("sessions-cache.json")

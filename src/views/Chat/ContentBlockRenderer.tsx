@@ -16,6 +16,13 @@ import {
 import { CollapsibleContent } from "./CollapsibleContent";
 import { useFilePreview, type ImagePreviewItem } from "./FilePreviewContext";
 import { PathAwareText } from "./PathAwareText";
+import {
+  TraceChevron,
+  TraceIconSlot,
+  TraceMetaPill,
+  traceCardContainerClass,
+  traceCardTriggerClass,
+} from "./TraceCardPrimitives";
 import { usePathHits } from "./usePathHits";
 import type { ContentBlock, ToolResultImage } from "../../types";
 
@@ -411,22 +418,17 @@ function ToolInvocationCard({
   const parameterHits = usePathHits(expanded ? parameters : "", cwd);
   const outputHits = usePathHits(expanded ? outputDisplay : "", cwd);
   const rawHits = usePathHits(expanded && rawExpanded ? raw : "", cwd);
-  const containerClass = expanded
-    ? "my-1 overflow-hidden rounded-lg border border-border bg-card-alt/70"
-    : "my-0.5 overflow-hidden rounded-lg border border-transparent bg-transparent transition-colors hover:border-border/60 hover:bg-card-alt/40";
 
   return (
-    <div className={containerClass}>
+    <div className={traceCardContainerClass(expanded)}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className={`flex w-full min-w-0 items-center gap-1.5 text-left hover:bg-card-alt/60 ${
-          expanded ? "px-3 py-2" : "px-1.5 py-1"
-        }`}
+        className={traceCardTriggerClass(expanded)}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <TraceIconSlot>
           <Icon className="h-3.5 w-3.5" />
-        </span>
+        </TraceIconSlot>
         <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
           <span className="shrink-0 text-[11px] font-medium leading-5 text-muted-foreground">{action}</span>
           <span className="min-w-0 flex-1">
@@ -437,6 +439,11 @@ function ToolInvocationCard({
             )}
           </span>
         </div>
+        <div className="hidden max-w-[45%] items-center gap-1 sm:flex">
+          {results.length > 0 && <TraceMetaPill icon={<Wrench className="h-3 w-3" />} label={plural(results.length, "result")} />}
+          {images.length > 0 && <TraceMetaPill icon={<FileText className="h-3 w-3" />} label={plural(images.length, "image")} />}
+        </div>
+        <TraceChevron expanded={expanded} />
       </button>
       {expanded && (
         <div className="space-y-2 border-t border-border/60 px-3 py-2">
@@ -513,30 +520,29 @@ function ToolResultCard({
   const outputDisplay = textPreview(outputText, outputExpanded, OUTPUT_PREVIEW_LIMIT);
   const outputHits = usePathHits(expanded ? outputDisplay : "", cwd);
   const rawHits = usePathHits(expanded && rawExpanded ? raw : "", cwd);
-  const containerClass = expanded
-    ? "my-1 overflow-hidden rounded-lg border border-border bg-card-alt/70"
-    : "my-0.5 overflow-hidden rounded-lg border border-transparent bg-transparent transition-colors hover:border-border/60 hover:bg-card-alt/40";
 
   if (!hasOutput) return null;
 
   return (
-    <div className={containerClass}>
+    <div className={traceCardContainerClass(expanded)}>
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        className={`flex w-full min-w-0 items-center gap-1.5 text-left hover:bg-card-alt/60 ${
-          expanded ? "px-3 py-2" : "px-1.5 py-1"
-        }`}
+        className={traceCardTriggerClass(expanded)}
       >
-        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+        <TraceIconSlot>
           <Wrench className="h-3.5 w-3.5" />
-        </span>
+        </TraceIconSlot>
         <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
           <span className="shrink-0 text-[11px] font-medium leading-5 text-muted-foreground">Tool output</span>
           <span className="block min-w-0 flex-1 truncate font-mono text-[13px] leading-5 text-foreground">
             {result.tool_use_id}
           </span>
         </div>
+        <div className="hidden max-w-[45%] items-center gap-1 sm:flex">
+          {images.length > 0 && <TraceMetaPill icon={<FileText className="h-3 w-3" />} label={plural(images.length, "image")} />}
+        </div>
+        <TraceChevron expanded={expanded} />
       </button>
       {expanded && (
         <div className="space-y-2 border-t border-border/60 px-3 py-2">
@@ -679,41 +685,33 @@ function ToolRunCluster({
   const accessibleLabel = [summary.countLabel, summary.metaLabel].filter(Boolean).join(" · ");
 
   return (
-    <div
-      className={
-        expanded
-          ? "my-0.5 overflow-hidden rounded-xl bg-card-alt/40"
-          : "my-0 overflow-hidden rounded-lg bg-transparent"
-      }
-    >
+    <div className={traceCardContainerClass(expanded)}>
       <button
         type="button"
         aria-expanded={expanded}
         aria-label={accessibleLabel}
         onClick={() => setExpanded(!expanded)}
-        className="flex h-3 w-full min-w-0 items-center justify-start px-0 py-0"
+        className={traceCardTriggerClass(expanded)}
         title={accessibleLabel}
       >
-        {expanded ? (
-          <span className="flex min-w-0 flex-1 items-center gap-2">
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-              <Wrench className="h-3.5 w-3.5" />
-            </span>
-            <span className="min-w-0 flex-1 truncate text-left text-[11px] font-medium leading-5 text-muted-foreground">
-              {summary.countLabel}
-              {summary.metaLabel ? ` · ${summary.metaLabel}` : ""}
-            </span>
-            <ChevronDown className="h-3.5 w-3.5 shrink-0 rotate-180 text-muted-foreground transition-transform" />
+        <TraceIconSlot>
+          <Wrench className="h-3.5 w-3.5" />
+        </TraceIconSlot>
+        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span className="shrink-0 text-[11px] font-medium leading-5 text-muted-foreground">Tools</span>
+          <span className="block min-w-0 flex-1 truncate font-mono text-[13px] leading-5 text-foreground">
+            {summary.countLabel}
           </span>
-        ) : (
-          <span
-            className="block h-px w-10 rounded-full bg-muted-foreground/25"
-            aria-hidden="true"
-          />
+        </div>
+        {summary.metaLabel && (
+          <div className="hidden max-w-[45%] items-center gap-1 sm:flex">
+            <TraceMetaPill icon={<FileText className="h-3 w-3" />} label={summary.metaLabel} />
+          </div>
         )}
+        <TraceChevron expanded={expanded} />
       </button>
       {expanded && (
-        <div className="space-y-1 p-1.5 pt-0">
+        <div className="space-y-1 border-t border-border/60 px-3 py-2">
           {items.map((item) => (
             <ContentRenderItem
               key={item.key}

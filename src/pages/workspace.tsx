@@ -1033,6 +1033,7 @@ export default function AgentWorkspacePage() {
   const routeSessionListMode: SessionListMode = searchParams.get("view") === "archived" ? "archived" : "active";
   const routeHasSessionListMode = searchParams.has("view");
   const routeProjectId = searchParams.get("projectId");
+  const routeProjectPath = searchParams.get("projectPath");
   const routeSessionId = searchParams.get("sessionId");
   const routeSelectionKey = routeSessionId ? `${routeProjectId ?? ""}:${routeSessionId}` : null;
   const { data: projects = [] } = useInvokeQuery<Project[]>(["projects"], "list_projects");
@@ -1134,6 +1135,7 @@ export default function AgentWorkspacePage() {
   );
   const restoredConversationIdRef = useRef<string | null>(null);
   const routeSelectionRestoredRef = useRef<string | null>(null);
+  const routeProjectDetailsRestoredRef = useRef<string | null>(null);
   const projectDetailsOpenRef = useRef(false);
   const routeSessionListModeRef = useRef(routeSessionListMode);
   const exportLoadSeqRef = useRef(0);
@@ -3411,6 +3413,46 @@ export default function AgentWorkspacePage() {
     persist(nextState).catch(console.error);
   };
 
+  useEffect(() => {
+    if (!routeProjectPath || routeSessionId) {
+      routeProjectDetailsRestoredRef.current = null;
+      return;
+    }
+    if (!loaded || loadingHistorySessions) return;
+
+    const routeKey = getProjectGroupKey(routeProjectPath, mergeWorktrees) || normalizeProjectPath(routeProjectPath);
+    if (!routeKey) return;
+
+    const targetPath =
+      projectPaths.find((path) => getProjectGroupKey(path, mergeWorktrees) === routeKey) ??
+      allWorkbenchRows.find((row) => getProjectGroupKey(row.projectPath, mergeWorktrees) === routeKey)?.projectPath ??
+      projects.find((project) => getProjectGroupKey(project.path, mergeWorktrees) === routeKey)?.path ??
+      routeProjectPath;
+    const targetKey = getProjectGroupKey(targetPath, mergeWorktrees) || normalizeProjectPath(targetPath);
+    const currentKey = getProjectGroupKey(selectedProjectDetailsPath, mergeWorktrees);
+
+    if (
+      routeProjectDetailsRestoredRef.current === targetKey &&
+      selectedProjectDetailsPath &&
+      currentKey === targetKey
+    ) {
+      return;
+    }
+
+    routeProjectDetailsRestoredRef.current = targetKey;
+    openProjectDetails(targetPath);
+  }, [
+    routeProjectPath,
+    routeSessionId,
+    loaded,
+    loadingHistorySessions,
+    projectPaths,
+    allWorkbenchRows,
+    projects,
+    mergeWorktrees,
+    selectedProjectDetailsPath,
+  ]);
+
   const activePtyId = activeSession?.ptyId ?? null;
   const activePtyStatusKnown = activePtyId ? ptyStatus.has(activePtyId) : true;
   const activePtyExists = activePtyId ? Boolean(ptyStatus.get(activePtyId)) : false;
@@ -3631,10 +3673,11 @@ export default function AgentWorkspacePage() {
     restoredConversationIdRef.current = null;
     routeSelectionRestoredRef.current = routeSelectionKey;
     setPersistedActiveConversationId(null);
-    if (routeProjectId || routeSessionId) {
+    if (routeProjectId || routeProjectPath || routeSessionId) {
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.delete("projectId");
+        next.delete("projectPath");
         next.delete("sessionId");
         return next;
       }, { replace: true });

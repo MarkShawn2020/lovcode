@@ -19,25 +19,42 @@ export const chatSearchOpenAtom = atom(false);
 const SYSTEM_HOTKEY = "CmdOrCtrl+K";
 const SEARCH_WINDOW_LABEL = "search";
 
-function getSessionSelectionPath(session: Pick<Session, "project_id" | "id">): string {
-  return `/workbench?projectId=${encodeURIComponent(session.project_id)}&sessionId=${encodeURIComponent(session.id)}`;
+function getSessionSelectionPath(
+  session: Pick<Session, "project_id" | "id">,
+  options: { messageId?: string | null; highlight?: string | null } = {},
+): string {
+  const params = new URLSearchParams({
+    projectId: session.project_id,
+    sessionId: session.id,
+  });
+  if (options.messageId) params.set("messageId", options.messageId);
+  if (options.highlight) params.set("q", options.highlight);
+  return `/workbench?${params.toString()}`;
 }
 
-async function toggleSearchWindow() {
+function getProjectSelectionPath(project: { projectId?: string | null; projectPath: string }): string {
+  const params = new URLSearchParams({ projectPath: project.projectPath });
+  if (project.projectId) params.set("projectId", project.projectId);
+  return `/workbench?${params.toString()}`;
+}
+
+async function toggleSearchWindow(): Promise<boolean> {
   try {
     const win = await Window.getByLabel(SEARCH_WINDOW_LABEL);
-    if (!win) return;
+    if (!win) return false;
     if (await win.isVisible()) {
       await win.hide();
-      return;
+      return true;
     }
     await win.center();
     await win.show();
     await win.setFocus();
     // Tell the overlay to clear its query and re-focus the input.
     emit("search-overlay:show").catch(() => {});
+    return true;
   } catch (err) {
     console.warn("[search-window] toggle failed:", err);
+    return false;
   }
 }
 
@@ -60,22 +77,42 @@ export function GlobalChatSearch() {
   // Listen for navigation requests emitted by the overlay window. Only the
   // main window has a viewAtom, so this handler stays here.
   useEffect(() => {
-    const unlisten = listen<{
+    const unlistenChat = listen<{
       projectId: string;
       projectPath: string;
       sessionId: string;
       summary: string | null;
+      messageId?: string | null;
+      highlight?: string | null;
     }>("open-chat", (e) => {
       navigate(getSessionSelectionPath({
         project_id: e.payload.projectId,
         id: e.payload.sessionId,
+      }, {
+        messageId: e.payload.messageId,
+        highlight: e.payload.highlight,
       }));
       const main = getCurrentWindow();
       main.show().catch(() => {});
       main.unminimize().catch(() => {});
       main.setFocus().catch(() => {});
     });
-    return () => { unlisten.then((fn) => fn()).catch(() => {}); };
+
+    const unlistenProject = listen<{
+      projectId?: string | null;
+      projectPath: string;
+    }>("open-project", (e) => {
+      navigate(getProjectSelectionPath(e.payload));
+      const main = getCurrentWindow();
+      main.show().catch(() => {});
+      main.unminimize().catch(() => {});
+      main.setFocus().catch(() => {});
+    });
+
+    return () => {
+      unlistenChat.then((fn) => fn()).catch(() => {});
+      unlistenProject.then((fn) => fn()).catch(() => {});
+    };
   }, [navigate]);
 
   // Window-level ⌘K. When the system hotkey is on, we still keep this so that
@@ -89,7 +126,9 @@ export function GlobalChatSearch() {
         if (systemHotkey) {
           toggleSearchWindow();
         } else {
-          setOpen(true);
+          toggleSearchWindow().then((handled) => {
+            if (!handled) setOpen(true);
+          });
         }
       }
     };
@@ -123,11 +162,22 @@ export function GlobalChatSearch() {
 
   useEffect(() => {
     if (open) {
-      requestAnimationFrame(() => inputRef.current?.focus());
+      let cancelled = false;
+      toggleSearchWindow().then((handled) => {
+        if (cancelled) return;
+        if (handled) {
+          setOpen(false);
+        } else {
+          requestAnimationFrame(() => inputRef.current?.focus());
+        }
+      });
+      return () => {
+        cancelled = true;
+      };
     } else {
       setQuery("");
     }
-  }, [open]);
+  }, [open, setOpen]);
 
   // Build search index lazily on first open.
   useEffect(() => {

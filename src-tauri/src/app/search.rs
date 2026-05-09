@@ -9,6 +9,7 @@ pub(crate) struct SearchResult {
     pub uuid: String,
     pub content: String,
     pub role: String,
+    pub line_number: usize,
     pub project_id: String,
     pub project_path: String,
     pub session_id: String,
@@ -16,6 +17,9 @@ pub(crate) struct SearchResult {
     pub title: Option<String>,
     pub summary: Option<String>,
     pub last_prompt: Option<String>,
+    pub round_index: usize,
+    pub round_prompt: Option<String>,
+    pub round_timestamp: Option<String>,
     pub timestamp: String,
     pub score: f32,
 }
@@ -60,6 +64,10 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
         let session_id_field = schema.get_field("session_id").unwrap();
         let session_summary_field = schema.get_field("session_summary").unwrap();
         let timestamp_field = schema.get_field("timestamp").unwrap();
+        let line_number_field = schema.get_field("line_number").unwrap();
+        let round_index_field = schema.get_field("round_index").unwrap();
+        let round_prompt_field = schema.get_field("round_prompt").unwrap();
+        let round_timestamp_field = schema.get_field("round_timestamp").unwrap();
 
         let projects_dir = get_claude_dir().join("projects");
         let mut indexed_count = 0;
@@ -157,8 +165,13 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                             }
                         }
 
-                        // Second pass: index messages + collect command stats
-                        for line in file_content.lines() {
+                        // Second pass: index messages + collect command stats.
+                        // A round starts at each real user prompt; tool results inherit
+                        // the current round so searches can surface the actual turn.
+                        let mut round_index = 0usize;
+                        let mut round_prompt = String::new();
+                        let mut round_timestamp = String::new();
+                        for (line_idx, line) in file_content.lines().enumerate() {
                             if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
                                 let line_type = parsed.line_type.as_deref();
 
@@ -167,8 +180,18 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                                     if let Some(msg) = &parsed.message {
                                         let role = msg.role.clone().unwrap_or_default();
                                         if role == "user" || role == "assistant" {
-                                            let (text_content, _) = extract_content_with_meta(&msg.content);
+                                            let (text_content, is_tool) = extract_content_with_meta(&msg.content);
                                             let is_meta = parsed.is_meta.unwrap_or(false);
+                                            if !is_meta
+                                                && !is_tool
+                                                && role == "user"
+                                                && !text_content.is_empty()
+                                            {
+                                                round_index += 1;
+                                                round_prompt = text_content.clone();
+                                                round_timestamp =
+                                                    parsed.timestamp.clone().unwrap_or_default();
+                                            }
 
                                             if !is_meta
                                                 && !text_content.is_empty()
@@ -203,6 +226,10 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                                                     session_id_field => session_id.clone(),
                                                     session_summary_field => summary_text,
                                                     timestamp_field => parsed.timestamp.clone().unwrap_or_default(),
+                                                    line_number_field => (line_idx + 1) as u64,
+                                                    round_index_field => round_index as u64,
+                                                    round_prompt_field => round_prompt.clone(),
+                                                    round_timestamp_field => round_timestamp.clone(),
                                                 )).map_err(|e| e.to_string())?;
 
                                                 indexed_count += 1;
@@ -256,9 +283,18 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                 .or_else(|| session.last_prompt.clone())
                 .unwrap_or_default();
 
+            let mut round_index = 0usize;
+            let mut round_prompt = String::new();
+            let mut round_timestamp = String::new();
+
             for message in messages {
                 if message.content.trim().is_empty() {
                     continue;
+                }
+                if message.role == "user" && !message.is_tool && !message.is_meta {
+                    round_index += 1;
+                    round_prompt = message.content.clone();
+                    round_timestamp = message.timestamp.clone();
                 }
                 let prompt_text = if message.role == "user" {
                     message.content.clone()
@@ -287,6 +323,10 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                     session_id_field => session.id.clone(),
                     session_summary_field => session_summary.clone(),
                     timestamp_field => message.timestamp,
+                    line_number_field => message.line_number as u64,
+                    round_index_field => round_index as u64,
+                    round_prompt_field => round_prompt.clone(),
+                    round_timestamp_field => round_timestamp.clone(),
                 )).map_err(|e| e.to_string())?;
 
                 indexed_count += 1;
@@ -352,6 +392,14 @@ fn tokenize_search_query(query: &str) -> Vec<String> {
             continue;
         }
 
+        if quote.is_none() && matches!(ch, '(' | ')') {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            tokens.push(ch.to_string());
+            continue;
+        }
+
         if ch.is_whitespace() && quote.is_none() {
             if !current.is_empty() {
                 tokens.push(std::mem::take(&mut current));
@@ -399,6 +447,7 @@ fn canonical_search_field(scope: &str, schema: &Schema) -> Option<&'static str> 
         "title" | "name" => "title",
         "summary" => "summary",
         "lastprompt" | "latestprompt" => "last_prompt",
+        "round" | "roundprompt" | "turn" | "turnprompt" => "round_prompt",
         "prompt" | "prompts" | "user" | "userprompt" | "userprompts" | "question" => "prompt",
         "ai" | "assistant" | "answer" | "response" | "reply" => "assistant",
         "project" | "projectpath" | "path" | "cwd" | "directory" => "project",
@@ -417,26 +466,69 @@ fn push_unique_scope(scopes: &mut Vec<&'static str>, scope: &'static str) {
     }
 }
 
-fn is_query_operator(token: &str) -> bool {
-    matches!(token.to_ascii_uppercase().as_str(), "AND" | "OR" | "NOT")
+fn normalize_query_operator(token: &str) -> Option<&'static str> {
+    match token {
+        "AND" | "&&" => Some("AND"),
+        "OR" | "|" | "||" => Some("OR"),
+        "NOT" => Some("NOT"),
+        _ => None,
+    }
+}
+
+fn split_occur_prefix(token: &str) -> (&str, &str) {
+    match token.as_bytes().first().copied() {
+        Some(b'+') | Some(b'-') if token.len() > 1 => (&token[..1], &token[1..]),
+        _ => ("", token),
+    }
+}
+
+fn scoped_group_token(token: &str, schema: &Schema) -> Option<(String, &'static str)> {
+    let (occur, value) = split_occur_prefix(token);
+    let field = value.strip_suffix(':')?;
+    canonical_search_field(field, schema).map(|scope| (occur.to_string(), scope))
+}
+
+fn peel_grouping(token: &str) -> (String, &str, String) {
+    let mut start = 0;
+    let mut end = token.len();
+    let mut prefix = String::new();
+    let mut suffix = String::new();
+
+    while start < end && token[start..end].starts_with('(') {
+        prefix.push('(');
+        start += 1;
+    }
+
+    while start < end && token[start..end].ends_with(')') {
+        suffix.push(')');
+        end -= 1;
+    }
+
+    (prefix, &token[start..end], suffix)
 }
 
 fn expand_token_for_scopes(token: &str, scopes: &[&'static str]) -> String {
-    if scopes.is_empty()
-        || is_query_operator(token)
-        || token.starts_with('(')
-        || token.ends_with(')')
-    {
+    let (prefix, core, suffix) = peel_grouping(token);
+    if core.is_empty() {
         return token.to_string();
     }
 
-    let (prefix, value) = match token.as_bytes().first().copied() {
-        Some(b'+') | Some(b'-') if token.len() > 1 => (&token[..1], &token[1..]),
-        _ => ("", token),
-    };
+    if let Some(operator) = normalize_query_operator(core) {
+        return format!("{prefix}{operator}{suffix}");
+    }
+
+    if scopes.is_empty() {
+        return token.to_string();
+    }
+
+    if matches!(core, "+" | "-") {
+        return token.to_string();
+    }
+
+    let (occur, value) = split_occur_prefix(core);
 
     if scopes.len() == 1 {
-        return format!("{prefix}{}:{value}", scopes[0]);
+        return format!("{prefix}{occur}{}:{value}{suffix}", scopes[0]);
     }
 
     let clauses = scopes
@@ -444,7 +536,76 @@ fn expand_token_for_scopes(token: &str, scopes: &[&'static str]) -> String {
         .map(|scope| format!("{scope}:{value}"))
         .collect::<Vec<_>>()
         .join(" OR ");
-    format!("{prefix}({clauses})")
+    format!("{prefix}{occur}({clauses}){suffix}")
+}
+
+fn normalize_search_token(
+    token: &str,
+    default_scopes: &[&'static str],
+    schema: &Schema,
+) -> Option<String> {
+    let (prefix, core, suffix) = peel_grouping(token);
+    if core.is_empty() {
+        return Some(token.to_string());
+    }
+
+    if matches!(core, "+" | "-") {
+        return Some(token.to_string());
+    }
+
+    let (occur, value) = split_occur_prefix(core);
+
+    if let Some((field, value)) = split_search_qualifier(value) {
+        if normalize_scope_name(field) == "in" {
+            return None;
+        }
+        if let Some(canonical) = canonical_search_field(field, schema) {
+            return Some(format!("{prefix}{occur}{canonical}:{value}{suffix}"));
+        }
+    }
+
+    Some(expand_token_for_scopes(token, default_scopes))
+}
+
+fn normalize_search_tokens(
+    tokens: &[String],
+    index: &mut usize,
+    default_scopes: &[&'static str],
+    schema: &Schema,
+) -> Vec<String> {
+    let mut normalized = Vec::new();
+
+    while *index < tokens.len() {
+        let token = &tokens[*index];
+        if token == ")" {
+            *index += 1;
+            break;
+        }
+
+        if let Some((occur, scope)) = scoped_group_token(token, schema) {
+            if tokens.get(*index + 1).map(String::as_str) == Some("(") {
+                *index += 2;
+                let group_scopes = [scope];
+                let inner = normalize_search_tokens(tokens, index, &group_scopes, schema);
+                normalized.push(format!("{occur}({})", inner.join(" ")));
+                continue;
+            }
+        }
+
+        if token == "(" {
+            *index += 1;
+            let inner = normalize_search_tokens(tokens, index, default_scopes, schema);
+            normalized.push(format!("({})", inner.join(" ")));
+            continue;
+        }
+
+        if let Some(value) = normalize_search_token(token, default_scopes, schema) {
+            normalized.push(value);
+        }
+        *index += 1;
+    }
+
+    normalized
 }
 
 fn normalize_scoped_search_query(query: &str, schema: &Schema) -> String {
@@ -466,37 +627,15 @@ fn normalize_scoped_search_query(query: &str, schema: &Schema) -> String {
         }
     }
 
-    let normalized = tokens
-        .iter()
-        .filter_map(|token| {
-            if let Some((field, value)) = split_search_qualifier(token) {
-                if normalize_scope_name(field) == "in" {
-                    return None;
-                }
-                if let Some(canonical) = canonical_search_field(field, schema) {
-                    return Some(format!("{canonical}:{value}"));
-                }
-            }
-
-            Some(expand_token_for_scopes(token, &default_scopes))
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
+    let mut index = 0;
+    let normalized =
+        normalize_search_tokens(&tokens, &mut index, &default_scopes, schema).join(" ");
 
     if normalized.trim().is_empty() {
         query.trim().to_string()
     } else {
         normalized
     }
-}
-
-fn has_scoped_search_query(query: &str, schema: &Schema) -> bool {
-    tokenize_search_query(query).iter().any(|token| {
-        let Some((field, _)) = split_search_qualifier(token) else {
-            return false;
-        };
-        normalize_scope_name(field) == "in" || canonical_search_field(field, schema).is_some()
-    })
 }
 
 #[tauri::command]
@@ -539,22 +678,23 @@ pub(crate) fn search_chats(
         "title",
         "summary",
         "last_prompt",
+        "round_prompt",
     ]
     .iter()
     .filter_map(|name| search_index.schema.get_field(name).ok())
     .collect::<Vec<_>>();
 
     let normalized_query = normalize_scoped_search_query(&query, &search_index.schema);
-    let has_scopes = has_scoped_search_query(&query, &search_index.schema);
     let mut query_parser = QueryParser::for_index(&search_index.index, default_fields);
-    if has_scopes {
-        query_parser.set_conjunction_by_default();
-    }
+    query_parser.set_conjunction_by_default();
     if let Ok(title_field) = search_index.schema.get_field("title") {
         query_parser.set_field_boost(title_field, 2.0);
     }
     if let Ok(prompt_field) = search_index.schema.get_field("prompt") {
         query_parser.set_field_boost(prompt_field, 1.4);
+    }
+    if let Ok(round_prompt_field) = search_index.schema.get_field("round_prompt") {
+        query_parser.set_field_boost(round_prompt_field, 1.2);
     }
     let parsed_query = query_parser
         .parse_query(&normalized_query)
@@ -580,6 +720,15 @@ pub(crate) fn search_chats(
                 .unwrap_or("")
                 .to_string()
         };
+        let get_u64 = |field_name: &str| -> u64 {
+            search_index
+                .schema
+                .get_field(field_name)
+                .ok()
+                .and_then(|field| retrieved_doc.get_first(field))
+                .and_then(|v| TantivyValue::as_u64(&v))
+                .unwrap_or(0)
+        };
 
         let doc_project_id = get_text("project_id");
 
@@ -594,11 +743,14 @@ pub(crate) fn search_chats(
         let title = get_text("title");
         let scoped_summary = get_text("summary");
         let last_prompt = get_text("last_prompt");
+        let round_prompt = get_text("round_prompt");
+        let round_timestamp = get_text("round_timestamp");
 
         results.push(SearchResult {
             uuid: get_text("uuid"),
             content: get_text("content"),
             role: get_text("role"),
+            line_number: get_u64("line_number") as usize,
             project_id: doc_project_id,
             project_path: get_text("project_path"),
             session_id: get_text("session_id"),
@@ -617,6 +769,17 @@ pub(crate) fn search_chats(
                 None
             } else {
                 Some(last_prompt)
+            },
+            round_index: get_u64("round_index") as usize,
+            round_prompt: if round_prompt.is_empty() {
+                None
+            } else {
+                Some(round_prompt)
+            },
+            round_timestamp: if round_timestamp.is_empty() {
+                None
+            } else {
+                Some(round_timestamp)
             },
             timestamp: get_text("timestamp"),
             score,

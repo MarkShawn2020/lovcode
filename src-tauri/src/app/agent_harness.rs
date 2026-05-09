@@ -270,13 +270,21 @@ fn json_event_type(raw: &Value) -> Option<String> {
 fn json_item_id(raw: &Value) -> Option<String> {
     json_string(raw, &["id", "message_id", "item_id"])
         .or_else(|| raw.get("message").and_then(|v| json_string(v, &["id"])))
-        .or_else(|| raw.get("event")?.get("message").and_then(|v| json_string(v, &["id"])))
+        .or_else(|| {
+            raw.get("event")?
+                .get("message")
+                .and_then(|v| json_string(v, &["id"]))
+        })
         .or_else(|| raw.get("item").and_then(|v| json_string(v, &["id"])))
         .or_else(|| raw.get("payload").and_then(|v| json_string(v, &["id"])))
 }
 
 fn json_role(raw: &Value) -> Option<String> {
-    if let Some(item_type) = raw.get("item").and_then(|item| item.get("type")).and_then(Value::as_str) {
+    if let Some(item_type) = raw
+        .get("item")
+        .and_then(|item| item.get("type"))
+        .and_then(Value::as_str)
+    {
         return match item_type {
             "agent_message" => Some("assistant".to_string()),
             "command_execution" | "file_change" | "mcp_tool_call" | "web_search" | "todo_list" => {

@@ -354,15 +354,14 @@ pub(crate) async fn fetch_npm_versions_with_downloads(
         .build()
         .unwrap_or_default();
 
-    let versions = futures::future::join_all(
-        NPM_REGISTRY_FALLBACKS
-            .iter()
-            .map(|registry| fetch_npm_versions_from_registry(&client, registry, package_name, limit)),
-    )
-    .await
-    .into_iter()
-    .find(|versions| !versions.is_empty())
-    .unwrap_or_default();
+    let versions =
+        futures::future::join_all(NPM_REGISTRY_FALLBACKS.iter().map(|registry| {
+            fetch_npm_versions_from_registry(&client, registry, package_name, limit)
+        }))
+        .await
+        .into_iter()
+        .find(|versions| !versions.is_empty())
+        .unwrap_or_default();
 
     let downloads_package = package_name.replace('/', "%2F");
     let downloads_map: std::collections::HashMap<String, u64> = match client
