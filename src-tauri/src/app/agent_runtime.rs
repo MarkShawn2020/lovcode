@@ -436,35 +436,46 @@ pub(crate) fn find_cli_path(command_name: &str) -> Option<String> {
     let lookup = format!("command -v {} 2>/dev/null", command_name);
 
     let output = run_shell_command(&lookup).ok()?;
-    if !output.status.success() {
-        return None;
-    }
+    let found = if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let command_lower = command_name.to_lowercase();
+        let exe_suffix = format!("{}.exe", command_lower);
+        let plain_suffix = command_lower.clone();
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let command_lower = command_name.to_lowercase();
-    let exe_suffix = format!("{}.exe", command_lower);
-    let plain_suffix = command_lower.clone();
+        stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| {
+                if line.is_empty() {
+                    return false;
+                }
+                let normalized = line.replace('\\', "/").to_lowercase();
+                normalized == plain_suffix
+                    || normalized.ends_with(&format!("/{}", plain_suffix))
+                    || normalized.ends_with(&format!("/{}", exe_suffix))
+            })
+            .map(str::to_string)
+            .or_else(|| {
+                stdout
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty() && !line.chars().any(char::is_whitespace))
+                    .map(str::to_string)
+            })
+    } else {
+        None
+    };
 
-    stdout
-        .lines()
-        .map(str::trim)
-        .find(|line| {
-            if line.is_empty() {
-                return false;
-            }
-            let normalized = line.replace('\\', "/").to_lowercase();
-            normalized == plain_suffix
-                || normalized.ends_with(&format!("/{}", plain_suffix))
-                || normalized.ends_with(&format!("/{}", exe_suffix))
-        })
-        .map(str::to_string)
-        .or_else(|| {
-            stdout
-                .lines()
-                .map(str::trim)
-                .find(|line| !line.is_empty() && !line.chars().any(char::is_whitespace))
-                .map(str::to_string)
-        })
+    // Fallback: check ~/.local/bin which may not be in PATH but is where
+    // our npm --prefix ~/.local and native installs put binaries.
+    found.or_else(|| {
+        let local_bin = dirs::home_dir()?.join(".local/bin").join(command_name);
+        if local_bin.is_file() {
+            Some(local_bin.to_string_lossy().into_owned())
+        } else {
+            None
+        }
+    })
 }
 
 pub(crate) fn get_cli_version(path: &str) -> Option<String> {
