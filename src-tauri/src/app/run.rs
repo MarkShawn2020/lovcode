@@ -10,8 +10,24 @@ fn toggle_search_overlay(app: &tauri::AppHandle) {
     if visible {
         let _ = win.hide();
     } else {
+        // Re-apply the nonactivating-panel SPI every time we show. Cheap and
+        // idempotent. Crucially this runs BEFORE `win.show()` so the very
+        // first Cmd-K invocation behaves like Spotlight (no app activation).
+        // The frontend mount-time `invoke` is kept as a belt-and-braces hook
+        // for the case where the window is shown some other way.
+        #[cfg(target_os = "macos")]
+        install_overlay_panel(&win);
         let _ = win.center();
         let _ = win.show();
+        // On macOS, AVOID `win.set_focus()` — it calls
+        // `[NSApp activateIgnoringOtherApps:YES]` which would bring lovcode
+        // to the foreground. `show_overlay_keyed` only sends
+        // `makeKeyAndOrderFront:` to the NSWindow; combined with
+        // `_setPreventsActivation:YES` the WindowServer routes keyboard
+        // input here without changing the frontmost app.
+        #[cfg(target_os = "macos")]
+        show_overlay_keyed(&win);
+        #[cfg(not(target_os = "macos"))]
         let _ = win.set_focus();
         let _ = app.emit("search-overlay:show", ());
     }
@@ -77,6 +93,13 @@ pub fn run() {
 
             // Initialize PTY manager with app handle for event emission
             pty_manager::init(app.handle().clone());
+            // NOTE: we do NOT call `install_overlay_panel` here. Touching the
+            // search NSWindow during `applicationDidFinishLaunching` (which
+            // is what setup runs inside) panics through tao's non-unwindable
+            // extern "C" boundary on macOS 26. Instead, the frontend invokes
+            // `make_window_nonactivating_panel` from search-overlay.tsx on
+            // mount — by that point the NSWindow is fully realized and we
+            // can safely call `_setPreventsActivation:`.
 
             // Start watching distill directory for changes
             let app_handle = app.handle().clone();
