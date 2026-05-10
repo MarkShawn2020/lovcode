@@ -1,13 +1,64 @@
 use super::*;
 
+/// Toggle visibility of the floating search overlay window.
+/// Lives at the app level (not per-window) so it survives main-window close.
+fn toggle_search_overlay(app: &tauri::AppHandle) {
+    let Some(win) = app.get_webview_window("search") else {
+        return;
+    };
+    let visible = win.is_visible().unwrap_or(false);
+    if visible {
+        let _ = win.hide();
+    } else {
+        let _ = win.center();
+        let _ = win.show();
+        let _ = win.set_focus();
+        let _ = app.emit("search-overlay:show", ());
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
+
+    let toggle_search_shortcut = {
+        #[cfg(target_os = "macos")]
+        {
+            Shortcut::new(Some(Modifiers::SUPER), Code::KeyK)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Shortcut::new(Some(Modifiers::CONTROL), Code::KeyK)
+        }
+    };
+    println!(
+        "[Lovcode] registering global shortcut id={:?}",
+        toggle_search_shortcut.id()
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    println!(
+                        "[Lovcode] global-shortcut fired: {:?} state={:?}",
+                        shortcut,
+                        event.state()
+                    );
+                    if event.state() == ShortcutState::Pressed
+                        && shortcut == &toggle_search_shortcut
+                    {
+                        toggle_search_overlay(app);
+                    }
+                })
+                .with_shortcut(toggle_search_shortcut)
+                .expect("failed to declare CmdOrCtrl+K shortcut")
+                .build(),
+        )
         .setup(|app| {
             use tauri::menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder};
 

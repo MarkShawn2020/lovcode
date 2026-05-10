@@ -1,14 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { atom, useAtom, useAtomValue } from "jotai";
+import { atom, useAtom } from "jotai";
 import { useNavigate } from "react-router-dom";
 import { invoke } from "@/lib/tauri";
 import { Window, getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
-import { register, unregister, isRegistered } from "@tauri-apps/plugin-global-shortcut";
 import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
 import { useSessionsCache } from "../hooks";
 import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/searchScopes";
-import { globalChatSearchHotkeyAtom } from "../store";
 import type { Session } from "../types";
 import { useReadableText, formatDate } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
@@ -16,7 +14,6 @@ import { useI18n } from "@/i18n";
 
 export const chatSearchOpenAtom = atom(false);
 
-const SYSTEM_HOTKEY = "CmdOrCtrl+K";
 const SEARCH_WINDOW_LABEL = "search";
 
 function getSessionSelectionPath(
@@ -61,7 +58,6 @@ async function toggleSearchWindow(): Promise<boolean> {
 export function GlobalChatSearch() {
   const [open, setOpen] = useAtom(chatSearchOpenAtom);
   const navigate = useNavigate();
-  const systemHotkey = useAtomValue(globalChatSearchHotkeyAtom);
   const toReadable = useReadableText();
 
   // Read from the cache populated by ProjectList's useStreamedSessions instead
@@ -114,51 +110,6 @@ export function GlobalChatSearch() {
       unlistenProject.then((fn) => fn()).catch(() => {});
     };
   }, [navigate]);
-
-  // Window-level ⌘K. When the system hotkey is on, we still keep this so that
-  // pressing ⌘K while the main window is focused brings up the overlay
-  // window — same behavior as a system trigger, just no double-fire risk
-  // because the system shortcut takes precedence when the app is foreground.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        if (systemHotkey) {
-          toggleSearchWindow();
-        } else {
-          toggleSearchWindow().then((handled) => {
-            if (!handled) setOpen(true);
-          });
-        }
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [setOpen, systemHotkey]);
-
-  // System-level ⌘K — fires even when the app is in the background. Just
-  // shows the floating search window; the main window stays where it was.
-  useEffect(() => {
-    if (!systemHotkey) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        if (await isRegistered(SYSTEM_HOTKEY)) {
-          await unregister(SYSTEM_HOTKEY);
-        }
-        if (cancelled) return;
-        await register(SYSTEM_HOTKEY, (e) => {
-          if (e.state === "Pressed") toggleSearchWindow();
-        });
-      } catch (err) {
-        console.warn("[global-shortcut] register failed:", err);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      unregister(SYSTEM_HOTKEY).catch(() => {});
-    };
-  }, [systemHotkey]);
 
   useEffect(() => {
     if (open) {

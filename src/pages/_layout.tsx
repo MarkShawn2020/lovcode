@@ -30,7 +30,6 @@ import { useQueryClient } from "../hooks";
 import { useAtom } from "jotai";
 import {
   shortenPathsAtom,
-  globalChatSearchHotkeyAtom,
   composerSubmitShortcutAtom,
   type ComposerSubmitShortcut,
 } from "../store";
@@ -511,7 +510,6 @@ function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => vo
   const queryClient = useQueryClient();
   const { activeLanguage, languagePreference, locale, setLanguagePreference, systemLanguage, t, translate } = useI18n();
   const [autoCopy, setAutoCopy] = useState(getAutoCopyOnSelect);
-  const [globalChatSearchHotkey, setGlobalChatSearchHotkey] = useAtom(globalChatSearchHotkeyAtom);
   const [composerSubmitShortcut, setComposerSubmitShortcut] = useAtom(composerSubmitShortcutAtom);
   const [statusBarEnabled, setStatusBarEnabled] = useState(false);
   const [statusBarScript, setStatusBarScript] = useState("~/.lovstudio/lovcode/statusbar/default.sh");
@@ -805,13 +803,6 @@ function AppSettingsDialog({ open, onClose }: { open: boolean; onClose: () => vo
                       ))}
                     </SelectContent>
                   </Select>
-                </div>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-foreground">{t("settings.globalHotkey")}</p>
-                    <p className="text-xs text-muted-foreground">{t("settings.globalHotkeyDescription")}</p>
-                  </div>
-                  <Switch checked={globalChatSearchHotkey} onCheckedChange={setGlobalChatSearchHotkey} />
                 </div>
               </div>
             )}

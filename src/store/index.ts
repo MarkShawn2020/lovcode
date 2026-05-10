@@ -26,7 +26,6 @@ export {
 
 // Settings atoms
 export {
-  globalChatSearchHotkeyAtom,
   composerSubmitShortcutAtom,
   type ComposerSubmitShortcut,
 } from "./atoms/settings";

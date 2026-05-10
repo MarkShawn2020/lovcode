@@ -680,11 +680,6 @@ export const TRANSLATIONS = {
   "settings.closeSettings": { en: "Close settings", zh: "关闭设置" },
   "settings.shortenPaths": { en: "Shorten paths", zh: "缩短路径" },
   "settings.shortenPathsDescription": { en: "Replace home directory with ~", zh: "用 ~ 替换用户主目录" },
-  "settings.globalHotkey": { en: "Global ⌘K hotkey", zh: "全局 ⌘K 快捷键" },
-  "settings.globalHotkeyDescription": {
-    en: "Open chat search even when the app is in the background",
-    zh: "即使应用在后台，也可以打开对话搜索",
-  },
   "settings.languageDescription": {
     en: "Default follows your computer settings. Unsupported languages fall back to English.",
     zh: "默认跟随电脑系统设置。不支持的语言会回退到英语。",
