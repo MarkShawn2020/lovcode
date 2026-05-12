@@ -18,8 +18,28 @@ export interface SourceSummary {
   count: number;
 }
 
+export type ConnectorState = "ready" | "disabled" | "needs-config" | "error" | "unimplemented";
+
+export interface ConnectorInfo {
+  id: string;
+  name: string;
+  family: string;
+  icon: string | null;
+  state: ConnectorState;
+  endpoint:
+    | { kind: "local-path"; path: string }
+    | { kind: "url"; url: string }
+    | { kind: "none" };
+  discovered: number;
+  message: string | null;
+}
+
 export function listSources(): Promise<SourceSummary[]> {
   return invoke<SourceSummary[]>("list_sources");
+}
+
+export function listConnectors(): Promise<ConnectorInfo[]> {
+  return invoke<ConnectorInfo[]>("list_connectors");
 }
 
 export function search(args: {

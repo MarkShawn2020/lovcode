@@ -35,6 +35,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::ping,
             commands::list_sources,
+            commands::list_connectors,
             commands::search,
             commands::get_conversation,
             commands::rebuild_index,

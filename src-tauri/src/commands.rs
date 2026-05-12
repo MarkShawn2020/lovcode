@@ -1,6 +1,6 @@
 //! Tauri command wrappers — thin adapters over `lovcode-core`.
 
-use lovcode_core::adapter::builtin_adapters;
+use lovcode_core::connector::{builtin_connectors, ConnectorInfo};
 use lovcode_core::detail;
 use lovcode_core::index::{default_index_dir, LovcodeIndex};
 use lovcode_core::query;
@@ -31,14 +31,18 @@ pub struct SourceSummary {
 
 #[tauri::command]
 pub fn list_sources() -> Vec<SourceSummary> {
-    builtin_adapters()
+    builtin_connectors()
         .iter()
-        .map(|a| SourceSummary {
-            id: a.id().into(),
-            name: a.name().into(),
-            count: a.discover().map(|v| v.len()).unwrap_or(0),
+        .map(|c| {
+            let info = c.info();
+            SourceSummary { id: info.id, name: info.name, count: info.discovered }
         })
         .collect()
+}
+
+#[tauri::command]
+pub fn list_connectors() -> Vec<ConnectorInfo> {
+    builtin_connectors().iter().map(|c| c.info()).collect()
 }
 
 #[tauri::command]
@@ -68,11 +72,8 @@ pub fn get_conversation(id: String) -> Result<Conversation, String> {
 
 #[tauri::command]
 pub async fn rebuild_index() -> Result<usize, String> {
-    tokio::task::spawn_blocking(|| {
-        let adapters = builtin_adapters();
-        watcher::index_all(index(), &adapters)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map_err(|e| e.to_string())
+    tokio::task::spawn_blocking(|| watcher::index_all_via_connectors(index()))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
 }

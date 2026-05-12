@@ -1,3 +1,4 @@
+#![allow(clippy::new_without_default)]
 //! Lovcode core library: AI conversation search.
 //!
 //! See `docs/v0.40-rewrite-plan.md` for the design.
@@ -11,6 +12,7 @@
 
 pub mod types;
 pub mod adapter;
+pub mod connector;
 pub mod index;
 pub mod query;
 pub mod watcher;

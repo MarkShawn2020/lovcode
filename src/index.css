@@ -1,16 +1,85 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #F9F9F7;
-  --color-foreground: #181818;
-  --color-primary: #CC785C;
-  --color-primary-foreground: #FFFFFF;
-  --color-muted: #EFEDE6;
-  --color-muted-foreground: #6B6B68;
-  --color-border: #E8E6DC;
-  --color-card: #FFFFFF;
-  --font-serif: ui-serif, Georgia, "Songti SC", "STSong", serif;
+  /* Editorial archive palette: warm paper + ink + cinnabar accent. */
+  --color-paper:           #f1ece1;       /* dominant page tone */
+  --color-paper-deep:      #e6dfd0;       /* card/recess */
+  --color-paper-edge:      #d8d0bd;       /* hairline rules */
+  --color-ink:             #14110f;       /* primary text */
+  --color-ink-soft:        #5a544c;       /* secondary text */
+  --color-ink-faint:       #8a8275;       /* tertiary */
+  --color-cinnabar:        #c44536;       /* accent */
+  --color-cinnabar-deep:   #962d22;
+  --color-ochre:           #b88a3a;       /* secondary accent */
+  --color-gilt:            #ddc28a;
+
+  /* Aliases used by shadcn-ish code so we don't rewrite everywhere. */
+  --color-background:        var(--color-paper);
+  --color-foreground:        var(--color-ink);
+  --color-primary:           var(--color-cinnabar);
+  --color-primary-foreground:#fdf9ee;
+  --color-muted:             var(--color-paper-deep);
+  --color-muted-foreground:  var(--color-ink-soft);
+  --color-border:            var(--color-paper-edge);
+  --color-card:              #f6f1e5;
+  --color-destructive:       var(--color-cinnabar-deep);
+
+  --font-serif:    "Fraunces", ui-serif, Georgia, "Songti SC", serif;
+  --font-sans:     "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  --font-mono:     "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
 }
 
-html, body, #root { height: 100%; }
-body { background: var(--color-background); color: var(--color-foreground); }
+@layer base {
+  html, body, #root { height: 100%; }
+  body {
+    background: var(--color-paper);
+    color: var(--color-ink);
+    font-feature-settings: "ss01", "ss02";
+  }
+  ::selection { background: var(--color-cinnabar); color: var(--color-primary-foreground); }
+}
+
+/* Paper grain — barely visible, adds dimension without noise. */
+.paper-grain {
+  background-image:
+    radial-gradient(rgba(20, 17, 15, 0.045) 1px, transparent 1px),
+    radial-gradient(rgba(20, 17, 15, 0.025) 1px, transparent 1px);
+  background-size: 3px 3px, 7px 7px;
+  background-position: 0 0, 1px 2px;
+}
+
+/* Staggered initial reveal — single coordinated load. */
+@keyframes archive-rise {
+  0%   { opacity: 0; transform: translateY(14px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+.rise > * {
+  opacity: 0;
+  animation: archive-rise 720ms cubic-bezier(0.16, 0.84, 0.3, 1) forwards;
+}
+.rise > *:nth-child(1) { animation-delay: 40ms; }
+.rise > *:nth-child(2) { animation-delay: 140ms; }
+.rise > *:nth-child(3) { animation-delay: 220ms; }
+.rise > *:nth-child(4) { animation-delay: 300ms; }
+.rise > *:nth-child(5) { animation-delay: 380ms; }
+.rise > *:nth-child(6) { animation-delay: 460ms; }
+
+/* Custom underline tracker for the search input. */
+.input-underline {
+  position: relative;
+}
+.input-underline::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: -2px;
+  width: 100%;
+  height: 1px;
+  background: var(--color-ink);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 360ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.input-underline:focus-within::after { transform: scaleX(1); }
+
+/* Tabular numerals where we line up scores/dates. */
+.tabular { font-variant-numeric: tabular-nums; }

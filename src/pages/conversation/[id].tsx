@@ -16,49 +16,53 @@ export default function ConversationDetail() {
   }, [id]);
 
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-border bg-card px-6 py-4">
-        <div className="mx-auto flex max-w-4xl items-baseline gap-4">
-          <Link to="/" className="text-sm text-primary hover:underline">
-            ← Search
-          </Link>
-          <h1 className="font-serif text-lg text-foreground truncate">
-            {conv?.title ?? id}
-          </h1>
-        </div>
-      </header>
+    <div className="min-h-full bg-paper paper-grain">
+      <article className="mx-auto max-w-3xl px-8 py-12">
+        <Link
+          to="/"
+          className="inline-flex items-baseline gap-2 font-mono text-[10px] uppercase tracking-[0.3em] text-ink-soft transition hover:text-cinnabar"
+        >
+          ← Archive
+        </Link>
 
-      <main className="mx-auto max-w-4xl px-6 py-6">
-        {error && <p className="text-sm text-destructive">Error: {error}</p>}
-        {!conv && !error && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {error && (
+          <p className="mt-6 font-serif text-xl italic text-cinnabar-deep">! {error}</p>
+        )}
+        {!conv && !error && (
+          <p className="mt-6 font-mono text-xs uppercase tracking-widest text-ink-faint">Reading…</p>
+        )}
+
         {conv && (
           <>
-            <div className="mb-4 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-              <span className="rounded bg-muted px-1.5 py-0.5 font-mono">{conv.source}</span>
-              {conv.project && <span className="truncate">{conv.project}</span>}
-              {conv.updated_at && (
-                <span>{new Date(conv.updated_at).toISOString().slice(0, 19).replace("T", " ")}</span>
+            <header className="mt-6 border-b border-paper-edge pb-6">
+              <div className="flex items-baseline gap-3 font-mono text-[10px] uppercase tracking-[0.3em] text-ink-faint">
+                <span>{conv.source}</span>
+                <span className="h-px flex-1 bg-paper-edge" />
+                <span className="tabular">
+                  {conv.updated_at?.slice(0, 10) ?? "—"}
+                </span>
+                <span className="tabular">{conv.messages.length} turns</span>
+              </div>
+              <h1 className="mt-3 font-serif text-3xl leading-tight tracking-tight text-ink">
+                {conv.title ?? conv.id}
+              </h1>
+              {conv.project && (
+                <p className="mt-2 font-mono text-[11px] text-ink-soft">{conv.project}</p>
               )}
-              <span>{conv.messages.length} messages</span>
-            </div>
+            </header>
 
-            <ol className="space-y-4">
+            <ol className="mt-8 space-y-6">
               {conv.messages.map((m, i) => (
-                <li
-                  key={i}
-                  className={`rounded-xl border border-border p-4 ${
-                    m.role === "user" ? "bg-card" : "bg-muted/30"
-                  }`}
-                >
-                  <div className="mb-2 text-xs font-mono uppercase tracking-wide text-muted-foreground">
-                    {m.role}
+                <li key={i} className="grid grid-cols-12 gap-4">
+                  <div className="col-span-2 pt-1 font-mono text-[10px] uppercase tracking-widest text-ink-faint">
+                    <div className={m.role === "user" ? "text-cinnabar" : "text-ink-soft"}>{m.role}</div>
                     {m.timestamp && (
-                      <span className="ml-2 normal-case">
-                        {new Date(m.timestamp).toISOString().slice(11, 19)}
-                      </span>
+                      <div className="tabular mt-1 text-ink-faint">
+                        {m.timestamp.slice(11, 19)}
+                      </div>
                     )}
                   </div>
-                  <pre className="whitespace-pre-wrap break-words font-sans text-sm text-foreground">
+                  <pre className="col-span-10 whitespace-pre-wrap break-words font-sans text-[15px] leading-relaxed text-ink">
                     {m.content}
                   </pre>
                 </li>
@@ -66,7 +70,7 @@ export default function ConversationDetail() {
             </ol>
           </>
         )}
-      </main>
+      </article>
     </div>
   );
 }

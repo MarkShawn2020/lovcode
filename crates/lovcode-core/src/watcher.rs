@@ -4,6 +4,7 @@
 //! Watch mode: re-parse + re-index files when they change.
 
 use crate::adapter::SourceAdapter;
+use crate::connector::builtin_connectors;
 use crate::index::{add_conversation, LovcodeIndex};
 use anyhow::Result;
 use notify::{recommended_watcher, RecommendedWatcher, RecursiveMode, Watcher};
@@ -11,8 +12,25 @@ use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::time::{Duration, Instant};
 
+/// Helper: index everything every active connector exposes.
+pub fn index_all_via_connectors(idx: &LovcodeIndex) -> Result<usize> {
+    let connectors = builtin_connectors();
+    let adapters: Vec<&dyn SourceAdapter> = connectors
+        .iter()
+        .filter_map(|c| c.adapter())
+        .collect();
+    index_all_dyn(idx, &adapters)
+}
+
 /// One-shot full index of every conversation every adapter knows about.
 pub fn index_all(idx: &LovcodeIndex, adapters: &[Box<dyn SourceAdapter>]) -> Result<usize> {
+    let refs: Vec<&dyn SourceAdapter> = adapters.iter().map(|b| b.as_ref()).collect();
+    index_all_dyn(idx, &refs)
+}
+
+/// Same as [`index_all`] but takes plain trait references — used by the
+/// connector wrapper so we don't have to box everything again.
+pub fn index_all_dyn(idx: &LovcodeIndex, adapters: &[&dyn SourceAdapter]) -> Result<usize> {
     let mut writer = idx.writer()?;
     let schema = idx.schema();
     let mut count = 0usize;

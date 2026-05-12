@@ -15,10 +15,9 @@ pub struct Args {
 
 pub fn run(index_dir: &Path, args: Args) -> Result<()> {
     let idx = LovcodeIndex::open_or_create(index_dir)?;
-    let adapters = builtin_adapters();
 
     let started = Instant::now();
-    let count = watcher::index_all(&idx, &adapters)?;
+    let count = watcher::index_all_via_connectors(&idx)?;
     eprintln!(
         "Indexed {count} conversations in {:.2}s → {}",
         started.elapsed().as_secs_f32(),
@@ -27,7 +26,7 @@ pub fn run(index_dir: &Path, args: Args) -> Result<()> {
 
     if args.watch {
         eprintln!("Watching for changes (Ctrl-C to exit)…");
-        watcher::watch(&idx, adapters)?;
+        watcher::watch(&idx, builtin_adapters())?;
     }
     Ok(())
 }
