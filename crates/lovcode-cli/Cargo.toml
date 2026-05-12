@@ -1,0 +1,27 @@
+[package]
+name = "lovcode-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Lovcode CLI — search every AI conversation you've ever had."
+
+[[bin]]
+name = "lovcode"
+path = "src/main.rs"
+
+[dependencies]
+lovcode-core = { path = "../lovcode-core" }
+
+clap = { version = "4", features = ["derive"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+chrono = { workspace = true }
+
+# HTTP server (axum) — used by `serve` subcommand.
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors"] }
