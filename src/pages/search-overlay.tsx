@@ -1,11 +1,22 @@
-// Floating search palette window (transparent NSPanel).
-// Phase 1: placeholder shell. Real palette UI lands in phase 4.1.
+import { useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { SearchUI } from "@/components/SearchUI";
+
 export default function SearchOverlay() {
+  // Escape closes the palette.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        invoke("toggle_search_overlay").catch(() => {});
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-card/95 backdrop-blur">
-      <div className="rounded-xl border border-border px-6 py-4 text-sm text-muted-foreground">
-        Floating palette — rebuild pending (phase 4.1).
-      </div>
+    <div className="h-screen overflow-hidden rounded-xl border border-border bg-card/95 backdrop-blur">
+      <SearchUI compact />
     </div>
   );
 }

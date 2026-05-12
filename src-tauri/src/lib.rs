@@ -1,13 +1,9 @@
-//! Lovcode Tauri shell.
-//!
-//! This is a thin layer over `lovcode-core`. All search logic lives in the
-//! core crate. Tauri commands here are 1:1 wrappers that adapt core types
-//! to JSON-serializable shapes for the React frontend.
-//!
-//! Phase 1: skeleton. Concrete commands land alongside the lovcode-core
-//! implementation in phase 1.2 / 1.3.
+//! Lovcode Tauri shell — thin layer over `lovcode-core`.
 
 mod commands;
+
+use tauri::Manager;
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -16,10 +12,50 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        toggle_search_window(app);
+                    }
+                })
+                .build(),
+        )
+        .setup(|app| {
+            // Global hotkey: ⌘⇧K (Ctrl+Shift+K on win/linux).
+            let modifiers = if cfg!(target_os = "macos") {
+                Modifiers::SUPER | Modifiers::SHIFT
+            } else {
+                Modifiers::CONTROL | Modifiers::SHIFT
+            };
+            let shortcut = Shortcut::new(Some(modifiers), Code::KeyK);
+            app.global_shortcut().register(shortcut).ok();
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             commands::ping,
+            commands::list_sources,
+            commands::search,
+            commands::rebuild_index,
+            toggle_search_overlay,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+fn toggle_search_window(app: &tauri::AppHandle) {
+    if let Some(win) = app.get_webview_window("search") {
+        let visible = win.is_visible().unwrap_or(false);
+        if visible {
+            let _ = win.hide();
+        } else {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+    }
+}
+
+#[tauri::command]
+fn toggle_search_overlay(app: tauri::AppHandle) {
+    toggle_search_window(&app);
 }
