@@ -21,3 +21,4 @@ dirs = { workspace = true }
 rayon = { workspace = true }
 walkdir = { workspace = true }
 tracing = { workspace = true }
+zip = { version = "2", default-features = false, features = ["deflate"] }

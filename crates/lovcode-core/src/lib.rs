@@ -15,3 +15,4 @@ pub mod index;
 pub mod query;
 pub mod watcher;
 pub mod detail;
+pub mod import;

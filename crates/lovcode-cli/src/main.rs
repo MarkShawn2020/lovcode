@@ -1,5 +1,6 @@
 //! `lovcode` — single binary, several subcommands.
 
+mod cmd_import;
 mod cmd_index;
 mod cmd_mcp;
 mod cmd_search;
@@ -32,6 +33,9 @@ enum Cmd {
     /// Show one conversation by id.
     Show(cmd_show::Args),
 
+    /// Import a third-party export (currently: ChatGPT `.zip`).
+    Import(cmd_import::Args),
+
     /// List configured source adapters.
     Sources,
 
@@ -60,6 +64,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Index(a) => cmd_index::run(&index_dir, a),
         Cmd::Search(a) => cmd_search::run(&index_dir, a),
         Cmd::Show(a) => cmd_show::run(&index_dir, a),
+        Cmd::Import(a) => cmd_import::run(a),
         Cmd::Sources => cmd_sources::run(&index_dir),
         Cmd::Serve(a) => cmd_serve::run(&index_dir, a),
         Cmd::Mcp => cmd_mcp::run(&index_dir),
