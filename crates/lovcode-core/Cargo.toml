@@ -1,0 +1,23 @@
+[package]
+name = "lovcode-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Core library for Lovcode: adapters, index, query, watcher for AI conversation search."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tantivy = { workspace = true }
+jieba-rs = { workspace = true }
+notify = { workspace = true }
+regex = { workspace = true }
+dirs = { workspace = true }
+rayon = { workspace = true }
+walkdir = { workspace = true }
+tracing = { workspace = true }

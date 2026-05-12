@@ -26,3 +26,6 @@ dist-ssr
 # Local workspace artifacts
 .claude/
 output/
+
+# Cargo workspace build artifacts
+/target/
