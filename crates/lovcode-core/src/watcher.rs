@@ -26,15 +26,17 @@ pub fn index_all(idx: &LovcodeIndex, adapters: &[Box<dyn SourceAdapter>]) -> Res
             }
         };
         for path in paths {
-            match adapter.parse(&path) {
-                Ok(c) if !c.messages.is_empty() => {
-                    if let Err(e) = add_conversation(&mut writer, schema, &c) {
-                        tracing::warn!(path = %path.display(), error = %e, "index failed");
-                    } else {
-                        count += 1;
+            match adapter.parse_many(&path) {
+                Ok(conversations) => {
+                    for c in conversations {
+                        if c.messages.is_empty() { continue; }
+                        if let Err(e) = add_conversation(&mut writer, schema, &c) {
+                            tracing::warn!(path = %path.display(), error = %e, "index failed");
+                        } else {
+                            count += 1;
+                        }
                     }
                 }
-                Ok(_) => {} // empty conversation, skip
                 Err(e) => {
                     tracing::warn!(path = %path.display(), error = %e, "parse failed");
                 }
@@ -103,11 +105,11 @@ fn flush(idx: &LovcodeIndex, pending: &mut Vec<(PathBuf, &dyn SourceAdapter)>) -
 
     for (path, adapter) in pending.drain(..) {
         if !seen.insert(path.clone()) { continue; }
-        match adapter.parse(&path) {
-            Ok(c) if !c.messages.is_empty() => {
+        if let Ok(conversations) = adapter.parse_many(&path) {
+            for c in conversations {
+                if c.messages.is_empty() { continue; }
                 let _ = add_conversation(&mut writer, schema, &c);
             }
-            _ => {}
         }
     }
     writer.commit()?;

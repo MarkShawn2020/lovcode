@@ -12,6 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 lovcode-core = { path = "../lovcode-core" }
+lovcode-mcp = { path = "../lovcode-mcp" }
 
 clap = { version = "4", features = ["derive"] }
 serde = { workspace = true }

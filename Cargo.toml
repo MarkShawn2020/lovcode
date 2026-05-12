@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/lovcode-core",
     "crates/lovcode-cli",
+    "crates/lovcode-mcp",
     "src-tauri",
 ]
 

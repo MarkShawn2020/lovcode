@@ -1,0 +1,18 @@
+[package]
+name = "lovcode-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "MCP server library for Lovcode — exposes conversation search as MCP tools."
+
+[dependencies]
+lovcode-core = { path = "../lovcode-core" }
+
+rmcp = { version = "1", features = ["server", "macros", "transport-io", "schemars"] }
+schemars = "0.8"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
