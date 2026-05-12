@@ -1,9 +1,10 @@
-//! `SourceAdapter` trait — one impl per supported AI tool.
-//!
-//! Per-source modules (claude_code, codex, ...) land here in phase 1.2.
+//! `SourceAdapter` trait + per-source impls.
 
 use crate::types::Conversation;
 use std::path::{Path, PathBuf};
+
+pub mod claude_code;
+pub mod codex;
 
 pub trait SourceAdapter: Send + Sync {
     /// Stable id, e.g. `"claude-code"`.
@@ -20,4 +21,12 @@ pub trait SourceAdapter: Send + Sync {
 
     /// Roots the watcher should observe for live updates.
     fn watch_roots(&self) -> Vec<PathBuf>;
+}
+
+/// All built-in adapters, ready to register.
+pub fn builtin_adapters() -> Vec<Box<dyn SourceAdapter>> {
+    vec![
+        Box::new(claude_code::ClaudeCodeAdapter),
+        Box::new(codex::CodexAdapter),
+    ]
 }
