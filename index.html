@@ -4,134 +4,14 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/lovcode.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Lovcode - I came, I saw, I conquered</title>
-    <meta
-      name="description"
-      content="Lovcode is a campaign command table for Claude Code, Codex, and terminal sessions."
-    />
-    <link rel="canonical" href="https://code.lovstudio.ai/" />
-    <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://code.lovstudio.ai/" />
-    <meta property="og:title" content="Lovcode - I came, I saw, I conquered" />
-    <meta
-      property="og:description"
-      content="Campaign command table for Claude Code, Codex, and terminal sessions."
-    />
-    <meta property="og:image" content="https://code.lovstudio.ai/logo.png" />
-    <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Lovcode - I came, I saw, I conquered" />
-    <meta
-      name="twitter:description"
-      content="Campaign command table for Claude Code, Codex, and terminal sessions."
-    />
-    <meta name="twitter:image" content="https://code.lovstudio.ai/logo.png" />
+    <title>Lovcode — Search every conversation you've ever had with an AI</title>
+    <meta name="description" content="Lovcode indexes every AI conversation you've ever had — Claude Code, Codex, Claude Desktop, ChatGPT, Gemini — into one searchable corpus, local-first." />
     <style>
-      /* Splash screen — paints on the very first frame, before React mounts.
-         Removed by main.tsx once <RouterProvider> renders. */
-      html, body { margin: 0; background: #F9F9F7; }
-      #splash {
-        position: fixed;
-        inset: 0;
-        z-index: 2147483647;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 28px;
-        background: #F9F9F7;
-        transition: opacity 280ms ease;
-      }
-      #splash.fade { opacity: 0; pointer-events: none; }
-      #splash .logo {
-        width: 96px;
-        height: 96px;
-        animation: splash-breathe 1.8s ease-in-out infinite;
-      }
-      #splash .label {
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-        font-size: 12px;
-        letter-spacing: 0.02em;
-        color: rgba(24, 24, 24, 0.45);
-        margin-top: -8px;
-      }
-      #splash .bar {
-        width: 140px;
-        height: 2px;
-        background: rgba(24, 24, 24, 0.08);
-        border-radius: 1px;
-        overflow: hidden;
-      }
-      #splash .bar::after {
-        content: "";
-        display: block;
-        width: 40%;
-        height: 100%;
-        background: #CC785C;
-        border-radius: 1px;
-        animation: splash-slide 1.2s ease-in-out infinite;
-      }
-      @keyframes splash-breathe {
-        0%, 100% { opacity: 0.85; transform: scale(1); }
-        50%      { opacity: 1;    transform: scale(1.04); }
-      }
-      @keyframes splash-slide {
-        0%   { transform: translateX(-100%); }
-        100% { transform: translateX(350%); }
-      }
-      @media (prefers-reduced-motion: reduce) {
-        #splash .logo { animation: none; }
-        #splash .bar::after { animation: splash-slide 2.4s linear infinite; }
-      }
+      html, body { margin: 0; background: #F9F9F7; color: #181818; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, "PingFang SC", "Hiragino Sans GB", sans-serif; }
     </style>
   </head>
-
   <body>
-    <div id="splash">
-      <img class="logo" src="/logo.svg" alt="" />
-      <div class="label">Reading chat history…</div>
-      <div class="bar" role="progressbar" aria-label="Loading"></div>
-    </div>
-    <script>
-      // Auxiliary windows (transparent NSPanel for search overlay, prompt
-      // detail popups) must NOT show the main-window splash — they have no
-      // app shell and the beige background would paint a giant block.
-      (function () {
-        var hash = location.hash || "";
-        if (location.hostname === "code.lovstudio.ai" && (!hash || hash === "#" || hash === "#/")) {
-          location.replace("/#/landing");
-          return;
-        }
-        if (hash.indexOf("/search-overlay") !== -1 || hash.indexOf("/prompt-detail") !== -1 || hash.indexOf("/landing") !== -1) {
-          var s = document.getElementById("splash");
-          if (s) s.remove();
-        }
-      })();
-    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      // Disable autocorrect/spellcheck globally for all inputs
-      document.addEventListener('DOMContentLoaded', () => {
-        const disableAutoCorrect = (el) => {
-          el.setAttribute('autocorrect', 'off');
-          el.setAttribute('autocomplete', 'off');
-          el.setAttribute('autocapitalize', 'off');
-          el.setAttribute('spellcheck', 'false');
-        };
-        // Apply to existing elements
-        document.querySelectorAll('input, textarea, [contenteditable="true"]').forEach(disableAutoCorrect);
-        // Watch for dynamically added elements
-        new MutationObserver((mutations) => {
-          mutations.forEach((m) => {
-            m.addedNodes.forEach((node) => {
-              if (node.nodeType === 1) {
-                if (node.matches?.('input, textarea, [contenteditable="true"]')) disableAutoCorrect(node);
-                node.querySelectorAll?.('input, textarea, [contenteditable="true"]').forEach(disableAutoCorrect);
-              }
-            });
-          });
-        }).observe(document.body, { childList: true, subtree: true });
-      });
-    </script>
   </body>
 </html>

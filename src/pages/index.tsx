@@ -1,49 +1,45 @@
-import { Navigate } from "react-router-dom";
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 
-const LAST_PATH_KEY = "lovcode:lastPath";
+export default function SearchPage() {
+  const [q, setQ] = useState("");
+  const [pong, setPong] = useState<string | null>(null);
 
-// Routes that no longer exist (/chat and /history merged into /workbench)
-function migrateLegacyPath(path: string): string {
-  if (path === "/settings/llm") return "/settings/maas";
-  if (path === "/chat" || path.startsWith("/chat/")) return migrateHistoryPath(path.replace(/^\/chat/, "/history"));
-  return migrateHistoryPath(path);
-}
+  return (
+    <main className="mx-auto max-w-3xl px-6 pt-20">
+      <h1 className="font-serif text-3xl text-foreground">Lovcode</h1>
+      <p className="mt-2 text-sm text-muted-foreground">
+        Search every conversation you've ever had with an AI.
+      </p>
 
-function migrateHistoryPath(path: string): string {
-  if (path === "/history") return "/workbench";
-  if (path.startsWith("/history?")) return path.replace(/^\/history/, "/workbench");
-  if (!path.startsWith("/history/")) return path;
+      <input
+        type="text"
+        value={q}
+        onChange={(e) => setQ(e.target.value)}
+        placeholder="Search your conversations…"
+        className="mt-8 w-full rounded-xl border border-border bg-card px-4 py-3 text-base text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+        autoFocus
+      />
 
-  const [pathname, query = ""] = path.split("?");
-  const parts = pathname.split("/").filter(Boolean);
-  if (parts.length >= 3) {
-    const params = new URLSearchParams(query);
-    params.set("projectId", safeDecode(parts[1]));
-    params.set("sessionId", safeDecode(parts[2]));
-    return `/workbench?${params.toString()}`;
-  }
-
-  return "/workbench";
-}
-
-function safeDecode(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function getLastPath(): string {
-  try {
-    const saved = localStorage.getItem(LAST_PATH_KEY);
-    if (saved && saved !== "/" && saved.startsWith("/") && saved !== "/annual-report-2025") {
-      return migrateLegacyPath(saved);
-    }
-  } catch {}
-  return "/workbench";
-}
-
-export default function HomePage() {
-  return <Navigate to={getLastPath()} replace />;
+      <div className="mt-12 rounded-xl border border-dashed border-border bg-card/40 p-6 text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">v0.40 rewrite in progress.</p>
+        <p className="mt-2">
+          The search backend is being rebuilt on top of <code className="rounded bg-muted px-1.5 py-0.5 text-xs">lovcode-core</code>.
+          Until phase 1.3 lands, this page is a placeholder.
+        </p>
+        <p className="mt-4">
+          Legacy v0.39 codebase lives on the{" "}
+          <code className="rounded bg-muted px-1.5 py-0.5 text-xs">legacy/v0.39-workbench</code> branch.
+        </p>
+        <button
+          type="button"
+          onClick={async () => setPong(await invoke<string>("ping"))}
+          className="mt-6 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+        >
+          Ping backend
+        </button>
+        {pong && <span className="ml-3 text-foreground">→ {pong}</span>}
+      </div>
+    </main>
+  );
 }
