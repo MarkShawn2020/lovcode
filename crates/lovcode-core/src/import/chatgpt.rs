@@ -36,7 +36,6 @@ struct MapNode {
 
 #[derive(Debug, Deserialize)]
 struct GptMsg {
-    id: Option<String>,
     author: Option<Author>,
     create_time: Option<f64>,
     content: Option<MsgContent>,

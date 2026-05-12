@@ -13,6 +13,7 @@
     "preview": "vite preview",
     "tauri": "tauri"
   },
+  "engines": { "node": ">=20" },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.17",
     "@tauri-apps/api": "^2.10.1",

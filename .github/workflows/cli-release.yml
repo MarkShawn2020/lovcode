@@ -1,0 +1,88 @@
+name: CLI Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build (e.g. v0.40.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14,     target: aarch64-apple-darwin,        archive: tar.gz }
+          - { os: macos-13,     target: x86_64-apple-darwin,         archive: tar.gz }
+          - { os: ubuntu-22.04, target: x86_64-unknown-linux-gnu,    archive: tar.gz }
+          - { os: ubuntu-22.04, target: aarch64-unknown-linux-gnu,   archive: tar.gz, cross: true }
+          - { os: windows-2022, target: x86_64-pc-windows-msvc,      archive: zip   }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: cli-${{ matrix.target }}
+
+      - name: Install cross (for aarch64 linux)
+        if: matrix.cross == true
+        run: cargo install cross --locked
+
+      - name: Build
+        shell: bash
+        run: |
+          if [[ "${{ matrix.cross }}" == "true" ]]; then
+            cross build --release -p lovcode-cli --target ${{ matrix.target }}
+          else
+            cargo build --release -p lovcode-cli --target ${{ matrix.target }}
+          fi
+
+      - name: Stage artifact
+        id: stage
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN_NAME=lovcode
+          if [[ "${{ matrix.target }}" == *windows* ]]; then BIN_NAME=lovcode.exe; fi
+          TAG="${GITHUB_REF_NAME:-${{ github.event.inputs.tag }}}"
+          STAGE="lovcode-${TAG}-${{ matrix.target }}"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/$BIN_NAME" "$STAGE/"
+          cp README.md LICENSE "$STAGE/" || true
+          if [[ "${{ matrix.archive }}" == "zip" ]]; then
+            7z a "${STAGE}.zip" "$STAGE" > /dev/null
+            echo "asset=${STAGE}.zip" >> $GITHUB_OUTPUT
+          else
+            tar -czf "${STAGE}.tar.gz" "$STAGE"
+            echo "asset=${STAGE}.tar.gz" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push'
+        with:
+          files: ${{ steps.stage.outputs.asset }}
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'workflow_dispatch'
+        with:
+          name: ${{ steps.stage.outputs.asset }}
+          path: ${{ steps.stage.outputs.asset }}

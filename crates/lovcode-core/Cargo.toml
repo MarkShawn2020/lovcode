@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Core library for Lovcode: adapters, index, query, watcher for AI conversation search."
+readme = "../../README.md"
+keywords = ["search", "ai", "claude", "mcp", "tantivy"]
+categories = ["command-line-utilities", "text-processing"]
 
 [dependencies]
 serde = { workspace = true }

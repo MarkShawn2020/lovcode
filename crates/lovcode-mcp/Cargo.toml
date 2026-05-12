@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "MCP server library for Lovcode — exposes conversation search as MCP tools."
+readme = "../../README.md"
+keywords = ["mcp", "search", "ai", "claude"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 lovcode-core = { path = "../lovcode-core" }

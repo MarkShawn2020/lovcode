@@ -26,6 +26,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct LovcodeMcp {
     index: Arc<LovcodeIndex>,
+    #[allow(dead_code)] // rmcp macro consumes this reflectively
     tool_router: ToolRouter<LovcodeMcp>,
 }
 
