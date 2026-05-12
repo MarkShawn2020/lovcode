@@ -8,169 +8,176 @@
 </h1>
 
 <p align="center">
-  <strong>I came, I saw, I conquered. / 我来，我见，我征服。</strong><br>
-  <sub>Campaign command table for Claude Code, Codex, and terminal sessions</sub><br>
+  <strong>Search every conversation you've ever had with an AI.</strong><br>
+  <sub>搜索你和 AI 之间的每一次对话</sub><br>
+  <sub>Claude Code · Claude Desktop · Codex · ChatGPT · Gemini · … (adapter-based)</sub><br>
   <sub>macOS • Windows • Linux</sub>
 </p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Tauri-2.0-blue" alt="Tauri">
+  <img src="https://img.shields.io/badge/Rust-stable-orange" alt="Rust">
   <img src="https://img.shields.io/badge/React-19-blue" alt="React">
-  <img src="https://img.shields.io/badge/TypeScript-5.8-blue" alt="TypeScript">
   <img src="https://img.shields.io/badge/License-Apache_2.0-green" alt="License">
 </p>
 
 ---
 
-<p align="center">
-  <a href="https://code.lovstudio.ai/">Website</a> •
-  <a href="#release-highlights">Updates</a> •
-  <a href="#features">Features</a> •
-  <a href="#oh-my-lovcode">oh-my-lovcode</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#usage">Usage</a> •
-  <a href="#tech-stack">Tech Stack</a> •
-  <a href="#license">License</a>
-</p>
+> **🚧 v0.40 In-Progress Rewrite.** Lovcode is being refocused from a general "vibe coding assistant" into a single-purpose tool: **AI conversation search**. The previous Agent Workbench / Skills / Marketplace / Lab surfaces have been removed. The legacy v0.39 codebase is preserved on the [`legacy/v0.39-workbench`](https://github.com/lovstudio/lovcode/tree/legacy/v0.39-workbench) branch.
 
 ---
 
-## Release Highlights
+## Why Lovcode
 
-### v0.37.0 — Runtime Settings, Page Windows, and Backend Modules
+You've had hundreds of conversations across Claude Code, Codex, Claude Desktop, ChatGPT, Gemini. Half of them contain the answer to the problem you're staring at right now. The other half contain code you've already written. None of them are findable.
 
-Lovcode now has dedicated agent CLI runtime configuration for Claude Code and Codex, including install/version status surfaces and reusable runtime settings under Configuration. Page windows and session navigation gain duplicate-window and resume helpers, plus richer project path menu actions across the workbench. Feedback operations now include an admin dialog, while the Tauri backend has been split into focused app command modules for maintainability.
+Lovcode indexes all of it locally, into one searchable corpus — with adapter-based ingest so any AI tool that writes session files to disk can plug in.
 
-### v0.36.0 — Localized Workbench, Session Handoff, and Lab
+## Four Ways to Search
 
-Lovcode now localizes the main workspace, settings, marketplace, environment, update, and feedback surfaces in English and Chinese, with a language preference in app settings. The agent workbench gains richer conversation management: pinned and archived conversation state, chat/PTY display mode switching, session information dialogs, related-file and trace-context copy actions, and cross-agent handoff prompts for moving context between Claude Code and Codex. This release also adds the Lab and Wish Room entry points, improves Lovstudio-authenticated feedback tickets with tags and account tracking, and makes release history refresh more resilient through GitHub API caching and Atom fallback.
+Lovcode is **one Rust core** with four surfaces. Pick whichever fits your workflow.
 
-### v0.35.0 — General Chat, Version Manager, and Codex MaaS
+| Surface | What it is | When to use |
+|---|---|---|
+| **`lovcode` CLI** | Single binary. `lovcode search "..."`. | Terminal, scripts, Unix pipes (`lovcode search foo \| jq`). Zero daemons. |
+| **MCP server** | `lovcode mcp` subcommand, stdio transport. | Plug into Claude Desktop / Cursor / any MCP client — your AI can search your past AI conversations. |
+| **Desktop + Floating Window** | Tauri 2 app with a global-hotkey floating search palette. | Spotlight-style instant recall while you work. |
+| **Web UI** | Static frontend hitting the same core. | Self-host on your LAN, or run alongside the desktop app. |
 
-The agent workbench can now start general chat sessions without first selecting a project, while the composer exposes recent project paths and a clearer CLI picker for faster session setup. Lovcode also adds a status-bar version manager with release history, manual update checks, auto-update controls, and direct release links. MaaS providers can now be activated separately for Claude Code and Codex, including Codex `config.toml` provider updates for API-key providers.
+All four call the same Rust crate. No duplicated logic, no Python runtime, no HTTP server you forgot to kill.
 
-### v0.34.0 — Agent Workbench and Codex History
+## Adapter-Based Data Sources
 
-Lovcode now has an agent workbench for launching Claude Code, Codex, and terminal sessions from a selected project, with persistent workspace state, project/session environment scripts, and hook-based activity tracking. Codex rollout sessions are indexed alongside Claude history with a dedicated Codex filter, usage extraction, resume support, and live updates from `~/.codex/sessions`. File and document previews now support multi-tab file previews, ZIP archive browsing, unsupported binary/document fallbacks, Markdown frontmatter, and remote/local image rendering.
+Each source is an adapter implementing a small Rust trait. Adding a new one means writing a parser, not rewiring the index.
 
-### v0.33.0 — Skills Table and Smart Path Routing
+**Shipped / planned for v0.40:**
 
-Skills management now uses a dense sortable table with vendor/source filters, install metadata, token estimates, and marketplace previews. Markdown content across marketplace and file previews shares the same renderer with GFM tables and smart local-path links, including candidate-prefix routing for agent output paths. File previews now use a compact Finder-style breadcrumb for faster navigation, and structured tool results can preview generated images inline.
+- [x] **Claude Code** (`~/.claude/projects/**/*.jsonl`)
+- [x] **Codex** (`~/.codex/sessions/**/*.jsonl`)
+- [ ] **Claude Desktop** (cookie + Keychain decrypt → API pull)
+- [ ] **ChatGPT** export (`.zip` import)
+- [ ] **Gemini** export
+- [ ] **Cursor / Zed / Continue.dev** chat history
 
-### v0.32.0 — Inline File Preview
-
-Local paths in prompts and chat messages now open inside Lovcode with a resizable preview pane. File references with `:line:column` jump directly to the target location, global search has scoped modes for text, IDs, and metadata, and document sidebars can be resized and restored.
-
-| Version | Highlights |
-|---------|------------|
-| **0.37.0** | Agent CLI runtime configuration for Claude Code and Codex with install/version status cards; duplicate-window and resume helpers for page/session workflows; richer project path menu actions; feedback administration dialog; Tauri backend split into focused app command modules |
-| **0.36.0** | English/Chinese localization reaches the workspace, settings, marketplace, environment, update, and feedback flows; the workbench adds pinned/archived conversations, chat/PTY display modes, session info dialogs, related-file and trace-context copying, and Claude Code/Codex handoff prompts; new Lab and Wish Room routes provide an experimental planning surface; Lovstudio feedback now uses authenticated ticket submission with tags; release history refresh uses GitHub API cache plus Atom fallback |
-| **0.35.0** | General chat sessions can start without a selected project; the agent composer now offers recent project paths and a compact CLI picker; the status bar opens a Lovcode version manager with release history, manual update checks, auto-update controls, and release links; MaaS provider activation can target Claude Code and Codex separately, writing Codex provider settings into `config.toml` |
-| **0.34.0** | Agent Workbench launches Claude Code, Codex, and terminal sessions with persistent state; project/session environment scripts can be saved and run from Lovcode; Claude and Codex hooks track activity; Codex rollout sessions are indexed with filtering, usage extraction, resume support, and live updates; file previews now support tabs, ZIP browsing, unsupported-format fallbacks, and richer Markdown/image rendering |
-| **0.33.0** | Skills management table with vendor/source filtering, ranking, install metadata, token estimates, and marketplace previews; shared MarkdownRenderer table/path support across marketplace and file previews; smart path routing offers candidate prefix paths for agent output files; FileViewer path navigation uses a compact Finder-style breadcrumb; tool-result images can open in the preview pane |
-| **0.32.0** | Inline file preview for local path links with line/column reveal, directory browsing, and resizable preview pane; prompt path detection handles `@src/file.tsx:line:column(selector)` style references; global search gains All / Full text / Session ID / Details modes; document reader sidebars are now resizable and persisted |
-| **0.31.0** | Architecture refactor: removed Workspace dashboard (PanelGrid, FeatureTabs, KanbanBoard, GitHistory, LogoManager, ProjectDashboard) in favor of page-centric routing; `/chat/*` → `/history/*`; `/knowledge/reference` (static) → `/knowledge/source/[id]` (dynamic) with `[...docPath]` sub-routes; new `useStreamedSessions` hook for streamed session list rendering; splash now waits for `/history` `ProjectList` `app:ready` signal before dismissing; LLM provider settings page removed |
-| **0.30.1** | Patch: silence dev-mode `[TAURI] Couldn't find callback id` warnings — defer `get_network_info` to next macrotask, persist `NETWORK_INFO_CACHE` to `~/.lovstudio/lovcode/cache/network.json` so dev restarts keep the cache; annual-report-2025 no longer recorded as `lastPath` resume target |
-| **0.30.0** | Chat session list & global search overhaul: `readLiteMetadata`-aligned head/tail 64KB title scanner with `title_source` field surfaced as a multi-purpose dot in the list (custom black / AI terracotta / summary blue / slug green / prompt grey / none faded); fix consecutive same-role user messages being merged; built-in slash commands (`/clear`, etc.) now format correctly even with reordered `<command-name>` tags; new `GlobalChatSearch` overlay + `search-overlay` route for cross-session full-text search; double-click a user prompt opens it in a standalone `prompt-detail` webview; Recent header toolbar always visible (`SlidersHorizontal` icon); session metadata extraction switched from full-JSON parse to byte-level scan, dramatically faster on tens-of-MB sessions |
-| **0.29.0** | MaaS registry: new `Vendor` entity separates model vendors (anthropic/openai) from access platforms (zenmux/modelgate); tokens now stored inline (migrated from `authEnvKey`) with a verified-fingerprint stamp; models gain description / icon / modalities / context-window metadata; `fetchCommand` for remote model-list pull; Settings/MaaS view rewritten; inline provider/model picker in the chat input footer with a 5-slot MRU persisted across sessions |
-| **0.28.0** | Session detail footer shows provider · model · peak context-window occupancy (input + cache aggregate); `messages` count switched to `rounds` (user prompts only); markdown `[text](path)` links resolve through smart PathLink (existence-checked + context menu); router restores last page on reload instead of forcing Dashboard |
-| **0.27.0** | Data source split into `cli` / `app-code` / `app-web` / `app-cowork` with two-level tabs; bottom inline input to continue a session; merge consecutive same-role messages; GFM tables + code-block syntax highlighting in chat |
-| **0.26.0** | Sidebar refactor — Pinned / Recent / Import groups + Algolia-style ⌘K search; live sync of claude.ai web chats (Cookies + Keychain decrypt → API pull); Pinned tri-state toggle mirrored to Claude desktop `starredIds` |
-| **0.25.0** | MaaS provider registry (`/settings/maas`) with 4 Tauri commands; new `/events` page; LLM provider presets extracted; standalone Home consolidated into Workspace |
-| **0.24.16** | Import claude.ai web exports (.zip/dir), data source tabs (All / Code / Web) |
-| **0.24.15** | Structured content blocks — view tool calls, thinking, tool results |
-| **0.24.14** | Full-text search with jieba Chinese tokenization |
-| **0.24.12** | Two-column master-detail layout with grouped/flat toggle |
-| **0.24.11** | In-app auto-updater |
-| **0.24.7** | Session usage tracking with token counts and cost estimation |
-| **0.24.0** | File-system routing architecture, settings split into sub-pages |
-
-[Full Changelog](CHANGELOG.md)
-
-![Gallery](docs/assets/gallery.png)
-
-## Features
-
-- **Dashboard** — Start from a cross-module overview of history, active agents, reusable commands, distilled knowledge, and recent project activity
-- **Lab & Wish Room** — Track wishes, link them to projects or sessions, and keep experimental planning flows under the Lab surface
-- **Localized Interface** — Switch between system language, English, and Chinese across the main workspace, settings, marketplace, feedback, updates, and runtime environment screens
-- **Agent Workbench** — Launch Claude Code, Codex, or a terminal in a selected project or general chat workspace; track pinned/archived sessions, unread/review states, runtime activity, and chat/PTY display mode
-- **Agent Runtime Settings** — Configure Claude Code and Codex CLI runtimes, inspect install/version status, and manage runtime preferences from Configuration
-- **Session Handoff Tools** — Copy session info, related file paths, trace context, and cross-agent handoff prompts for moving work between Claude Code and Codex
-- **Environment Scripts** — Save project/session setup, cleanup, and custom runtime actions, then run them in an embedded terminal dock
-- **Chat History Viewer** — Browse and search Claude and Codex conversation history across all projects with scoped full-text, session ID, and metadata search modes
-- **Granular Data Sources** — Switch between `cli` (Claude Code), `codex`, `app-code`, `app-web`, and `app-cowork` with source filters
-- **Live claude.ai Sync** — Pull web conversations directly via decrypted cookies (no manual export needed); also supports `.zip` / directory import
-- **Continue From the Bottom** — Reply to a session inline without leaving the detail view
-- **Rich Markdown Rendering** — GFM tables and syntax-highlighted code blocks (Warm Academic theme) inside chat messages
-- **Smart Path Links** — Bare paths, prompt mentions, and markdown `[text](path)` links are existence-checked against the relevant `cwd`; unresolved agent-output paths surface candidate prefix routes and existing files open in a tabbed Lovcode preview pane
-- **File and Document Preview** — Preview UTF-8 text, Markdown, images, directories, and ZIP archives inline; unsupported binary/document formats fall back to clear open/reveal actions
-- **Live Context-Window Readout** — Session detail footer shows the active model, provider, and peak context-window occupancy (input + cache_read + cache_creation) per round
-- **Structured Content Blocks** — Tool calls, thinking, grouped tool results, and generated images render as first-class blocks with preview support
-- **Sidebar with Pinned / Recent / Import** — Tri-state Pinned toggle mirrored to Claude desktop `starredIds`; Algolia-style ⌘K search
-- **MaaS Registry** — Manage custom Model-as-a-Service providers with vendor/model hierarchy, inline tokens, Verify fingerprinting, remote model-list pull, and separate Claude Code / Codex activation scopes (`/settings/maas`)
-- **Inline Model Picker** — Switch active provider · vendor · model from the chat input footer; MRU remembers your last 5 picks across sessions
-- **Commands / MCP / Skills / Hooks / Sub-Agents / Output Styles** — Full configuration surface for the Claude Code ecosystem
-- **Skills Manager** — Sort, rank, filter, preview, and inspect installed skills with vendor/source metadata, install timestamps, and token estimates
-- **Marketplace** — Browse and install community templates with shared Markdown table rendering and smart local-path links
-- **Lovstudio Feedback Tickets** — Submit authenticated feedback tickets with tags, copy ticket IDs, open Lovstudio account tracking, and review tickets from an admin dialog
-- **Customizable Statusbar** — Personalize your statusbar display with scripts and open Lovcode version management from the app version indicator
-
-## oh-my-lovcode
-
-Community configuration framework for Lovcode, inspired by oh-my-zsh.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/lovstudio/oh-my-lovcode/main/install.sh | bash
-```
-
-Share and discover statusbar themes, keybindings, and more at [oh-my-lovcode](https://github.com/lovstudio/oh-my-lovcode).
+> Want another source? An adapter is ~150 lines of Rust. PRs welcome.
 
 ## Installation
 
-### From Release
-
-Download the latest release for your platform from [Releases](https://github.com/lovstudio/lovcode/releases).
-
-### From Source
+### CLI (quickest)
 
 ```bash
-# Clone the repository (with submodules)
-git clone --recursive https://github.com/lovstudio/lovcode.git
-cd lovcode
+# macOS / Linux
+curl -fsSL https://lovcode.dev/install.sh | sh
 
-# Install dependencies
-pnpm install
+# or via cargo
+cargo install lovcode
+```
 
-# Run full Tauri development with Rust watcher
-pnpm dev:app
+### Desktop app
 
-# Frontend-focused development: Vite HMR stays on, Rust changes do not restart the app
-pnpm dev:app:no-watch
+Download the latest `.dmg` / `.msi` / `.AppImage` from [Releases](https://github.com/lovstudio/lovcode/releases).
 
-# Build for distribution
-pnpm tauri build
+### MCP server (Claude Desktop)
+
+```jsonc
+// ~/Library/Application Support/Claude/claude_desktop_config.json
+{
+  "mcpServers": {
+    "lovcode": {
+      "command": "lovcode",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
 ## Usage
 
-1. Launch Lovcode
-2. Start on **Dashboard** for a cross-module overview, or open **Workbench** to launch a Claude Code, Codex, terminal, or general chat session
-3. Use **History** to browse sessions; source filters include `cli`, `codex`, `app-code`, `app-web`, and `app-cowork`
-4. Open a session: tool calls, thinking, GFM tables, code blocks, and linked file previews render inline; reply at the bottom to continue
-5. Live-sync claude.ai web chats from your logged-in browser, or import a `.zip` / folder export
-6. Manage commands, MCP servers, skills, hooks, sub-agents, output styles, runtime environments, and MaaS providers under **Configuration**; MaaS activation can target Claude Code and Codex independently
-7. Visit **Marketplace** to discover community templates
+### CLI
+
+```bash
+# Build the index (incremental; safe to re-run)
+lovcode index
+
+# Search everything
+lovcode search "tantivy chinese tokenizer"
+
+# Filter by source / project / date
+lovcode search "deadlock" --source claude-code --since 7d
+lovcode search --project ~/projects/lovcode --json | jq
+
+# List indexed sources
+lovcode sources
+
+# Run MCP server (stdio)
+lovcode mcp
+
+# Run HTTP server (for the web UI / external clients)
+lovcode serve --port 7878
+```
+
+### Desktop
+
+1. Launch Lovcode → it auto-indexes on first run, then watches in the background.
+2. Hit the global hotkey (default `⌘⇧K`) to open the floating search palette anywhere.
+3. Hit `↵` on a result to open the full conversation in the main window.
+
+### Web
+
+```bash
+lovcode serve --port 7878
+# open http://localhost:7878
+```
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  Surfaces                                                    │
+│  ┌─────────┐  ┌──────────┐  ┌──────────────┐  ┌──────────┐   │
+│  │ CLI bin │  │ MCP stdio│  │ Tauri desktop│  │ Web (HTTP)│  │
+│  └────┬────┘  └────┬─────┘  └──────┬───────┘  └─────┬────┘   │
+└───────┼────────────┼───────────────┼────────────────┼────────┘
+        │            │               │                │
+        ▼            ▼               ▼                ▼
+┌──────────────────────────────────────────────────────────────┐
+│  lovcode-core  (Rust crate)                                  │
+│  • Adapters  (claude-code / codex / chatgpt / …)             │
+│  • Index     (tantivy + jieba for CJK)                       │
+│  • Query     (full-text, filters, faceting)                  │
+│  • Watcher   (notify-based incremental indexing)             │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Design rules:**
+
+- **One core, many shells.** All search logic lives in `lovcode-core`. CLI / Tauri / HTTP server are thin shells.
+- **No daemon required.** CLI is cold-start fast. HTTP server is opt-in for web/MCP-remote use cases.
+- **Local-first.** Your conversations never leave your machine unless you explicitly point at a remote index.
+- **Adapter pluggability over feature bloat.** New source = new adapter file. No core changes.
+
+## Roadmap
+
+See the [v0.40 rewrite plan](docs/v0.40-rewrite-plan.md) for the live punch list. High level:
+
+- **Phase 1** — Extract `lovcode-core` Rust crate from the current Tauri backend. Strip Workbench / Skills / Marketplace / Lab from `src/`. Keep search + floating window.
+- **Phase 2** — Ship `lovcode` CLI binary with `index` / `search` / `sources` / `serve` / `mcp` subcommands.
+- **Phase 3** — Add adapters: Claude Desktop, ChatGPT export, Gemini export.
+- **Phase 4** — Polish: distribution, auto-update, docs site.
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | React 19, TypeScript, Tailwind CSS, Vite |
-| Backend | Rust, Tauri 2 |
-| UI Components | shadcn/ui |
-| State | Jotai |
-| Search | Tantivy + jieba (full-text, Chinese-aware) |
+| Core | Rust, tantivy (search), jieba-rs (CJK), notify (watcher) |
+| CLI | clap |
+| HTTP / MCP | axum, rmcp |
+| Desktop | Tauri 2 |
+| Frontend | React 19, TypeScript, Tailwind CSS, shadcn/ui, Jotai |
+
+## Legacy (v0.39)
+
+The pre-rewrite codebase — Agent Workbench, Skills manager, Marketplace, Lab/Wish Room, MaaS registry, multi-CLI launcher — lives on [`legacy/v0.39-workbench`](https://github.com/lovstudio/lovcode/tree/legacy/v0.39-workbench). It will not receive new features but remains buildable.
 
 ## Star History
 
