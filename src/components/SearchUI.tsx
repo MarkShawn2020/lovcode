@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listSources, rebuildIndex, search, type SearchResult, type SourceSummary } from "@/lib/api";
+import { focusMainWindow, listSources, rebuildIndex, search, type SearchResult, type SourceSummary } from "@/lib/api";
+import { useNavigate } from "react-router-dom";
 
 interface Props {
   /** Compact = floating palette (no header, no rebuild). */
@@ -7,6 +8,7 @@ interface Props {
 }
 
 export function SearchUI({ compact = false }: Props) {
+  const navigate = useNavigate();
   const [q, setQ] = useState("");
   const [source, setSource] = useState<string>("");
   const [sources, setSources] = useState<SourceSummary[]>([]);
@@ -124,7 +126,18 @@ export function SearchUI({ compact = false }: Props) {
           )}
           <ul className="space-y-3">
             {results.map((r) => (
-              <ResultCard key={r.conversation_id + r.source} r={r} compact={compact} />
+              <ResultCard
+                key={r.conversation_id + r.source}
+                r={r}
+                compact={compact}
+                onSelect={() => {
+                  if (compact) {
+                    focusMainWindow(r.conversation_id).catch(() => {});
+                  } else {
+                    navigate(`/conversation/${encodeURIComponent(r.conversation_id)}`);
+                  }
+                }}
+              />
             ))}
           </ul>
         </div>
@@ -133,10 +146,16 @@ export function SearchUI({ compact = false }: Props) {
   );
 }
 
-function ResultCard({ r, compact }: { r: SearchResult; compact: boolean }) {
+function ResultCard({ r, compact, onSelect }: { r: SearchResult; compact: boolean; onSelect: () => void }) {
   const date = r.timestamp ? new Date(r.timestamp).toISOString().slice(0, 10) : "—";
   return (
-    <li className={`rounded-xl border border-border bg-card ${compact ? "p-3" : "p-4"}`}>
+    <li
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(e) => { if (e.key === "Enter") onSelect(); }}
+      className={`cursor-pointer rounded-xl border border-border bg-card transition hover:border-primary/40 hover:bg-muted/50 ${compact ? "p-3" : "p-4"}`}
+    >
       <div className="flex items-baseline gap-3 text-xs text-muted-foreground">
         <span className="rounded bg-muted px-1.5 py-0.5 font-mono">{r.source}</span>
         <span>{date}</span>

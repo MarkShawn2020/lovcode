@@ -8,6 +8,7 @@
 //! server (e.g. `lovcode mcp`).
 
 use lovcode_core::adapter::builtin_adapters;
+use lovcode_core::detail;
 use lovcode_core::index::LovcodeIndex;
 use lovcode_core::query;
 use lovcode_core::types::SearchQuery;
@@ -26,6 +27,12 @@ use std::sync::Arc;
 pub struct LovcodeMcp {
     index: Arc<LovcodeIndex>,
     tool_router: ToolRouter<LovcodeMcp>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct GetArgs {
+    /// Conversation id returned by `search_conversations`.
+    pub id: String,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -72,6 +79,18 @@ impl LovcodeMcp {
         let results = query::search(&self.index, &q)
             .map_err(|e| McpError::internal_error(format!("search failed: {e}"), None))?;
         let json = serde_json::to_string_pretty(&results)
+            .map_err(|e| McpError::internal_error(format!("serialize failed: {e}"), None))?;
+        Ok(CallToolResult::success(vec![Content::text(json)]))
+    }
+
+    #[tool(description = "Fetch the full message transcript of one conversation by id.")]
+    async fn get_conversation(
+        &self,
+        Parameters(args): Parameters<GetArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let conv = detail::get_conversation(&self.index, &args.id)
+            .map_err(|e| McpError::internal_error(format!("get failed: {e}"), None))?;
+        let json = serde_json::to_string_pretty(&conv)
             .map_err(|e| McpError::internal_error(format!("serialize failed: {e}"), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
     }

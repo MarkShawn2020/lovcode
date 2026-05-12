@@ -2,7 +2,7 @@
 
 mod commands;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -36,8 +36,10 @@ pub fn run() {
             commands::ping,
             commands::list_sources,
             commands::search,
+            commands::get_conversation,
             commands::rebuild_index,
             toggle_search_overlay,
+            focus_main_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -58,4 +60,19 @@ fn toggle_search_window(app: &tauri::AppHandle) {
 #[tauri::command]
 fn toggle_search_overlay(app: tauri::AppHandle) {
     toggle_search_window(&app);
+}
+
+/// Focus the main window and emit a navigation event with the target conversation id.
+#[tauri::command]
+fn focus_main_window(app: tauri::AppHandle, conversation_id: Option<String>) {
+    if let Some(win) = app.get_webview_window("main") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        if let Some(id) = conversation_id {
+            let _ = win.emit("lovcode:navigate-conversation", id);
+        }
+    }
+    if let Some(win) = app.get_webview_window("search") {
+        let _ = win.hide();
+    }
 }

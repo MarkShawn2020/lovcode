@@ -1,16 +1,17 @@
 //! HTTP server — axum. Used by the web UI and external clients.
 
 use anyhow::Result;
-use axum::extract::{Query, State};
+use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::Json;
 use axum::routing::get;
 use axum::Router;
 use clap::Args as ClapArgs;
 use lovcode_core::adapter::builtin_adapters;
+use lovcode_core::detail;
 use lovcode_core::index::LovcodeIndex;
 use lovcode_core::query;
-use lovcode_core::types::{SearchQuery, SearchResult};
+use lovcode_core::types::{Conversation, SearchQuery, SearchResult};
 use serde::Deserialize;
 use std::net::{IpAddr, SocketAddr};
 use std::path::Path;
@@ -48,6 +49,7 @@ async fn serve(index_dir: &Path, args: Args) -> Result<()> {
         .route("/health", get(|| async { "ok" }))
         .route("/sources", get(list_sources))
         .route("/search", get(do_search))
+        .route("/conversation/{id}", get(get_conversation))
         .with_state(state);
 
     if args.cors {
@@ -86,6 +88,15 @@ async fn do_search(
     };
     let r = query::search(&s.index, &q).map_err(internal)?;
     Ok(Json(r))
+}
+
+async fn get_conversation(
+    State(s): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<Conversation>, (StatusCode, String)> {
+    detail::get_conversation(&s.index, &id)
+        .map(Json)
+        .map_err(|e| (StatusCode::NOT_FOUND, e.to_string()))
 }
 
 async fn list_sources() -> Json<Vec<serde_json::Value>> {

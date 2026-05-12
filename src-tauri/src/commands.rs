@@ -1,9 +1,10 @@
 //! Tauri command wrappers — thin adapters over `lovcode-core`.
 
 use lovcode_core::adapter::builtin_adapters;
+use lovcode_core::detail;
 use lovcode_core::index::{default_index_dir, LovcodeIndex};
 use lovcode_core::query;
-use lovcode_core::types::{SearchQuery, SearchResult};
+use lovcode_core::types::{Conversation, SearchQuery, SearchResult};
 use lovcode_core::watcher;
 use serde::Serialize;
 use std::sync::OnceLock;
@@ -58,6 +59,11 @@ pub fn search(
         limit,
     };
     query::search(index(), &query).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn get_conversation(id: String) -> Result<Conversation, String> {
+    detail::get_conversation(index(), &id).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

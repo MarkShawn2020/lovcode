@@ -4,6 +4,7 @@ mod cmd_index;
 mod cmd_mcp;
 mod cmd_search;
 mod cmd_serve;
+mod cmd_show;
 mod cmd_sources;
 
 use clap::{Parser, Subcommand};
@@ -27,6 +28,9 @@ enum Cmd {
 
     /// Search the index.
     Search(cmd_search::Args),
+
+    /// Show one conversation by id.
+    Show(cmd_show::Args),
 
     /// List configured source adapters.
     Sources,
@@ -55,6 +59,7 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Cmd::Index(a) => cmd_index::run(&index_dir, a),
         Cmd::Search(a) => cmd_search::run(&index_dir, a),
+        Cmd::Show(a) => cmd_show::run(&index_dir, a),
         Cmd::Sources => cmd_sources::run(&index_dir),
         Cmd::Serve(a) => cmd_serve::run(&index_dir, a),
         Cmd::Mcp => cmd_mcp::run(&index_dir),
