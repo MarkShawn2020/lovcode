@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.7
+
+### Patch Changes
+
+- d18a087: Fix Tauri dev startup by constraining Tailwind source scanning and ignoring generated build directories during Vite file watching.
+
 ## 0.39.6
 
 ### Patch Changes
