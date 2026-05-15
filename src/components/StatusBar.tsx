@@ -24,6 +24,7 @@ import { version as VERSION } from "../../package.json";
 import { AppVersionManager } from "./AppVersionManager";
 import { updateStateAtom, type UpdateStage } from "./UpdateChecker";
 import { useI18n } from "@/i18n";
+import { formatByteSize, getSearchIndexPresentation, getSearchIndexTiming } from "@/lib/searchIndexStatus";
 
 interface NetworkInfo {
   region: string;
@@ -173,6 +174,7 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
   const [homeDir, setHomeDir] = useState("");
   const [versionManagerOpen, setVersionManagerOpen] = useState(false);
   const [indexDetailsOpen, setIndexDetailsOpen] = useState(false);
+  const [indexTimingNow, setIndexTimingNow] = useState(() => Date.now() / 1000);
   const indexAutoStartRef = useRef(false);
   const { status: searchIndexStatus, progress: searchIndexProgress, start: startSearchIndexBuild } = useSearchIndexBuildStatus();
 
@@ -204,10 +206,11 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
 
   useEffect(() => {
     if (!searchIndexStatus || indexAutoStartRef.current) return;
-    if (searchIndexStatus.state === "building") {
+    if (searchIndexStatus.state === "building" || searchIndexStatus.state === "ready") {
       indexAutoStartRef.current = true;
       return;
     }
+    if (searchIndexStatus.state !== "idle") return;
 
     indexAutoStartRef.current = true;
     const timer = window.setTimeout(() => {
@@ -215,6 +218,17 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
     }, 4000);
     return () => window.clearTimeout(timer);
   }, [searchIndexStatus, startSearchIndexBuild]);
+
+  useEffect(() => {
+    if (!indexDetailsOpen || searchIndexStatus?.state !== "building") return;
+
+    setIndexTimingNow(Date.now() / 1000);
+    const timer = window.setInterval(() => {
+      setIndexTimingNow(Date.now() / 1000);
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+  }, [indexDetailsOpen, searchIndexStatus?.state]);
 
   // Fetch today's coding stats
   useEffect(() => {
@@ -335,17 +349,37 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
     );
   }, [scriptOutput]);
 
-  const searchIndexPercent = Math.round(searchIndexProgress * 100);
-  const searchIndexLabel = searchIndexStatus?.state === "building"
-    ? `Index ${searchIndexPercent}%`
-    : searchIndexStatus?.state === "error"
-      ? "Index error"
-      : searchIndexStatus?.state === "ready"
-        ? "Index ready"
-        : "Index";
-  const searchIndexTitle = searchIndexStatus?.state === "building"
-    ? `${searchIndexStatus.processedSessions}/${searchIndexStatus.totalSessions} sessions · ${searchIndexStatus.indexedMessages} messages`
-    : searchIndexStatus?.error || searchIndexLabel;
+  const {
+    percent: searchIndexPercent,
+    label: searchIndexLabel,
+    title: searchIndexTitle,
+  } = getSearchIndexPresentation(searchIndexStatus, searchIndexProgress);
+  const searchIndexTiming = getSearchIndexTiming(searchIndexStatus, searchIndexProgress, indexTimingNow);
+  const searchIndexBarPercent = searchIndexStatus?.state === "building"
+    ? searchIndexPercent
+    : searchIndexStatus?.state === "ready"
+      ? 100
+      : 0;
+  const searchIndexDetailsTitle = searchIndexStatus?.state === "building"
+    ? "Building index"
+    : "Search index";
+  const searchIndexTotalMessages = searchIndexStatus?.totalMessages ?? 0;
+  const searchIndexProcessedMessages = searchIndexStatus?.processedMessages ?? 0;
+  const displayedProcessedMessages = Math.min(
+    searchIndexProcessedMessages,
+    searchIndexTotalMessages || searchIndexProcessedMessages,
+  );
+  const searchIndexMessagesLabel = searchIndexTotalMessages > 0
+    ? `${displayedProcessedMessages}/${searchIndexTotalMessages} messages`
+    : `${displayedProcessedMessages} messages`;
+  const displayedProcessedSessions = Math.min(
+    searchIndexStatus?.processedSessions ?? 0,
+    searchIndexStatus?.totalSessions ?? searchIndexStatus?.processedSessions ?? 0,
+  );
+  const searchIndexReadLabel =
+    searchIndexStatus?.state === "building" && (searchIndexStatus.totalBytes ?? 0) > 0
+      ? `${formatByteSize(searchIndexStatus.processedBytes)} / ${formatByteSize(searchIndexStatus.totalBytes)} read`
+      : null;
 
   // Script mode: show script output + settings gear
   if (settings?.enabled && scriptOutput !== null) {
@@ -408,18 +442,26 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
               {indexDetailsOpen && (
                 <div className="absolute bottom-6 left-0 z-50 w-80 rounded-lg border border-border bg-popover p-3 text-xs text-popover-foreground shadow-lg">
                   <div className="flex items-center justify-between gap-3">
-                    <span className="font-medium text-foreground">Search index</span>
+                    <span className="font-medium text-foreground">{searchIndexDetailsTitle}</span>
                     <span className="text-muted-foreground">{searchIndexLabel}</span>
                   </div>
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
                     <div
                       className="h-full rounded-full bg-primary transition-[width]"
-                      style={{ width: `${searchIndexStatus?.state === "building" ? searchIndexPercent : 100}%` }}
+                      style={{ width: `${searchIndexBarPercent}%` }}
                     />
                   </div>
                   <div className="mt-2 space-y-1 text-muted-foreground">
-                    <div>{searchIndexStatus?.processedSessions ?? 0}/{searchIndexStatus?.totalSessions ?? 0} sessions</div>
-                    <div>{searchIndexStatus?.indexedMessages ?? 0} messages indexed</div>
+                    <div>{searchIndexMessagesLabel}</div>
+                    <div>
+                      {displayedProcessedSessions}/{searchIndexStatus?.totalSessions ?? 0} sessions
+                    </div>
+                    <div>
+                      Elapsed {searchIndexTiming.elapsed}
+                      {searchIndexStatus?.state === "building" ? ` · ETA ${searchIndexTiming.eta}` : ""}
+                    </div>
+                    {searchIndexReadLabel && <div>{searchIndexReadLabel}</div>}
+                    <div>Size {formatByteSize(searchIndexStatus?.indexSizeBytes)}</div>
                     {searchIndexStatus?.currentProjectPath && (
                       <div className="truncate">{searchIndexStatus.currentProjectPath}</div>
                     )}

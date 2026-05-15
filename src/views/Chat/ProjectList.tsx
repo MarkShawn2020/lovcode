@@ -323,10 +323,16 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
       return;
     }
 
-    const s = allSessions.find((x) =>
+    const exact = allSessions.find((x) =>
       x.id === selectedSessionIdFromUrl &&
       (!selectedProjectIdFromUrl || x.project_id === selectedProjectIdFromUrl)
     );
+    const migrated = exact
+      ? null
+      : selectedProjectIdFromUrl
+        ? allSessions.find((x) => x.id === selectedSessionIdFromUrl)
+        : null;
+    const s = exact ?? migrated;
     if (!s) {
       if (!streaming) {
         setSelectedSession(null);
@@ -338,6 +344,11 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     setSelectedSession(s);
     revealSessionInSidebar(s);
     pendingScrollToSessionRef.current = selectedSessionIdFromUrl;
+    if (migrated) {
+      const path = getSessionSelectionPath(migrated);
+      rememberLastPath(path);
+      navigate(path, { replace: true });
+    }
   }, [
     selectedSessionIdFromUrl,
     selectedProjectIdFromUrl,
@@ -2148,9 +2159,11 @@ async function migrateScoped(sessionIds: string[], from: string, to: string) {
 function CwdMissingBanner({ from }: { from: string }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [autoFixing, setAutoFixing] = useState(false);
+  const [manualRelocating, setManualRelocating] = useState(false);
   const queryClient = useQueryClient();
   const sessions = useSessionsCache();
   const mountedRef = useRef(true);
+  const repairInProgress = autoFixing || manualRelocating;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -2264,12 +2277,18 @@ function CwdMissingBanner({ from }: { from: string }) {
           <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1">
             <div className="font-medium">
-              {autoFixing ? "正在自动修复工作目录…" : "原工作目录已不存在"}
+              {autoFixing
+                ? "正在自动修复工作目录…"
+                : manualRelocating
+                  ? "正在重定位工作目录…"
+                  : "原工作目录已不存在"}
             </div>
             <div className="opacity-80 break-all font-mono">{from}</div>
             <div className="opacity-70 mt-0.5">
               {autoFixing
                 ? "检测到 worktree 已被合并/删除，正在改写历史 cwd 到原项目。"
+                : manualRelocating
+                  ? "正在改写历史 cwd，完成后会刷新会话列表并隐藏此提示。"
                 : "历史可正常查看，但其中的相对路径无法解析、resume 也会失败。可能是项目被移动或重命名。"}
             </div>
           </div>
@@ -2277,14 +2296,19 @@ function CwdMissingBanner({ from }: { from: string }) {
         <div className="mt-2 pl-[22px]">
           <button
             onClick={() => setDialogOpen(true)}
-            disabled={autoFixing}
+            disabled={repairInProgress}
             className="px-2 py-1 rounded border border-amber-400 bg-white/60 hover:bg-white text-amber-900 disabled:opacity-50"
           >
-            重定位…
+            {manualRelocating ? "重定位中…" : "重定位…"}
           </button>
         </div>
       </div>
-      <RelocateSessionDialog from={from} open={dialogOpen} onOpenChange={setDialogOpen} />
+      <RelocateSessionDialog
+        from={from}
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        onMigrationStateChange={setManualRelocating}
+      />
     </>
   );
 }
@@ -2447,6 +2471,7 @@ export function SessionDetail({
 
   const selection = useMaasActiveSelection();
   const messageLoadSeqRef = useRef(0);
+  const messageSessionIdRef = useRef<string | null>(null);
   const messagesRef = useRef<Message[]>([]);
   const pendingMessagesRef = useRef<Message[]>(pendingMessages);
   const liveSyncScrollRef = useRef(false);
@@ -2490,8 +2515,10 @@ export function SessionDetail({
       })
       .catch((error) => {
         if (messageLoadSeqRef.current === seq) {
-          messagesRef.current = [];
-          setMessages([]);
+          if (reset) {
+            messagesRef.current = [];
+            setMessages([]);
+          }
           setMessageLoadError(error instanceof Error ? error.message : String(error));
         }
       })
@@ -2502,11 +2529,13 @@ export function SessionDetail({
 
   useEffect(() => {
     liveSyncScrollRef.current = false;
-    void loadMessages(true);
+    const reset = messageSessionIdRef.current !== session.id;
+    messageSessionIdRef.current = session.id;
+    void loadMessages(reset);
     return () => {
       messageLoadSeqRef.current += 1;
     };
-  }, [loadMessages]);
+  }, [loadMessages, session.id]);
 
   useEffect(() => {
     const unlisten = listen("sessions-changed", () => {
@@ -2670,6 +2699,7 @@ export function SessionDetail({
   const targetMessageScrollKeyRef = useRef<string | null>(null);
   const matchNavigationRequestedRef = useRef(false);
   const pendingScrollRestoreRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+  const renderedWindowSessionRef = useRef<string | null>(null);
 
   const expandTranscriptWindow = useCallback((direction: "before" | "after") => {
     const scroller = scrollRef.current;
@@ -2733,6 +2763,30 @@ export function SessionDetail({
     if (!scroller) return;
     scroller.scrollTop = restore.scrollTop + (scroller.scrollHeight - restore.scrollHeight);
   }, [renderedMessageRange.start, renderedMessages.length]);
+
+  useLayoutEffect(() => {
+    const scroller = scrollRef.current;
+    if (!scroller || showBlockingLoading) return;
+    if (pendingScrollRestoreRef.current) return;
+
+    const sessionChanged = renderedWindowSessionRef.current !== session.id;
+    renderedWindowSessionRef.current = session.id;
+    if (sessionChanged) {
+      scroller.scrollTop = 0;
+      return;
+    }
+
+    const maxTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    if (scroller.scrollTop > maxTop) {
+      scroller.scrollTop = maxTop;
+    }
+  }, [
+    session.id,
+    renderedMessageRange.start,
+    renderedMessageRange.end,
+    renderedMessages.length,
+    showBlockingLoading,
+  ]);
 
   // Resume-conversation state: prompt-box + spawned terminal
   // Only local CLI sessions can be resumed via `claude --resume`/`codex resume`.

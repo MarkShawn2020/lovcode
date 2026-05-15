@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.8
+
+### Patch Changes
+
+- Improve workspace session menus, runtime-to-transcript linking, Codex transcript parsing, and incremental search index status handling.
+
 ## 0.39.7
 
 ### Patch Changes

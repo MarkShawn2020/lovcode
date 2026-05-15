@@ -104,7 +104,7 @@ export interface AgentWorkspaceState {
 
 export interface AgentWorkspaceSidebarState {
   sessionListMode?: "active" | "archived";
-  outlineMode?: "project" | "recent";
+  outlineMode?: "project" | "day" | "recent";
   displayFilter?: "all" | "running" | "review";
   sortMode?: "last-modified" | "created" | "name";
   reorderGroups?: boolean;

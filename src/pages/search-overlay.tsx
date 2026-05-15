@@ -8,6 +8,7 @@ import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/sea
 import { formatDate, formatRelativeTime, restoreSlashCommand } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
 import { useSearchIndexBuildStatus } from "../hooks";
+import { getSearchIndexPresentation } from "@/lib/searchIndexStatus";
 
 interface SearchChatHit {
   session_id: string;
@@ -183,17 +184,14 @@ function buildContentPreview(
   };
 }
 
-function buildSearchHitPreview(result: SearchChatHit, query: string) {
+function buildMessageHitPreview(result: SearchChatHit, query: string) {
+  return buildContentPreview(result.content, query, false);
+}
+
+function buildRoundHitPreview(result: SearchChatHit, query: string) {
+  if (!hasRoundIndex(result)) return null;
   return buildContentPreview(result.content, query, false)
-    ?? buildContentPreview(result.round_prompt, query, false)
-    ?? buildContentPreview(result.title, query, false)
-    ?? buildContentPreview(result.summary, query, false)
-    ?? buildContentPreview(result.last_prompt, query, false)
-    ?? buildContentPreview(result.session_summary, query, false)
-    ?? buildContentPreview(
-      result.content || result.title || result.summary || result.last_prompt || result.session_summary,
-      query
-    );
+    ?? buildContentPreview(result.round_prompt, query, false);
 }
 
 function buildMetadataPreview(session: Session, query: string) {
@@ -241,6 +239,10 @@ function itemLineNumber(item: SearchResultItem) {
 
 function itemRoundIndex(item: SearchResultItem) {
   return getItemHit(item)?.round_index ?? 0;
+}
+
+function hasRoundIndex(hit: SearchChatHit | null | undefined) {
+  return (hit?.round_index ?? 0) > 0;
 }
 
 function compareItemOccurrenceAsc(a: SearchResultItem, b: SearchResultItem) {
@@ -409,13 +411,13 @@ function dedupeRoundItems(items: SearchResultItem[]) {
       variantsBySession: Map<string, SearchResultVariant>;
     }
   >();
-  const passthroughItems: SearchResultItem[] = [];
 
   for (const item of items) {
     if (item.kind !== "message" && item.kind !== "round") {
-      passthroughItems.push(item);
       continue;
     }
+
+    if (!hasRoundIndex(item.hit)) continue;
 
     const roundKey = getItemRoundKey(item) ?? item.key;
     const roundItem = toRoundSearchResultItem(item, roundKey);
@@ -464,7 +466,7 @@ function dedupeRoundItems(items: SearchResultItem[]) {
     };
   });
 
-  return sortSearchItems([...passthroughItems, ...roundItems]);
+  return sortSearchItems(roundItems);
 }
 
 function aggregateSessionItems(items: SearchResultItem[]): SearchResultItem[] {
@@ -573,8 +575,20 @@ function aggregateSearchItems(items: SearchResultItem[], viewMode: SearchViewMod
 }
 
 function roundLabel(hit: SearchChatHit) {
-  const index = hit.round_index ?? 0;
-  return index > 0 ? `Round ${index}` : "Session prelude";
+  return hasRoundIndex(hit) ? `Round ${hit.round_index}` : "Message";
+}
+
+function messageHitLabel(hit: SearchChatHit) {
+  const role = hit.role ? ` · ${hit.role}` : "";
+  return `${roundLabel(hit)}${role}`;
+}
+
+function roundHitLabel(hit: SearchChatHit) {
+  return hasRoundIndex(hit) ? `Round ${hit.round_index}` : "Round";
+}
+
+function lineMetaLabel(hit: SearchChatHit) {
+  return hit.line_number ? `line ${hit.line_number}` : "message";
 }
 
 function getItemVariants(item: SearchResultItem): SearchResultVariant[] {
@@ -614,9 +628,9 @@ function isSearchViewMode(value: unknown): value is SearchViewMode {
 function readSearchViewMode(): SearchViewMode {
   try {
     const stored = window.localStorage.getItem(SEARCH_VIEW_STORAGE_KEY);
-    return isSearchViewMode(stored) ? stored : "round";
+    return isSearchViewMode(stored) ? stored : "message";
   } catch {
-    return "round";
+    return "message";
   }
 }
 
@@ -643,7 +657,11 @@ export default function SearchOverlay() {
   const sessionStreamSeqRef = useRef(0);
   const resultsScrollRef = useRef<HTMLDivElement | null>(null);
   const expandedVariantsRef = useRef<HTMLDivElement | null>(null);
-  const { status: searchIndexStatus, start: startSearchIndexBuild } = useSearchIndexBuildStatus();
+  const {
+    status: searchIndexStatus,
+    progress: searchIndexProgress,
+    start: startSearchIndexBuild,
+  } = useSearchIndexBuildStatus();
   const sessionsById = useMemo(() => {
     return new Map(allSessions.map((session) => [session.id, session]));
   }, [allSessions]);
@@ -665,6 +683,7 @@ export default function SearchOverlay() {
 
   const fullTextIndexing = indexBuilding;
   const fullTextModePending = !indexReady && indexBuilding && !!trimmedQuery && sourceResults.length === 0;
+  const searchIndexPresentation = getSearchIndexPresentation(searchIndexStatus, searchIndexProgress);
   const parsedQuery = useMemo(() => parseScopedSearchQuery(trimmedQuery), [trimmedQuery]);
   const highlightQuery = parsedQuery.highlightQuery;
   const currentViewLabel = SEARCH_VIEW_MODES.find((mode) => mode.id === viewMode)?.label ?? "Result";
@@ -709,10 +728,14 @@ export default function SearchOverlay() {
       refresh: false,
     }).catch(() => {});
 
-    if (options.rebuildIndex) {
+    if (
+      options.rebuildIndex &&
+      searchIndexStatus?.state !== "building" &&
+      searchIndexStatus?.state !== "ready"
+    ) {
       startSearchIndexBuild(false).catch(() => {});
     }
-  }, [startSearchIndexBuild]);
+  }, [searchIndexStatus?.state, startSearchIndexBuild]);
 
   // Make html/body transparent so only the floating card paints. This window
   // has `transparent: true` in tauri.conf.json — without this the canvas
@@ -787,15 +810,32 @@ export default function SearchOverlay() {
           const session = sessionsById.get(result.session_id);
           if (!session) return;
           const messageKey = `${result.session_id}:${result.uuid || "message"}:${result.line_number ?? resultIndex}`;
+          const messagePreview = buildMessageHitPreview(result, highlightQuery);
+          const roundPreview = buildRoundHitPreview(result, highlightQuery);
+          if (!messagePreview && !roundPreview) return;
+
           contentSessionIds.add(result.session_id);
-          const preview = buildSearchHitPreview(result, highlightQuery);
-          messageItems.push({
-            kind: "message",
-            key: `message:${messageKey}:${resultIndex}`,
-            session,
-            hit: result,
-            preview,
-          });
+
+          if (messagePreview) {
+            messageItems.push({
+              kind: "message",
+              key: `message:${messageKey}:${resultIndex}`,
+              session,
+              hit: result,
+              preview: messagePreview,
+            });
+            return;
+          }
+
+          if (roundPreview) {
+            messageItems.push({
+              kind: "round",
+              key: `round:${messageKey}:${resultIndex}`,
+              session,
+              hit: result,
+              preview: roundPreview,
+            });
+          }
         });
 
         const metadataItems: SearchResultItem[] = sortByLastModified(
@@ -878,7 +918,11 @@ export default function SearchOverlay() {
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
-  const openChatResult = (session: Session, hit: SearchChatHit | null) => {
+  const openChatResult = (
+    session: Session,
+    hit: SearchChatHit | null,
+    target: "message" | "round" = "message",
+  ) => {
     rememberSearch(query);
 
     emitTo("main", "open-chat", {
@@ -886,8 +930,8 @@ export default function SearchOverlay() {
       projectPath: session.project_path || "",
       sessionId: session.id,
       summary: session.summary,
-      messageId: hit?.uuid ?? null,
-      lineNumber: hit?.line_number ?? null,
+      messageId: target === "message" ? hit?.uuid ?? null : null,
+      lineNumber: target === "message" ? hit?.line_number ?? null : null,
       roundIndex: hit?.round_index ?? null,
       highlight: highlightQuery,
     }).catch(() => {});
@@ -908,11 +952,11 @@ export default function SearchOverlay() {
       return;
     }
 
-    openChatResult(s, hit);
+    openChatResult(s, hit, item.kind === "round" ? "round" : "message");
   };
 
-  const onSelectVariant = (variant: SearchResultVariant) => {
-    openChatResult(variant.session, variant.hit);
+  const onSelectVariant = (variant: SearchResultVariant, itemKind: SearchResultItem["kind"]) => {
+    openChatResult(variant.session, variant.hit, itemKind === "round" ? "round" : "message");
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -1026,9 +1070,12 @@ export default function SearchOverlay() {
               <div className="font-serif text-base font-semibold text-foreground">{SEARCH_EMPTY_LABEL}</div>
             </div>
           ) : fullTextModePending ? (
-            <div className="flex items-center justify-center gap-2 px-4 py-8 text-sm text-muted-foreground">
+            <div
+              className="flex items-center justify-center gap-2 px-4 py-8 text-sm text-muted-foreground"
+              title={searchIndexPresentation.title}
+            >
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Building full-text index</span>
+              <span>{searchIndexPresentation.label}</span>
             </div>
           ) : results.length === 0 && !searching ? (
             <div className="px-4 py-8 text-center text-sm text-muted-foreground">
@@ -1054,14 +1101,16 @@ export default function SearchOverlay() {
                 let metaTitle = `${s.message_count} messages total`;
 
                 if (item.kind === "message") {
-                  label = `${roundLabel(item.hit)}${item.hit.role ? ` · ${item.hit.role}` : ""}`;
+                  label = messageHitLabel(item.hit);
                   contextLabel = [title, projectName].filter(Boolean).join(" · ");
-                  metaLabel = item.hit.line_number ? `record ${item.hit.line_number}` : "message";
-                  metaTitle = `${item.hit.role || "message"} message`;
+                  metaLabel = lineMetaLabel(item.hit);
+                  metaTitle = item.hit.line_number
+                    ? `${item.hit.role || "message"} at transcript line ${item.hit.line_number}`
+                    : `${item.hit.role || "message"} message`;
                 } else if (item.kind === "round") {
-                  label = `${roundLabel(item.hit)}${item.hit.role ? ` · ${item.hit.role}` : ""}`;
+                  label = roundHitLabel(item.hit);
                   contextLabel = [title, projectName].filter(Boolean).join(" · ");
-                  metaLabel = roundLabel(item.hit);
+                  metaLabel = lineMetaLabel(item.hit);
                   metaTitle = item.hit.round_prompt || `${s.message_count} messages total`;
                 } else if (item.kind === "session") {
                   const matchedRounds = item.matchedRoundCount ?? 0;
@@ -1153,29 +1202,47 @@ export default function SearchOverlay() {
                           const variantTitle = getSessionTitle(variant.session);
                           const variantProjectName = getProjectName(variant.session);
                           const variantTime = sessionVariantTime(variant.session);
+                          const variantLabel = item.kind === "round"
+                            ? roundHitLabel(variant.hit)
+                            : messageHitLabel(variant.hit);
+                          const variantPreview = variant.preview;
+                          const variantMeta = lineMetaLabel(variant.hit);
                           const variantContext = [
                             variantIndex === 0 ? "original" : `copy ${variantIndex + 1}`,
                             variantProjectName,
                             variant.session.source,
                           ].filter(Boolean).join(" · ");
+                          const variantSessionContext = [variantTitle, variantProjectName].filter(Boolean).join(" · ");
 
                           return (
                             <button
                               key={variant.key}
                               type="button"
-                              onClick={() => onSelectVariant(variant)}
-                              className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-1.5 text-left text-[11px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+                              onClick={() => onSelectVariant(variant, item.kind)}
+                              className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[11px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
                             >
-                              <span className="min-w-0">
-                                <span className="block truncate font-medium">
-                                  <HighlightText text={variantTitle} query={highlightQuery} />
+                              <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-current opacity-50" />
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate font-medium text-foreground">
+                                  <HighlightText text={variantLabel} query={highlightQuery} />
                                 </span>
-                                <span className="block truncate text-[10px] text-muted-foreground/70">
+                                {variantPreview ? (
+                                  <span className="mt-0.5 block line-clamp-2 leading-4 text-muted-foreground/75">
+                                    <HighlightText text={variantPreview.text} query={variantPreview.highlightQuery} />
+                                  </span>
+                                ) : null}
+                                <span className="mt-0.5 block truncate text-[10px] text-muted-foreground/60">
+                                  <HighlightText text={variantSessionContext || variantContext} query={highlightQuery} />
+                                </span>
+                                <span className="block truncate text-[10px] text-muted-foreground/50">
                                   {variantContext}
                                 </span>
                               </span>
-                              <span className="shrink-0 text-[10px] tabular-nums" title={formatDate(variantTime)}>
-                                {formatRelativeTime(variantTime)}
+                              <span className="flex shrink-0 flex-col items-end gap-0.5 text-[10px] tabular-nums text-muted-foreground">
+                                <span title={formatDate(variantTime)}>{formatRelativeTime(variantTime)}</span>
+                                <span title={variant.hit.line_number ? `transcript line ${variant.hit.line_number}` : undefined}>
+                                  {variantMeta}
+                                </span>
                               </span>
                             </button>
                           );

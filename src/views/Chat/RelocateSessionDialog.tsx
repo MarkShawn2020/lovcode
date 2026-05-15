@@ -24,9 +24,10 @@ interface Props {
   from: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onMigrationStateChange?: (migrating: boolean) => void;
 }
 
-export function RelocateSessionDialog({ from, open, onOpenChange }: Props) {
+export function RelocateSessionDialog({ from, open, onOpenChange, onMigrationStateChange }: Props) {
   const queryClient = useQueryClient();
   const [loading, setLoading] = useState(false);
   const [analysis, setAnalysis] = useState<RelocationResult | null>(null);
@@ -58,6 +59,7 @@ export function RelocateSessionDialog({ from, open, onOpenChange }: Props) {
 
   const runMigration = async (to: string) => {
     setMigrating(to);
+    onMigrationStateChange?.(true);
     try {
       const result = await invoke<{
         success: boolean;
@@ -85,6 +87,7 @@ export function RelocateSessionDialog({ from, open, onOpenChange }: Props) {
       toast.error(`迁移失败: ${msg}`);
     } finally {
       setMigrating(null);
+      onMigrationStateChange?.(false);
     }
   };
 

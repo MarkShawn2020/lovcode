@@ -1,4 +1,6 @@
 use super::*;
+use std::collections::HashSet;
+use std::io::{Read, Seek, SeekFrom};
 
 // ============================================================================
 // Search Feature
@@ -30,8 +32,13 @@ pub(crate) struct SearchIndexBuildStatus {
     pub state: String,
     pub total_sessions: usize,
     pub processed_sessions: usize,
+    pub total_messages: usize,
+    pub processed_messages: usize,
     pub indexed_messages: usize,
+    pub total_bytes: u64,
+    pub processed_bytes: u64,
     pub skipped_sessions: usize,
+    pub index_size_bytes: u64,
     pub current_session_id: Option<String>,
     pub current_title: Option<String>,
     pub current_project_path: Option<String>,
@@ -47,8 +54,13 @@ impl Default for SearchIndexBuildStatus {
             state: "idle".to_string(),
             total_sessions: 0,
             processed_sessions: 0,
+            total_messages: 0,
+            processed_messages: 0,
             indexed_messages: 0,
+            total_bytes: 0,
+            processed_bytes: 0,
             skipped_sessions: 0,
+            index_size_bytes: 0,
             current_session_id: None,
             current_title: None,
             current_project_path: None,
@@ -64,11 +76,19 @@ impl Default for SearchIndexBuildStatus {
 #[serde(rename_all = "camelCase")]
 struct SearchIndexManifestEntry {
     path: String,
+    source_kind: String,
+    session_id: String,
     size: u64,
     mtime: u64,
+    indexed_size: u64,
+    line_count: usize,
+    message_count: usize,
+    round_index: usize,
+    round_prompt: String,
+    round_timestamp: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SearchIndexManifest {
     version: u32,
@@ -94,13 +114,60 @@ struct CodexSearchSource {
     mtime: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SearchIndexSourceKind {
+    Claude,
+    Codex,
+}
+
+impl SearchIndexSourceKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            SearchIndexSourceKind::Claude => "claude",
+            SearchIndexSourceKind::Codex => "codex",
+        }
+    }
+}
+
+#[derive(Clone)]
+enum SearchIndexWorkMode {
+    Reindex,
+    AppendClaude {
+        offset: u64,
+        base_line_count: usize,
+        base_message_count: usize,
+        base_round_index: usize,
+        base_round_prompt: String,
+        base_round_timestamp: String,
+    },
+}
+
+impl SearchIndexWorkMode {
+    fn should_delete_existing_docs(&self) -> bool {
+        matches!(self, SearchIndexWorkMode::Reindex)
+    }
+}
+
 static SEARCH_INDEX_BUILD_STATUS: LazyLock<Mutex<SearchIndexBuildStatus>> =
     LazyLock::new(|| Mutex::new(SearchIndexBuildStatus::default()));
 static SEARCH_INDEX_BUILD_RUNNING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-const SEARCH_INDEX_MANIFEST_VERSION: u32 = 1;
+const SEARCH_INDEX_MANIFEST_VERSION: u32 = 4;
 const SEARCH_INDEX_EVENT: &str = "search-index:build";
+const REQUIRED_SEARCH_INDEX_FIELDS: &[&str] = &[
+    "title",
+    "summary",
+    "last_prompt",
+    "prompt",
+    "user",
+    "assistant",
+    "source_path",
+    "line_number",
+    "round_index",
+    "round_prompt",
+    "round_timestamp",
+];
 
 struct SearchIndexBuildRunningGuard;
 
@@ -124,7 +191,24 @@ fn search_index_manifest_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("search-index-manifest.json"))
 }
 
-fn emit_search_index_status(app: Option<&tauri::AppHandle>, status: SearchIndexBuildStatus) {
+fn emit_search_index_status(app: Option<&tauri::AppHandle>, mut status: SearchIndexBuildStatus) {
+    if status.total_messages > 0 {
+        status.processed_messages = status.processed_messages.min(status.total_messages);
+        status.indexed_messages = status.indexed_messages.min(status.total_messages);
+    }
+    if status.total_sessions > 0 {
+        status.processed_sessions = status.processed_sessions.min(status.total_sessions);
+    }
+    if status.total_bytes > 0 {
+        status.processed_bytes = status.processed_bytes.min(status.total_bytes);
+    }
+
+    if status.state == "building" {
+        status.index_size_bytes = search_index_build_dir_size();
+    } else if status.index_size_bytes == 0 {
+        status.index_size_bytes = search_index_dir_size();
+    }
+
     if let Ok(mut guard) = SEARCH_INDEX_BUILD_STATUS.lock() {
         *guard = status.clone();
     }
@@ -138,10 +222,97 @@ fn current_search_index_status() -> SearchIndexBuildStatus {
         .lock()
         .map(|guard| guard.clone())
         .unwrap_or_default();
-    if status.state == "idle" && get_index_dir().exists() {
+    let current_manifest = load_search_index_manifest();
+    let index_ready = get_index_dir().exists()
+        && current_manifest.is_some()
+        && Index::open_in_dir(get_index_dir())
+            .map(|index| search_index_schema_is_current(&index.schema()))
+            .unwrap_or(false);
+    let build_running = SEARCH_INDEX_BUILD_RUNNING.load(std::sync::atomic::Ordering::Acquire);
+    let mut changed = false;
+
+    if !build_running && index_ready && (status.state == "idle" || status.state == "building") {
+        let (total_sessions, total_messages, total_bytes) = current_manifest
+            .as_ref()
+            .map(|manifest| manifest_totals(&manifest.entries))
+            .unwrap_or((
+                status.total_sessions,
+                status.total_messages,
+                status.total_bytes,
+            ));
         status.state = "ready".to_string();
+        status.total_sessions = total_sessions;
+        status.processed_sessions = total_sessions;
+        status.total_messages = total_messages;
+        status.processed_messages = total_messages;
+        status.indexed_messages = total_messages;
+        status.total_bytes = total_bytes;
+        status.processed_bytes = total_bytes;
+        status.index_size_bytes = search_index_dir_size();
+        status.current_session_id = None;
+        status.current_title = None;
+        status.current_project_path = None;
+        status.error = None;
+        if status.completed_at.is_none() {
+            status.completed_at = Some(now_secs());
+        }
+        status.updated_at = status.completed_at;
+        changed = true;
+    } else if !build_running && status.state == "building" && !index_ready {
+        status.state = "idle".to_string();
+        status.current_session_id = None;
+        status.current_title = None;
+        status.current_project_path = None;
+        changed = true;
+    } else if status.state == "ready" && !index_ready {
+        status.state = "idle".to_string();
+        changed = true;
     }
+
+    if changed {
+        if let Ok(mut guard) = SEARCH_INDEX_BUILD_STATUS.lock() {
+            *guard = status.clone();
+        }
+    }
+
     status
+}
+
+fn manifest_totals(entries: &[SearchIndexManifestEntry]) -> (usize, usize, u64) {
+    (
+        entries.len(),
+        entries.iter().map(|entry| entry.message_count).sum(),
+        entries.iter().map(|entry| entry.indexed_size).sum(),
+    )
+}
+
+fn dir_size_bytes(path: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+
+    entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let metadata = entry.metadata().ok()?;
+            if metadata.is_dir() {
+                Some(dir_size_bytes(&entry.path()))
+            } else {
+                Some(metadata.len())
+            }
+        })
+        .sum()
+}
+
+fn search_index_dir_size() -> u64 {
+    dir_size_bytes(&get_index_dir())
+}
+
+fn search_index_build_dir_size() -> u64 {
+    get_index_dir()
+        .parent()
+        .map(|parent| dir_size_bytes(&parent.join("search-index-building")))
+        .unwrap_or(0)
 }
 
 fn try_mark_search_index_build_running() -> Option<SearchIndexBuildRunningGuard> {
@@ -231,27 +402,53 @@ fn collect_codex_search_sources() -> Vec<CodexSearchSource> {
         .collect()
 }
 
-fn build_manifest_entries(
-    claude_sources: &[ClaudeSearchSource],
-    codex_sources: &[CodexSearchSource],
-) -> Vec<SearchIndexManifestEntry> {
-    let mut entries = Vec::with_capacity(claude_sources.len() + codex_sources.len());
-    entries.extend(
-        claude_sources
-            .iter()
-            .map(|source| SearchIndexManifestEntry {
-                path: source.path.to_string_lossy().into_owned(),
-                size: source.size,
-                mtime: source.mtime,
-            }),
-    );
-    entries.extend(codex_sources.iter().map(|source| SearchIndexManifestEntry {
-        path: source.path.to_string_lossy().into_owned(),
-        size: source.size,
-        mtime: source.mtime,
-    }));
-    entries.sort();
-    entries
+fn source_path_key(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+fn previous_entry_matches_source(
+    entry: &SearchIndexManifestEntry,
+    source_kind: SearchIndexSourceKind,
+    session_id: &str,
+    size: u64,
+    mtime: u64,
+) -> bool {
+    entry.source_kind == source_kind.as_str()
+        && entry.session_id == session_id
+        && entry.size == size
+        && entry.mtime == mtime
+        && entry.indexed_size == size
+}
+
+fn claude_append_work_mode(
+    previous: &SearchIndexManifestEntry,
+    source: &ClaudeSearchSource,
+) -> Option<SearchIndexWorkMode> {
+    if previous.source_kind != SearchIndexSourceKind::Claude.as_str()
+        || previous.session_id != source.session_id
+        || source.size <= previous.indexed_size
+    {
+        return None;
+    }
+
+    Some(SearchIndexWorkMode::AppendClaude {
+        offset: previous.indexed_size,
+        base_line_count: previous.line_count,
+        base_message_count: previous.message_count,
+        base_round_index: previous.round_index,
+        base_round_prompt: previous.round_prompt.clone(),
+        base_round_timestamp: previous.round_timestamp.clone(),
+    })
+}
+
+fn read_file_suffix(path: &Path, offset: u64) -> Result<String, String> {
+    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(offset))
+        .map_err(|e| e.to_string())?;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| e.to_string())?;
+    Ok(content)
 }
 
 fn load_search_index_manifest() -> Option<SearchIndexManifest> {
@@ -260,34 +457,44 @@ fn load_search_index_manifest() -> Option<SearchIndexManifest> {
     (manifest.version == SEARCH_INDEX_MANIFEST_VERSION).then_some(manifest)
 }
 
-fn save_search_index_manifest(entries: Vec<SearchIndexManifestEntry>) {
+fn save_search_index_manifest(entries: Vec<SearchIndexManifestEntry>) -> Result<(), String> {
     let path = search_index_manifest_path();
     if let Some(parent) = path.parent() {
-        let _ = fs::create_dir_all(parent);
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let manifest = SearchIndexManifest {
         version: SEARCH_INDEX_MANIFEST_VERSION,
         indexed_at: now_secs(),
         entries,
     };
-    if let Ok(bytes) = serde_json::to_vec(&manifest) {
-        let _ = fs::write(path, bytes);
-    }
+    let bytes = serde_json::to_vec(&manifest).map_err(|e| e.to_string())?;
+    fs::write(path, bytes).map_err(|e| e.to_string())
 }
 
-fn search_index_sources_unchanged(entries: &[SearchIndexManifestEntry]) -> bool {
-    if !get_index_dir().exists() {
+fn search_index_schema_is_current(schema: &Schema) -> bool {
+    REQUIRED_SEARCH_INDEX_FIELDS
+        .iter()
+        .all(|field| schema.get_field(field).is_ok())
+}
+
+fn search_index_on_disk_is_current() -> bool {
+    if !get_index_dir().exists() || load_search_index_manifest().is_none() {
         return false;
     }
-    load_search_index_manifest()
-        .map(|manifest| manifest.entries == entries)
+
+    Index::open_in_dir(get_index_dir())
+        .map(|index| search_index_schema_is_current(&index.schema()))
         .unwrap_or(false)
 }
 
 fn ensure_search_index_loaded() -> Result<(), String> {
     let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
-    if guard.is_some() {
-        return Ok(());
+    if let Some(search_index) = guard.as_ref() {
+        if search_index_schema_is_current(&search_index.schema) {
+            return Ok(());
+        }
+        *guard = None;
+        return Err("Search index schema is outdated. Rebuild required.".to_string());
     }
     let index_dir = get_index_dir();
     if !index_dir.exists() {
@@ -295,6 +502,9 @@ fn ensure_search_index_loaded() -> Result<(), String> {
     }
     let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
     let schema = index.schema();
+    if !search_index_schema_is_current(&schema) {
+        return Err("Search index schema is outdated. Rebuild required.".to_string());
+    }
     register_jieba_tokenizer(&index);
     *guard = Some(SearchIndex { index, schema });
     Ok(())
@@ -313,6 +523,26 @@ fn update_search_index_progress(
     status.current_project_path = current_project_path;
     status.updated_at = Some(now_secs());
     emit_search_index_status(app, status.clone());
+}
+
+fn update_search_index_message_progress(
+    app: Option<&tauri::AppHandle>,
+    status: &mut SearchIndexBuildStatus,
+    current_session_id: Option<String>,
+    current_title: Option<String>,
+    current_project_path: Option<String>,
+    force_emit: bool,
+) {
+    status.processed_messages += 1;
+    status.indexed_messages += 1;
+    status.current_session_id = current_session_id;
+    status.current_title = current_title;
+    status.current_project_path = current_project_path;
+    status.updated_at = Some(now_secs());
+
+    if force_emit || status.processed_messages % 100 == 0 {
+        emit_search_index_status(app, status.clone());
+    }
 }
 
 #[tauri::command]
@@ -377,17 +607,27 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     let projects_dir = get_claude_dir().join("projects");
     let claude_sources = collect_claude_search_sources(&projects_dir)?;
     let codex_sources = collect_codex_search_sources();
-    let manifest_entries = build_manifest_entries(&claude_sources, &codex_sources);
-    let total_sessions = manifest_entries.len();
+    let previous_manifest = load_search_index_manifest();
     let started_at = now_secs();
+    let discovered_sessions = claude_sources.len() + codex_sources.len();
+    let discovered_bytes = claude_sources
+        .iter()
+        .map(|source| source.size)
+        .chain(codex_sources.iter().map(|source| source.size))
+        .sum();
     let mut status = SearchIndexBuildStatus {
         state: "building".to_string(),
-        total_sessions,
+        total_sessions: discovered_sessions,
         processed_sessions: 0,
+        total_messages: 0,
+        processed_messages: 0,
         indexed_messages: 0,
+        total_bytes: discovered_bytes,
+        processed_bytes: 0,
         skipped_sessions: 0,
+        index_size_bytes: 0,
         current_session_id: None,
-        current_title: None,
+        current_title: Some("Preparing search index".to_string()),
         current_project_path: None,
         started_at: Some(started_at),
         updated_at: Some(started_at),
@@ -396,27 +636,151 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     };
     emit_search_index_status(app.as_ref(), status.clone());
 
-    if !force && search_index_sources_unchanged(&manifest_entries) {
+    let previous_by_path: HashMap<String, SearchIndexManifestEntry> = previous_manifest
+        .as_ref()
+        .map(|manifest| {
+            manifest
+                .entries
+                .iter()
+                .map(|entry| (entry.path.clone(), entry.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let full_rebuild = force || previous_manifest.is_none() || !search_index_on_disk_is_current();
+
+    let mut current_paths = HashSet::with_capacity(discovered_sessions);
+    let mut final_manifest_entries: Vec<SearchIndexManifestEntry> =
+        Vec::with_capacity(discovered_sessions);
+    let mut claude_work_by_path: HashMap<String, SearchIndexWorkMode> = HashMap::new();
+    let mut codex_work_by_path: HashMap<String, SearchIndexWorkMode> = HashMap::new();
+    let mut work_bytes = 0u64;
+
+    for source in claude_sources.iter() {
+        let path = source_path_key(&source.path);
+        current_paths.insert(path.clone());
+        let previous = previous_by_path.get(&path);
+
+        if !full_rebuild
+            && previous
+                .map(|entry| {
+                    previous_entry_matches_source(
+                        entry,
+                        SearchIndexSourceKind::Claude,
+                        &source.session_id,
+                        source.size,
+                        source.mtime,
+                    )
+                })
+                .unwrap_or(false)
+        {
+            if let Some(entry) = previous {
+                final_manifest_entries.push(entry.clone());
+            }
+            continue;
+        }
+
+        let mode = if !full_rebuild {
+            previous
+                .and_then(|entry| claude_append_work_mode(entry, source))
+                .unwrap_or(SearchIndexWorkMode::Reindex)
+        } else {
+            SearchIndexWorkMode::Reindex
+        };
+        work_bytes += match &mode {
+            SearchIndexWorkMode::Reindex => source.size,
+            SearchIndexWorkMode::AppendClaude { offset, .. } => source.size.saturating_sub(*offset),
+        };
+        claude_work_by_path.insert(path, mode);
+    }
+
+    for source in codex_sources.iter() {
+        let path = source_path_key(&source.path);
+        current_paths.insert(path.clone());
+        let previous = previous_by_path.get(&path);
+
+        if !full_rebuild
+            && previous
+                .map(|entry| {
+                    previous_entry_matches_source(
+                        entry,
+                        SearchIndexSourceKind::Codex,
+                        &source.session_id,
+                        source.size,
+                        source.mtime,
+                    )
+                })
+                .unwrap_or(false)
+        {
+            if let Some(entry) = previous {
+                final_manifest_entries.push(entry.clone());
+            }
+            continue;
+        }
+
+        work_bytes += source.size;
+        codex_work_by_path.insert(path, SearchIndexWorkMode::Reindex);
+    }
+
+    let deleted_entries: Vec<SearchIndexManifestEntry> = if full_rebuild {
+        Vec::new()
+    } else {
+        previous_by_path
+            .values()
+            .filter(|entry| !current_paths.contains(&entry.path))
+            .cloned()
+            .collect()
+    };
+    let changed_sessions =
+        claude_work_by_path.len() + codex_work_by_path.len() + deleted_entries.len();
+    status.total_sessions = changed_sessions;
+    status.total_messages = 0;
+    status.total_bytes = work_bytes;
+    status.current_title = None;
+    status.updated_at = Some(now_secs());
+
+    if build_dir.exists() {
+        fs::remove_dir_all(&build_dir).map_err(|e| e.to_string())?;
+    }
+
+    if !full_rebuild && changed_sessions == 0 {
         ensure_search_index_loaded()?;
+        final_manifest_entries.sort();
+        let (corpus_sessions, corpus_messages, corpus_bytes) =
+            manifest_totals(&final_manifest_entries);
         status.state = "ready".to_string();
-        status.processed_sessions = total_sessions;
-        status.skipped_sessions = total_sessions;
+        status.total_sessions = corpus_sessions;
+        status.processed_sessions = corpus_sessions;
+        status.total_messages = corpus_messages;
+        status.processed_messages = corpus_messages;
+        status.indexed_messages = corpus_messages;
+        status.total_bytes = corpus_bytes;
+        status.processed_bytes = corpus_bytes;
+        status.skipped_sessions = 0;
         status.current_session_id = None;
         status.current_title = None;
         status.current_project_path = None;
+        status.index_size_bytes = search_index_dir_size();
         status.completed_at = Some(now_secs());
         status.updated_at = status.completed_at;
         emit_search_index_status(app.as_ref(), status);
         return Ok(0);
     }
 
-    if build_dir.exists() {
-        fs::remove_dir_all(&build_dir).map_err(|e| e.to_string())?;
-    }
-    fs::create_dir_all(&build_dir).map_err(|e| e.to_string())?;
+    emit_search_index_status(app.as_ref(), status.clone());
 
-    let schema = create_schema();
-    let index = Index::create_in_dir(&build_dir, schema.clone()).map_err(|e| e.to_string())?;
+    let (index, schema) = if full_rebuild {
+        fs::create_dir_all(&build_dir).map_err(|e| e.to_string())?;
+        let schema = create_schema();
+        let index = Index::create_in_dir(&build_dir, schema.clone()).map_err(|e| e.to_string())?;
+        (index, schema)
+    } else {
+        let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
+        let schema = index.schema();
+        if !search_index_schema_is_current(&schema) {
+            return Err("Search index schema is outdated. Rebuild required.".to_string());
+        }
+        (index, schema)
+    };
 
     // Register jieba tokenizer for Chinese support
     register_jieba_tokenizer(&index);
@@ -438,6 +802,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     let project_id_field = schema.get_field("project_id").unwrap();
     let project_path_field = schema.get_field("project_path").unwrap();
     let session_id_field = schema.get_field("session_id").unwrap();
+    let source_path_field = schema.get_field("source_path").unwrap();
     let session_summary_field = schema.get_field("session_summary").unwrap();
     let timestamp_field = schema.get_field("timestamp").unwrap();
     let line_number_field = schema.get_field("line_number").unwrap();
@@ -445,10 +810,29 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     let round_prompt_field = schema.get_field("round_prompt").unwrap();
     let round_timestamp_field = schema.get_field("round_timestamp").unwrap();
 
-    let mut indexed_count = 0;
+    if !full_rebuild {
+        for entry in deleted_entries.iter() {
+            index_writer.delete_term(Term::from_field_text(source_path_field, &entry.path));
+            status.processed_sessions += 1;
+            status.current_session_id = Some(entry.session_id.clone());
+            status.current_title = None;
+            status.current_project_path = Some(entry.path.clone());
+            status.updated_at = Some(now_secs());
+            emit_search_index_status(app.as_ref(), status.clone());
+        }
+        for (path, mode) in claude_work_by_path.iter() {
+            if mode.should_delete_existing_docs() {
+                index_writer.delete_term(Term::from_field_text(source_path_field, path));
+            }
+        }
+        for path in codex_work_by_path.keys() {
+            index_writer.delete_term(Term::from_field_text(source_path_field, path));
+        }
+    }
 
     // === Command stats collection ===
-    let mut command_stats: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let mut command_stats: Option<HashMap<String, HashMap<String, usize>>> =
+        full_rebuild.then(HashMap::new);
     let command_pattern =
         regex::Regex::new(r"<command-name>(/[^<]+)</command-name>").map_err(|e| e.to_string())?;
 
@@ -503,16 +887,59 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         }
     }
 
-    if commands_dir.exists() {
+    if command_stats.is_some() && commands_dir.exists() {
         scan_commands_for_aliases(&commands_dir, &mut alias_map, &commands_dir);
     }
     // === End command stats setup ===
 
-    for source in &claude_sources {
+    for (source, source_path, work_mode) in claude_sources.iter().filter_map(|source| {
+        let source_path = source_path_key(&source.path);
+        claude_work_by_path
+            .get(&source_path)
+            .cloned()
+            .map(|work_mode| (source, source_path, work_mode))
+    }) {
         let session_head = read_session_head(&source.path, 0);
         let session_title = session_head.title.unwrap_or_default();
         let session_last_prompt = session_head.last_prompt.unwrap_or_default();
-        let file_content = fs::read_to_string(&source.path).unwrap_or_default();
+        let (
+            file_content,
+            base_line_count,
+            mut session_message_count,
+            mut round_index,
+            mut round_prompt,
+            mut round_timestamp,
+            session_work_bytes,
+        ) = match &work_mode {
+            SearchIndexWorkMode::Reindex => (
+                fs::read_to_string(&source.path).unwrap_or_default(),
+                0usize,
+                0usize,
+                0usize,
+                String::new(),
+                String::new(),
+                source.size,
+            ),
+            SearchIndexWorkMode::AppendClaude {
+                offset,
+                base_line_count,
+                base_message_count,
+                base_round_index,
+                base_round_prompt,
+                base_round_timestamp,
+            } => (
+                read_file_suffix(&source.path, *offset)?,
+                *base_line_count,
+                *base_message_count,
+                *base_round_index,
+                base_round_prompt.clone(),
+                base_round_timestamp.clone(),
+                source.size.saturating_sub(*offset),
+            ),
+        };
+        let session_start_bytes = status.processed_bytes;
+        let mut session_bytes_seen = 0u64;
+        let mut line_count = base_line_count;
 
         let mut session_summary: Option<String> = session_head.summary;
 
@@ -527,10 +954,10 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
             }
         }
 
-        let mut round_index = 0usize;
-        let mut round_prompt = String::new();
-        let mut round_timestamp = String::new();
         for (line_idx, line) in file_content.lines().enumerate() {
+            line_count = base_line_count + line_idx + 1;
+            session_bytes_seen =
+                (session_bytes_seen + line.len() as u64 + 1).min(session_work_bytes);
             if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
                 let line_type = parsed.line_type.as_deref();
 
@@ -544,7 +971,15 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                         if role == "user" || role == "assistant" {
                             let (text_content, is_tool) = extract_content_with_meta(&msg.content);
                             let is_meta = parsed.is_meta.unwrap_or(false);
-                            if !is_meta && !is_tool && role == "user" && !text_content.is_empty() {
+                            let is_user_prompt =
+                                is_user_prompt_content(&role, is_tool, &text_content);
+                            let display_role =
+                                if is_ai_authored_user_content(&role, is_tool, &text_content) {
+                                    "assistant".to_string()
+                                } else {
+                                    role.clone()
+                                };
+                            if !is_meta && is_user_prompt && !text_content.is_empty() {
                                 round_index += 1;
                                 round_prompt = text_content.clone();
                                 round_timestamp = parsed.timestamp.clone().unwrap_or_default();
@@ -555,12 +990,12 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                                 && !(role == "assistant"
                                     && is_no_response_placeholder(&text_content))
                             {
-                                let prompt_text = if role == "user" {
+                                let prompt_text = if is_user_prompt {
                                     text_content.clone()
                                 } else {
                                     String::new()
                                 };
-                                let assistant_text = if role == "assistant" {
+                                let assistant_text = if display_role == "assistant" {
                                     text_content.clone()
                                 } else {
                                     String::new()
@@ -569,7 +1004,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
 
                                 index_writer.add_document(doc!(
                                         uuid_field => parsed.uuid.clone().unwrap_or_default(),
-                                        content_field => text_content,
+                                        content_field => text_content.clone(),
                                         title_field => session_title.clone(),
                                         summary_field => summary_text.clone(),
                                         last_prompt_field => session_last_prompt.clone(),
@@ -577,26 +1012,37 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                                         user_field => prompt_text,
                                         assistant_field => assistant_text,
                                         project_field => source.display_path.clone(),
-                                        role_field => role,
+                                        role_field => display_role,
                                         project_id_field => source.project_id.clone(),
                                         project_path_field => source.display_path.clone(),
                                         session_id_field => source.session_id.clone(),
+                                        source_path_field => source_path.clone(),
                                         session_summary_field => summary_text,
                                         timestamp_field => parsed.timestamp.clone().unwrap_or_default(),
-                                        line_number_field => (line_idx + 1) as u64,
+                                        line_number_field => line_count as u64,
                                         round_index_field => round_index as u64,
                                         round_prompt_field => round_prompt.clone(),
                                         round_timestamp_field => round_timestamp.clone(),
                                     )).map_err(|e| e.to_string())?;
 
-                                indexed_count += 1;
-                                status.indexed_messages = indexed_count;
+                                session_message_count += 1;
+                                status.processed_bytes = session_start_bytes + session_bytes_seen;
+                                update_search_index_message_progress(
+                                    app.as_ref(),
+                                    &mut status,
+                                    Some(source.session_id.clone()),
+                                    Some(session_title.clone()),
+                                    Some(source.display_path.clone()),
+                                    false,
+                                );
                             }
                         }
                     }
                 }
 
-                if line.contains("<command-name>") && !line.contains("\"type\":\"queue-operation\"")
+                if command_stats.is_some()
+                    && line.contains("<command-name>")
+                    && !line.contains("\"type\":\"queue-operation\"")
                 {
                     if let Some(ts_str) = &parsed.timestamp {
                         if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(ts_str) {
@@ -607,12 +1053,14 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                                         cmd_match.as_str().trim_start_matches('/').to_string();
                                     let name =
                                         alias_map.get(&raw_name).cloned().unwrap_or(raw_name);
-                                    command_stats
-                                        .entry(name)
-                                        .or_default()
-                                        .entry(week_key.clone())
-                                        .and_modify(|c| *c += 1)
-                                        .or_insert(1);
+                                    if let Some(command_stats) = command_stats.as_mut() {
+                                        command_stats
+                                            .entry(name)
+                                            .or_default()
+                                            .entry(week_key.clone())
+                                            .and_modify(|c| *c += 1)
+                                            .or_insert(1);
+                                    }
                                 }
                             }
                         }
@@ -620,6 +1068,20 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                 }
             }
         }
+        status.processed_bytes = session_start_bytes + session_work_bytes;
+        final_manifest_entries.push(SearchIndexManifestEntry {
+            path: source_path.clone(),
+            source_kind: SearchIndexSourceKind::Claude.as_str().to_string(),
+            session_id: source.session_id.clone(),
+            size: source.size,
+            mtime: source.mtime,
+            indexed_size: source.size,
+            line_count,
+            message_count: session_message_count,
+            round_index,
+            round_prompt,
+            round_timestamp,
+        });
         update_search_index_progress(
             app.as_ref(),
             &mut status,
@@ -629,10 +1091,17 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         );
     }
 
-    for source in &codex_sources {
+    for (source, source_path) in codex_sources.iter().filter_map(|source| {
+        let source_path = source_path_key(&source.path);
+        codex_work_by_path
+            .contains_key(&source_path)
+            .then_some((source, source_path))
+    }) {
         let codex_path = &source.path;
+        let session_start_bytes = status.processed_bytes;
         let Some(session) = build_codex_session(&codex_path) else {
             status.skipped_sessions += 1;
+            status.processed_bytes = session_start_bytes + source.size;
             update_search_index_progress(
                 app.as_ref(),
                 &mut status,
@@ -646,6 +1115,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
             Ok(messages) => messages,
             Err(_) => {
                 status.skipped_sessions += 1;
+                status.processed_bytes = session_start_bytes + source.size;
                 update_search_index_progress(
                     app.as_ref(),
                     &mut status,
@@ -668,26 +1138,39 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         let mut round_index = 0usize;
         let mut round_prompt = String::new();
         let mut round_timestamp = String::new();
+        let mut session_message_count = 0usize;
+        let mut line_count = 0usize;
+        let parsed_message_total = messages.len().max(1) as u64;
 
         for message in messages {
-            if message.content.trim().is_empty() {
+            if message.is_meta || message.content.trim().is_empty() {
                 continue;
             }
-            if message.role == "user" && !message.is_tool && !message.is_meta {
+            let is_user_prompt =
+                is_user_prompt_content(&message.role, message.is_tool, &message.content);
+            let display_role =
+                if is_ai_authored_user_content(&message.role, message.is_tool, &message.content) {
+                    "assistant".to_string()
+                } else {
+                    message.role.clone()
+                };
+            if is_user_prompt && !message.is_meta {
                 round_index += 1;
                 round_prompt = message.content.clone();
                 round_timestamp = message.timestamp.clone();
             }
-            let prompt_text = if message.role == "user" {
+            let prompt_text = if is_user_prompt {
                 message.content.clone()
             } else {
                 String::new()
             };
-            let assistant_text = if message.role == "assistant" {
+            let assistant_text = if display_role == "assistant" {
                 message.content.clone()
             } else {
                 String::new()
             };
+            session_message_count += 1;
+            line_count = line_count.max(message.line_number);
 
             index_writer
                 .add_document(doc!(
@@ -700,10 +1183,11 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                     user_field => prompt_text,
                     assistant_field => assistant_text,
                     project_field => project_path.clone(),
-                    role_field => message.role,
+                    role_field => display_role,
                     project_id_field => session.project_id.clone(),
                     project_path_field => project_path.clone(),
                     session_id_field => session.id.clone(),
+                    source_path_field => source_path.clone(),
                     session_summary_field => session_summary.clone(),
                     timestamp_field => message.timestamp,
                     line_number_field => message.line_number as u64,
@@ -713,9 +1197,32 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                 ))
                 .map_err(|e| e.to_string())?;
 
-            indexed_count += 1;
-            status.indexed_messages = indexed_count;
+            status.processed_bytes = session_start_bytes
+                + ((session_message_count as u64 * source.size) / parsed_message_total)
+                    .min(source.size);
+            update_search_index_message_progress(
+                app.as_ref(),
+                &mut status,
+                Some(source.session_id.clone()),
+                session.title.clone(),
+                session.project_path.clone(),
+                false,
+            );
         }
+        status.processed_bytes = session_start_bytes + source.size;
+        final_manifest_entries.push(SearchIndexManifestEntry {
+            path: source_path.clone(),
+            source_kind: SearchIndexSourceKind::Codex.as_str().to_string(),
+            session_id: source.session_id.clone(),
+            size: source.size,
+            mtime: source.mtime,
+            indexed_size: source.size,
+            line_count,
+            message_count: session_message_count,
+            round_index,
+            round_prompt,
+            round_timestamp,
+        });
         update_search_index_progress(
             app.as_ref(),
             &mut status,
@@ -726,41 +1233,64 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     }
 
     index_writer.commit().map_err(|e| e.to_string())?;
+    let indexed_count = status.indexed_messages;
 
     let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
-    if index_dir.exists() {
-        fs::remove_dir_all(&index_dir).map_err(|e| e.to_string())?;
-    }
-    fs::rename(&build_dir, &index_dir).map_err(|e| e.to_string())?;
-    let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
-    register_jieba_tokenizer(&index);
+    let final_index = if full_rebuild {
+        if index_dir.exists() {
+            fs::remove_dir_all(&index_dir).map_err(|e| e.to_string())?;
+        }
+        fs::rename(&build_dir, &index_dir).map_err(|e| e.to_string())?;
+        Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?
+    } else {
+        Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?
+    };
+    register_jieba_tokenizer(&final_index);
+    let final_schema = final_index.schema();
 
     // Store search index in global state
-    *guard = Some(SearchIndex { index, schema });
-
-    // Write command stats to file
-    let stats_path = get_command_stats_path();
-    if let Some(parent) = stats_path.parent() {
-        fs::create_dir_all(parent).ok();
-    }
-    let stats_json = serde_json::json!({
-        "updated_at": chrono::Utc::now().timestamp(),
-        "commands": command_stats,
+    *guard = Some(SearchIndex {
+        index: final_index,
+        schema: final_schema,
     });
-    fs::write(
-        &stats_path,
-        serde_json::to_string_pretty(&stats_json).unwrap_or_default(),
-    )
-    .ok();
+
+    // Write full command stats only during full rebuilds. Incremental search
+    // updates should not block on a full historical stats scan.
+    if let Some(command_stats) = command_stats {
+        let stats_path = get_command_stats_path();
+        if let Some(parent) = stats_path.parent() {
+            fs::create_dir_all(parent).ok();
+        }
+        let stats_json = serde_json::json!({
+            "updated_at": chrono::Utc::now().timestamp(),
+            "commands": command_stats,
+        });
+        fs::write(
+            &stats_path,
+            serde_json::to_string_pretty(&stats_json).unwrap_or_default(),
+        )
+        .ok();
+    }
+
+    final_manifest_entries.sort();
+    let (corpus_sessions, corpus_messages, corpus_bytes) = manifest_totals(&final_manifest_entries);
+    save_search_index_manifest(final_manifest_entries)?;
 
     status.state = "ready".to_string();
+    status.total_sessions = corpus_sessions;
+    status.processed_sessions = corpus_sessions;
+    status.total_messages = corpus_messages;
+    status.processed_messages = corpus_messages;
+    status.indexed_messages = corpus_messages;
+    status.total_bytes = corpus_bytes;
+    status.processed_bytes = corpus_bytes;
+    status.index_size_bytes = search_index_dir_size();
     status.current_session_id = None;
     status.current_title = None;
     status.current_project_path = None;
     status.completed_at = Some(now_secs());
     status.updated_at = status.completed_at;
     emit_search_index_status(app.as_ref(), status);
-    save_search_index_manifest(manifest_entries);
 
     Ok(indexed_count)
 }
@@ -1064,6 +1594,15 @@ pub(crate) fn search_chats(
         *guard = Some(SearchIndex { index, schema });
     }
 
+    if guard
+        .as_ref()
+        .map(|search_index| !search_index_schema_is_current(&search_index.schema))
+        .unwrap_or(false)
+    {
+        *guard = None;
+        return Err("Search index schema is outdated. Rebuild required.".to_string());
+    }
+
     let search_index = guard.as_ref().unwrap();
     let reader = search_index
         .index
@@ -1074,17 +1613,10 @@ pub(crate) fn search_chats(
 
     let searcher = reader.searcher();
 
-    let default_fields = [
-        "content",
-        "session_summary",
-        "title",
-        "summary",
-        "last_prompt",
-        "round_prompt",
-    ]
-    .iter()
-    .filter_map(|name| search_index.schema.get_field(name).ok())
-    .collect::<Vec<_>>();
+    let default_fields = ["content"]
+        .iter()
+        .filter_map(|name| search_index.schema.get_field(name).ok())
+        .collect::<Vec<_>>();
 
     let normalized_query = normalize_scoped_search_query(&query, &search_index.schema);
     let mut query_parser = QueryParser::for_index(&search_index.index, default_fields);

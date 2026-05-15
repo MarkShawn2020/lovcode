@@ -6,8 +6,13 @@ export interface SearchIndexBuildStatus {
   state: "idle" | "building" | "ready" | "error" | string;
   totalSessions: number;
   processedSessions: number;
+  totalMessages?: number;
+  processedMessages?: number;
   indexedMessages: number;
+  totalBytes?: number;
+  processedBytes?: number;
   skippedSessions: number;
+  indexSizeBytes?: number;
   currentSessionId?: string | null;
   currentTitle?: string | null;
   currentProjectPath?: string | null;
@@ -38,6 +43,18 @@ export function useSearchIndexBuildStatus() {
     };
   }, []);
 
+  useEffect(() => {
+    if (status?.state !== "building") return;
+
+    const timer = window.setInterval(() => {
+      invoke<SearchIndexBuildStatus>("get_search_index_status")
+        .then((next) => setStatus(next))
+        .catch(() => {});
+    }, 1500);
+
+    return () => window.clearInterval(timer);
+  }, [status?.state]);
+
   const start = useCallback((force = false) => {
     return invoke<SearchIndexBuildStatus>("start_search_index_build", { force })
       .then((next) => {
@@ -47,6 +64,14 @@ export function useSearchIndexBuildStatus() {
   }, []);
 
   const progress = useMemo(() => {
+    const totalMessages = status?.totalMessages ?? 0;
+    if (totalMessages > 0) {
+      return Math.min(1, (status?.processedMessages ?? 0) / totalMessages);
+    }
+    const totalBytes = status?.totalBytes ?? 0;
+    if (totalBytes > 0) {
+      return Math.min(1, (status?.processedBytes ?? 0) / totalBytes);
+    }
     if (!status?.totalSessions) return 0;
     return Math.min(1, status.processedSessions / status.totalSessions);
   }, [status]);

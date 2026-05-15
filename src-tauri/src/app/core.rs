@@ -137,6 +137,7 @@ pub(crate) fn create_schema() -> Schema {
     schema_builder.add_text_field("project_id", STRING | STORED);
     schema_builder.add_text_field("project_path", STRING | STORED);
     schema_builder.add_text_field("session_id", STRING | STORED);
+    schema_builder.add_text_field("source_path", STRING | STORED);
     schema_builder.add_text_field("session_summary", text_options.clone());
     schema_builder.add_text_field("timestamp", STRING | STORED);
     schema_builder.add_u64_field("line_number", STORED);

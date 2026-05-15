@@ -215,6 +215,7 @@ pub(crate) fn rewrite_app_session_cwds(from: &str, to: &str) -> Result<usize, St
 
 #[tauri::command]
 pub(crate) async fn migrate_session_cwd(
+    app_handle: tauri::AppHandle,
     from: String,
     to: String,
 ) -> Result<MigrateCwdResult, String> {
@@ -261,11 +262,43 @@ pub(crate) async fn migrate_session_cwd(
         .ok()
         .and_then(|v| v.get("migrated").and_then(|x| x.as_u64()));
 
-    // After cc-mv succeeds, also rewrite the lovcode-side desktop-app session metadata
-    // (~/Library/Application Support/Claude/claude-code-sessions/**/local_*.json) which
-    // cc-mv doesn't know about. lovcode reads `cwd` from these files in list_all_sessions,
-    // so without this step the UI would still show the old path.
+    // After cc-mv succeeds, also rewrite metadata stores that cc-mv doesn't
+    // reliably cover. lovcode reads `cwd` from these files in list_all_sessions,
+    // so without these companion rewrites the missing-cwd banner can remain
+    // stuck on the old path even though the file move succeeded.
     if success {
+        match rewrite_claude_jsonl_session_cwds(&from, &to) {
+            Ok((files, lines)) if files > 0 => {
+                stderr.push_str(&format!(
+                    "\n[lovcode] rewrote cwd in {} Claude jsonl file(s), {} line(s)",
+                    files, lines
+                ));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                stderr.push_str(&format!(
+                    "\n[lovcode] failed to rewrite Claude jsonl cwd: {}",
+                    e
+                ));
+            }
+        }
+
+        match rewrite_codex_session_cwds(&from, &to) {
+            Ok((files, lines)) if files > 0 => {
+                stderr.push_str(&format!(
+                    "\n[lovcode] rewrote cwd in {} Codex jsonl file(s), {} line(s)",
+                    files, lines
+                ));
+            }
+            Ok(_) => {}
+            Err(e) => {
+                stderr.push_str(&format!(
+                    "\n[lovcode] failed to rewrite Codex jsonl cwd: {}",
+                    e
+                ));
+            }
+        }
+
         match rewrite_app_session_cwds(&from, &to) {
             Ok(n) if n > 0 => {
                 stderr.push_str(&format!(
@@ -281,6 +314,8 @@ pub(crate) async fn migrate_session_cwd(
                 ));
             }
         }
+
+        emit_session_list_changed_after_migration(&app_handle).await;
     }
 
     Ok(MigrateCwdResult {
@@ -443,6 +478,65 @@ pub(crate) fn rewrite_jsonl_cwds_in_file(
     Ok(changed_lines)
 }
 
+/// Rewrite `cwd` inside all Claude JSONL files in the source and destination
+/// project slugs. Full relocation is intentionally unscoped: it represents a
+/// user-confirmed path migration from `from` to `to` for every matching session.
+pub(crate) fn rewrite_claude_jsonl_session_cwds(
+    from: &str,
+    to: &str,
+) -> Result<(usize, usize), String> {
+    let projects_dir = get_claude_dir().join("projects");
+    let from_slug = encode_project_path(from);
+    let to_slug = encode_project_path(to);
+    let mut changed_files = 0usize;
+    let mut changed_lines = 0usize;
+    let mut seen_paths = std::collections::HashSet::new();
+
+    for slug in [&from_slug, &to_slug] {
+        let dir = projects_dir.join(slug);
+        if !dir.exists() {
+            continue;
+        }
+        for entry in fs::read_dir(&dir).map_err(|e| e.to_string())? {
+            let path = entry.map_err(|e| e.to_string())?.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !name.ends_with(".jsonl") || name.starts_with("agent-") {
+                continue;
+            }
+            if !seen_paths.insert(path.clone()) {
+                continue;
+            }
+            let line_count = rewrite_jsonl_cwds_in_file(&path, from, to)?;
+            if line_count > 0 {
+                changed_files += 1;
+                changed_lines += line_count;
+            }
+        }
+    }
+
+    Ok((changed_files, changed_lines))
+}
+
+/// Codex rollout sessions are stored by date under ~/.codex instead of Claude's
+/// project slugs, so cc-mv cannot move them. Rewriting their embedded `cwd`
+/// keeps Lovcode's shared history list consistent after a relocation.
+pub(crate) fn rewrite_codex_session_cwds(from: &str, to: &str) -> Result<(usize, usize), String> {
+    let mut changed_files = 0usize;
+    let mut changed_lines = 0usize;
+
+    for path in collect_codex_session_paths() {
+        let line_count = rewrite_jsonl_cwds_in_file(&path, from, to)?;
+        if line_count > 0 {
+            changed_files += 1;
+            changed_lines += line_count;
+        }
+    }
+
+    Ok((changed_files, changed_lines))
+}
+
 /// Rewrite `cwd` inside scoped Claude JSONL session files. This is a companion
 /// to cc-mv for the auto-fix path: after a previous partial migration the
 /// source slug may already be deleted, while the destination jsonl still has
@@ -586,18 +680,7 @@ pub(crate) async fn migrate_sessions_cwd_scoped(
             }
         }
 
-        // Invalidate the session-list cache so the next list_all_sessions_streamed
-        // call recomputes from disk. Without this, the 3s TTL on SESSIONS_INFLIGHT
-        // would let the post-migration refresh return stale data (banner stuck on
-        // the old worktree path).
-        if let Some(lock) = SESSIONS_INFLIGHT.get() {
-            *lock.lock().await = None;
-        }
-
-        // Trigger session list refresh in the UI. The fs watcher would also pick
-        // this up via cc-mv's writes/deletes, but it has a 500ms debounce — emit
-        // explicitly so the banner clears as soon as the rewrite completes.
-        let _ = app_handle.emit("sessions-changed", ());
+        emit_session_list_changed_after_migration(&app_handle).await;
     }
 
     Ok(MigrateCwdResult {
@@ -606,4 +689,18 @@ pub(crate) async fn migrate_sessions_cwd_scoped(
         stderr,
         migrated,
     })
+}
+
+async fn emit_session_list_changed_after_migration(app_handle: &tauri::AppHandle) {
+    // Invalidate the session-list cache so the next list_all_sessions_streamed
+    // call recomputes from disk. Without this, the 3s TTL on SESSIONS_INFLIGHT
+    // can let a post-migration refresh return stale data.
+    if let Some(lock) = SESSIONS_INFLIGHT.get() {
+        *lock.lock().await = None;
+    }
+
+    // Trigger session list refresh in the UI. The fs watcher would also pick up
+    // file writes/deletes with a debounce, but explicit emit clears banners as
+    // soon as the migration's companion rewrites complete.
+    let _ = app_handle.emit("sessions-changed", ());
 }

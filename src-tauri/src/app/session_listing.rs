@@ -669,7 +669,7 @@ fn count_rounds_and_messages_from_line(line: &str) -> (usize, usize, Option<Stri
             return (0, 0, uuid);
         }
 
-        let round = usize::from(role == "user" && !is_tool);
+        let round = usize::from(is_user_prompt_content(role, is_tool, &display_content));
         return (round, 1, uuid);
     }
 
@@ -691,7 +691,9 @@ fn count_rounds_and_messages_from_line_heuristic(line: &str) -> (usize, usize, O
             && line_contains_json_string(line, "role", "assistant"));
 
     if is_user {
-        return (usize::from(!is_tool), 1, None);
+        let is_task_notification =
+            line.contains("<task-notification>") && line.contains("</task-notification>");
+        return (usize::from(!is_tool && !is_task_notification), 1, None);
     }
     if is_assistant && !line_contains_no_response_placeholder(line) {
         return (0, 1, None);
@@ -739,6 +741,28 @@ mod tests {
 
         assert_eq!(rounds, 1);
         assert_eq!(messages, 5);
+    }
+
+    #[test]
+    fn count_ai_authored_user_message_as_message_not_round() {
+        let lines = r#"{"type":"user","message":{"role":"user","content":"real prompt"},"uuid":"human"}
+{"type":"user","message":{"role":"user","content":"<task-notification>done</task-notification>"},"uuid":"task-notification"}"#;
+
+        let (rounds, messages) = count_rounds_and_messages_from_buffers(lines, lines);
+
+        assert_eq!(rounds, 1);
+        assert_eq!(messages, 2);
+    }
+
+    #[test]
+    fn codex_context_message_skips_skill_payloads() {
+        assert!(is_codex_context_message(
+            "<skill>\n<name>lovstudio:release-via-cicd</name>\n<path>/tmp/SKILL.md</path>\n</skill>"
+        ));
+        assert!(is_codex_context_message(
+            "<skills_instructions>\n## Skills\n</skills_instructions>"
+        ));
+        assert!(!is_codex_context_message("Write a daily product report"));
     }
 }
 
@@ -905,6 +929,10 @@ pub(crate) fn is_codex_context_message(text: &str) -> bool {
         || trimmed.starts_with("<collaboration_mode>")
         || trimmed.starts_with("<apps_instructions>")
         || trimmed.starts_with("<plugins_instructions>")
+        || trimmed.starts_with("<skills_instructions>")
+        || (trimmed.starts_with("<skill>")
+            && trimmed.contains("<name>")
+            && trimmed.contains("<path>"))
         || trimmed.contains("<environment_context>")
 }
 
@@ -914,6 +942,19 @@ pub(crate) fn is_codex_no_response_placeholder(text: &str) -> bool {
 
 pub(crate) fn is_no_response_placeholder(text: &str) -> bool {
     normalize_message_text(text).eq_ignore_ascii_case("No response requested.")
+}
+
+pub(crate) fn is_task_notification_content(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("<task-notification>") && trimmed.contains("</task-notification>")
+}
+
+pub(crate) fn is_ai_authored_user_content(role: &str, is_tool: bool, text: &str) -> bool {
+    role == "user" && !is_tool && is_task_notification_content(text)
+}
+
+pub(crate) fn is_user_prompt_content(role: &str, is_tool: bool, text: &str) -> bool {
+    role == "user" && !is_tool && !is_ai_authored_user_content(role, is_tool, text)
 }
 
 fn line_contains_no_response_placeholder(line: &str) -> bool {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { invoke } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -8,20 +8,34 @@ import {
   AlertCircle,
   Archive,
   ArchiveRestore,
+  ArrowRightLeft,
+  CalendarDays,
   Check,
   ChevronDown,
   ChevronRight,
+  ClipboardList,
+  Copy,
+  Download,
+  Eye,
+  EyeOff,
+  FileText,
+  FolderInput,
   FolderOpen,
+  Info,
   ListFilter,
   LocateFixed,
   LoaderCircle,
   MessageSquare,
   MoreHorizontal,
+  Newspaper,
   Pencil,
+  Pin,
+  PinOff,
   Play,
   Plus,
   RotateCcw,
   Settings2,
+  Sparkles,
   Square,
   Terminal,
   X,
@@ -35,11 +49,15 @@ import {
 import { TerminalPane, disposeTerminal } from "@/components/Terminal";
 import { SessionDetailHeader } from "@/components/shared/SessionDetailHeader";
 import { ProjectPathMenuItems, type ProjectPathMenuVariant } from "@/components/shared/ProjectPathMenuItems";
-import { SessionDetailContextMenuItems, SessionDetailDropdownMenuItems } from "@/components/shared/SessionMenuItems";
+import { SessionDetailContextMenuItems, SessionDetailDropdownMenuItems, type SessionDetailMenuConfig } from "@/components/shared/SessionMenuItems";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import {
@@ -181,7 +199,7 @@ const LOVCODE_HOOK_ENV_RE = /^(?:LOVCODE_AGENT_SESSION_ID|LOVCODE_AGENT_HOOK_FIL
 const AGENT_WORKSPACE_STATE_UPDATED_EVENT = "agent-workspace-state-updated";
 const HARNESS_STREAM_DEBUG = true;
 type SessionListMode = "active" | "archived";
-type WorkbenchOutlineMode = "project" | "recent";
+type WorkbenchOutlineMode = "project" | "day" | "recent";
 type WorkbenchDisplayFilter = "all" | "running" | "review";
 type WorkbenchSortMode = "last-modified" | "created" | "name";
 type WorkbenchDisplayMode = SessionDetailDisplayMode;
@@ -217,6 +235,31 @@ type WorkbenchConversation = {
   transcript?: Session;
   runtime?: AgentSession;
 };
+type DailyReportPlatform = "blog" | "wechat";
+type WorkbenchDayProject = {
+  key: string;
+  path: string;
+  rows: WorkbenchConversation[];
+  lastActive: number;
+  running: number;
+  needsReview: number;
+};
+type WorkbenchDayGroup = {
+  key: string;
+  dayStart: number;
+  rows: WorkbenchConversation[];
+  lastActive: number;
+  projects: WorkbenchDayProject[];
+  projectCount: number;
+  running: number;
+  needsReview: number;
+};
+type DailyReportEvidence = {
+  rowId: string;
+  userPrompts: string[];
+  assistantExcerpts: string[];
+  loadFailed?: boolean;
+};
 type ExternalAgentRun = {
   source: "hook" | "watch";
   updatedAt: number;
@@ -234,6 +277,12 @@ type ProjectConversationStats = {
   lastActive: number;
   createdAt: number;
 };
+
+const DAILY_REPORT_PLATFORMS: DailyReportPlatform[] = ["blog", "wechat"];
+const DAILY_REPORT_EVIDENCE_BATCH_SIZE = 6;
+const DAILY_REPORT_ASSISTANT_EXCERPT_LIMIT = 4;
+const DAILY_REPORT_EXCERPT_LIMIT = 520;
+const DAILY_REPORT_USER_PROMPT_LIMIT = 2200;
 
 const harnessStreamReceiveCounts = new Map<string, number>();
 const harnessStreamReceiveTotals = new Map<string, number>();
@@ -421,6 +470,7 @@ function clampSessionsSidebarWidth(value?: number | null) {
 }
 
 function normalizeSidebarState(sidebar?: AgentWorkspaceSidebarState | null): PersistedSidebarState {
+  const persistedOutlineMode = sidebar?.outlineMode;
   const collapsedProjectPaths = Array.isArray(sidebar?.collapsedProjectPaths)
     ? [...new Set(sidebar.collapsedProjectPaths.map((path) => normalizeProjectPath(path)).filter(Boolean))]
     : [];
@@ -442,7 +492,7 @@ function normalizeSidebarState(sidebar?: AgentWorkspaceSidebarState | null): Per
 
   return {
     sessionListMode: sidebar?.sessionListMode === "archived" ? "archived" : "active",
-    outlineMode: sidebar?.outlineMode === "project" ? "project" : "recent",
+    outlineMode: persistedOutlineMode === "project" || persistedOutlineMode === "day" ? persistedOutlineMode : "recent",
     displayFilter,
     sortMode,
     reorderGroups: sidebar?.reorderGroups === true,
@@ -572,6 +622,48 @@ function formatDateTime(timestamp?: number | null, t?: TranslateFn) {
   }).format(new Date(timestamp));
 }
 
+function getLocalDayStart(timestamp?: number | null) {
+  if (!timestamp) return 0;
+  const date = new Date(timestamp);
+  date.setHours(0, 0, 0, 0);
+  return date.getTime();
+}
+
+function formatDayGroupLabel(dayStart: number, t: TranslateFn) {
+  if (!dayStart) return t("common.noActivity");
+  const today = getLocalDayStart(Date.now());
+  const yesterdayDate = new Date(today);
+  yesterdayDate.setDate(yesterdayDate.getDate() - 1);
+  const yesterday = yesterdayDate.getTime();
+  if (dayStart === today) return t("workspace.today");
+  if (dayStart === yesterday) return t("workspace.yesterday");
+
+  const date = new Date(dayStart);
+  const sameYear = date.getFullYear() === new Date().getFullYear();
+  const options: Intl.DateTimeFormatOptions = {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  };
+  if (!sameYear) options.year = "numeric";
+  return new Intl.DateTimeFormat(undefined, options).format(date);
+}
+
+function formatLocalDateKey(timestamp: number) {
+  const date = new Date(timestamp);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function formatChineseReportDate(timestamp: number) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "long",
+    day: "numeric",
+  }).format(new Date(timestamp));
+}
+
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
 }
@@ -588,6 +680,217 @@ function formatCost(value: number) {
     currency: "USD",
     maximumFractionDigits: value < 1 ? 4 : 2,
   }).format(value);
+}
+
+function getDailyReportPlatformLabel(platform: DailyReportPlatform, t: TranslateFn) {
+  return platform === "blog" ? t("workspace.shougongchuanBlog") : t("workspace.wechatArticle");
+}
+
+function getDailyReportPlatformName(platform: DailyReportPlatform) {
+  return platform === "blog" ? "手工川官网博客" : "公众号文章";
+}
+
+function getDailyReportTotals(day: WorkbenchDayGroup) {
+  return day.rows.reduce(
+    (totals, row) => ({
+      rounds: totals.rounds + (row.transcript?.rounds ?? 0),
+      messages: totals.messages + (row.transcript?.message_count ?? 0),
+      runtime: totals.runtime + (row.runtime ? 1 : 0),
+      history: totals.history + (row.transcript ? 1 : 0),
+    }),
+    { rounds: 0, messages: 0, runtime: 0, history: 0 },
+  );
+}
+
+function getDailyReportStatus(row: WorkbenchConversation) {
+  if (isConversationAgentRunning(row)) return "运行中";
+  if (row.needsReview) return "待检查";
+  if (row.archived) return "已归档";
+  return row.runtime ? "运行时已记录" : "历史已沉淀";
+}
+
+function normalizeDailyReportText(value?: string | null, limit = DAILY_REPORT_EXCERPT_LIMIT) {
+  if (!value) return "";
+  const text = value
+    .replace(/```[\s\S]*?```/g, "[代码片段]")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit).trim()}...`;
+}
+
+function normalizeDailyReportPromptText(value?: string | null) {
+  if (!value) return "";
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function truncateDailyReportPromptMiddle(value?: string | null, limit = DAILY_REPORT_USER_PROMPT_LIMIT) {
+  const text = normalizeDailyReportPromptText(value);
+  if (text.length <= limit) return text;
+  const placeholderMarker = "\n...[中间省略]...\n";
+  const edgeLength = Math.max(240, Math.floor((limit - placeholderMarker.length) / 2));
+  const marker = `\n...[中间省略 ${Math.max(0, text.length - edgeLength * 2)} 字]...\n`;
+  return `${text.slice(0, edgeLength).trimEnd()}${marker}${text.slice(-edgeLength).trimStart()}`;
+}
+
+function getDailyReportMessageText(message: Message) {
+  if (message.content_blocks?.length) {
+    return message.content_blocks
+      .map((block) => {
+        if (block.type === "text") return block.text;
+        if (block.type === "tool_use") return `[工具调用：${block.name}${block.summary ? `，${block.summary}` : ""}]`;
+        if (block.type === "tool_result") return block.content;
+        if (block.type === "thinking") return "";
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return message.content;
+}
+
+function getDailyReportEvidenceFromMessages(messages: Message[]) {
+  const readableMessages = messages.filter((message) => !message.is_meta && !message.is_tool);
+  const userPrompts = readableMessages
+    .filter((message) => message.role === "user")
+    .map((message) => truncateDailyReportPromptMiddle(getDailyReportMessageText(message)))
+    .filter((text): text is string => Boolean(text));
+  const assistantExcerpts = readableMessages
+    .filter((message) => message.role === "assistant")
+    .map((message) => normalizeDailyReportText(getDailyReportMessageText(message)))
+    .filter((text): text is string => Boolean(text))
+    .slice(-DAILY_REPORT_ASSISTANT_EXCERPT_LIMIT);
+
+  return { userPrompts, assistantExcerpts };
+}
+
+function getDailyReportEvidenceCacheKey(day: WorkbenchDayGroup) {
+  const signatures = day.rows.map((row) =>
+    row.transcript
+      ? [
+          row.transcript.project_id,
+          row.transcript.id,
+          row.transcript.last_modified,
+          row.transcript.message_count,
+        ].join(":")
+      : row.id,
+  );
+  return `${day.dayStart}:${signatures.join("|")}`;
+}
+
+function getDailyReportHeadline(day: WorkbenchDayGroup, getProjectLabel: (path: string) => string) {
+  const firstProject = day.projects[0] ? getProjectLabel(day.projects[0].path) : "产品工作台";
+  if (day.projectCount > 1) return `${firstProject} 等 ${day.projectCount} 个项目同步推进`;
+  if (day.rows.length > 1) return `${firstProject} 连续推进 ${day.rows.length} 项工作`;
+  return `${firstProject} 的关键进展完成记录`;
+}
+
+function buildDailyReportPrompt(
+  day: WorkbenchDayGroup,
+  platform: DailyReportPlatform,
+  getProjectLabel: (path: string) => string,
+  evidence: DailyReportEvidence[] = [],
+) {
+  const dateLabel = formatChineseReportDate(day.dayStart);
+  const isoDate = formatLocalDateKey(day.dayStart);
+  const totals = getDailyReportTotals(day);
+  const headline = getDailyReportHeadline(day, getProjectLabel);
+  const evidenceByRowId = new Map(evidence.map((item) => [item.rowId, item]));
+  const platformName = getDailyReportPlatformName(platform);
+  const titleRule = platform === "wechat"
+    ? `公众号标题必须是「你生成的吸引人精选标题 | 手工川工作室产品日报（${dateLabel}）」；竖线后的固定后缀不能改。`
+    : `官网博客标题建议使用「手工川工作室产品日报：${dateLabel}」，可以另给一个更适合博客列表页的副标题。`;
+  const styleRule = platform === "wechat"
+    ? "公众号文章要有打开率意识，开头先抛出今天对用户有价值的变化，再展开产品判断；语言可以更有节奏，但不要夸张营销。"
+    : "官网博客要克制、可信、结构清晰，适合长期归档；语言偏产品日志和工作室公开记录。";
+  const projectSections = day.projects.map((project, index) => {
+    const projectName = getProjectLabel(project.path);
+    const status = [
+      `${project.rows.length} 条对话`,
+      project.running ? `${project.running} 条运行中` : null,
+      project.needsReview ? `${project.needsReview} 条待检查` : null,
+    ].filter(Boolean);
+    const rows = project.rows.map((row) => {
+      const transcript = row.transcript;
+      const rowEvidence = evidenceByRowId.get(row.id);
+      const title = getConversationTitle(row, {
+        untitledConversation: "未命名对话",
+        shell: "Shell",
+        newSession: "新对话",
+      });
+      const lines = [
+        `  - 对话：${normalizeDailyReportText(title, 160)}`,
+        `    状态：${getDailyReportStatus(row)}`,
+      ];
+      if (transcript) {
+        lines.push(`    轮次：${transcript.rounds ?? 0}`);
+        lines.push(`    消息：${transcript.message_count ?? 0}`);
+      }
+      if (transcript?.summary) lines.push(`    摘要：${normalizeDailyReportText(transcript.summary, 360)}`);
+
+      if (rowEvidence?.loadFailed) {
+        lines.push("    用户 prompts：读取失败，仅使用标题和摘要判断。");
+      } else if (rowEvidence?.userPrompts.length) {
+        lines.push("    用户 prompts（逐条完整录入，单条过长时省略中间）：");
+        rowEvidence.userPrompts.forEach((prompt, promptIndex) => {
+          const promptLines = prompt.split("\n");
+          lines.push(`      ${promptIndex + 1}. ${promptLines[0] ?? ""}`);
+          promptLines.slice(1).forEach((line) => lines.push(`         ${line}`));
+        });
+      } else if (transcript?.last_prompt) {
+        lines.push("    用户 prompts（摘要回退，可能只有最近一条）：");
+        lines.push(`      1. ${truncateDailyReportPromptMiddle(transcript.last_prompt)}`);
+      }
+
+      if (rowEvidence?.assistantExcerpts.length) {
+        lines.push("    AI 输出摘录（最近几条，仅供判断结果，不要照抄）：");
+        rowEvidence.assistantExcerpts.forEach((excerpt) => lines.push(`      - ${excerpt}`));
+      }
+
+      return lines.join("\n");
+    });
+    return [`${index + 1}. ${projectName}（${status.join("，")}）`, ...rows].join("\n");
+  })
+    .join("\n\n");
+
+  return [
+    "你是手工川工作室的产品作者。请基于下面的 AI 工作记录，写一篇真正面向用户的产品日报文章。",
+    "",
+    "写作目标：",
+    `- 平台：${platformName}`,
+    `- 日期：${dateLabel}（${isoDate}）`,
+    `- 标题规则：${titleRule}`,
+    `- 平台风格：${styleRule}`,
+    "- 读者不是内部执行人员，而是关心产品能解决什么问题、体验如何变化、接下来能期待什么的用户。",
+    "- 文章要先提炼“今天对用户真正有意义的变化”，再解释背后的产品推进。",
+    "- 不要机械复述每条会话、轮次、消息数；这些数据只能作为判断素材，不能成为正文主体。",
+    "- 素材里的“用户 prompts”是当天用户真实需求，请优先从这些 prompt 中提炼用户视角、问题场景和价值变化。",
+    "- 可以合并相似项目，抽象成 2-4 个用户价值主题，例如：体验改善、内容生产效率、发布质量、基础能力沉淀。",
+    "- 如果素材不足以确认具体事实，要用克制表达，避免编造上线、收入、客户、性能数据。",
+    "- 输出 Markdown 正文即可，不要解释你的写作过程。",
+    "",
+    "建议结构：",
+    "- 标题",
+    "- 开头 1-2 段：从用户视角说明今天最值得注意的产品变化",
+    "- 今日进展：按用户价值主题组织，不按项目流水账组织",
+    "- 对用户意味着什么：明确读者能感受到的改善",
+    "- 接下来：只写自然、可信的后续关注",
+    "",
+    "当天工作概况（仅供判断权重，不要照抄）：",
+    `- 初步主题：${headline}`,
+    `- 项目数：${day.projectCount}`,
+    `- 工作对话：${day.rows.length}`,
+    `- 用户轮次：${totals.rounds}`,
+    `- 消息数：${totals.messages}`,
+    `- 运行中：${day.running}`,
+    `- 待检查：${day.needsReview}`,
+    "",
+    "素材：",
+    projectSections || "- 暂无可汇总项目。",
+  ].join("\n");
 }
 
 function runtimeForLaunch(provider: AgentProvider, launchMode: AgentLaunchMode): AgentRuntime {
@@ -700,6 +1003,19 @@ function transcriptMatchesProvider(session: AgentSession, transcript: Session) {
   return false;
 }
 
+function normalizePromptForHistoryLink(prompt?: string | null) {
+  return prompt?.trim().replace(/\s+/g, " ") ?? "";
+}
+
+function promptsLikelyMatch(runtimePrompt: string, transcriptPrompt?: string | null) {
+  const runtime = normalizePromptForHistoryLink(runtimePrompt);
+  const transcript = normalizePromptForHistoryLink(transcriptPrompt);
+  if (!runtime || !transcript) return false;
+  if (runtime === transcript) return true;
+  if (Math.min(runtime.length, transcript.length) < 200) return false;
+  return runtime.slice(0, 200) === transcript.slice(0, 200) && runtime.slice(-200) === transcript.slice(-200);
+}
+
 function findLikelyTranscriptForRuntimeSession(
   session: AgentSession,
   transcripts: Session[],
@@ -715,7 +1031,7 @@ function findLikelyTranscriptForRuntimeSession(
       if (claimedTranscriptIds.has(transcript.id)) return false;
       if (!transcriptMatchesProvider(session, transcript)) return false;
       if (normalizeProjectPath(transcript.project_path) !== cwd) return false;
-      if (transcript.last_prompt?.trim() !== prompt) return false;
+      if (!promptsLikelyMatch(prompt, transcript.last_prompt)) return false;
       const createdAt = transcript.created_at * 1000;
       const lastModified = transcript.last_modified * 1000;
       return createdAt >= runtimeStart || lastModified >= runtimeStart;
@@ -728,11 +1044,16 @@ function normalizeHistoryLinkStatus(status?: string | null): AgentHistoryLinkSta
   return status === "pending" || status === "linked" || status === "not-found" ? status : null;
 }
 
+function canRetryNotFoundHistoryLink(session: AgentSession) {
+  return normalizeHistoryLinkStatus(session.historyLinkStatus) === "not-found" && isHarnessSession(session);
+}
+
 function shouldAttemptHistoryLink(session: AgentSession) {
   if (session.linkedHistorySessionId) return false;
   if (!isAgentProvider(session.provider)) return false;
   if (!getSessionSubmittedPrompt(session)) return false;
-  return normalizeHistoryLinkStatus(session.historyLinkStatus) !== "not-found";
+  const status = normalizeHistoryLinkStatus(session.historyLinkStatus);
+  return status !== "not-found" || canRetryNotFoundHistoryLink(session);
 }
 
 function isPastHistoryLinkGrace(session: AgentSession, timestamp: number) {
@@ -1092,6 +1413,11 @@ export default function AgentWorkspacePage() {
   const [creatingSession, setCreatingSession] = useState(false);
   const [mainPanelClosed, setMainPanelClosed] = useState(false);
   const [selectedProjectDetailsPath, setSelectedProjectDetailsPath] = useState<string | null>(null);
+  const [selectedDayOverview, setSelectedDayOverview] = useState<number | null>(null);
+  const [dailyReportPlatform, setDailyReportPlatform] = useState<DailyReportPlatform>("blog");
+  const [generatingDailyReportKey, setGeneratingDailyReportKey] = useState<string | null>(null);
+  const [dailyReportEvidenceByDay, setDailyReportEvidenceByDay] = useState<Record<string, DailyReportEvidence[]>>({});
+  const [loadingDailyReportEvidenceKey, setLoadingDailyReportEvidenceKey] = useState<string | null>(null);
   const [currentConversationRowVisible, setCurrentConversationRowVisible] = useState(false);
   const [locatedConversationHighlight, setLocatedConversationHighlight] = useState<{ conversationId: string; key: number } | null>(null);
   const [outlineMode, setOutlineMode] = useState<WorkbenchOutlineMode>(cachedInitialSidebar.outlineMode);
@@ -1175,7 +1501,7 @@ export default function AgentWorkspacePage() {
     if (!scroller || !row) return false;
     const scrollerRect = scroller.getBoundingClientRect();
     const rowRect = row.getBoundingClientRect();
-    const stickyHeaderOffset = outlineMode === "project" ? 32 : 0;
+    const stickyHeaderOffset = outlineMode === "recent" ? 0 : 32;
     return rowRect.bottom > scrollerRect.top + stickyHeaderOffset && rowRect.top < scrollerRect.bottom;
   }, [getConversationRowElement, outlineMode]);
   const pulseLocatedConversation = useCallback((conversationId: string) => {
@@ -1335,7 +1661,12 @@ export default function AgentWorkspacePage() {
     const timestamp = now();
     const linkMap = new Map(updates.map((u) => [u.runtimeId, u.transcript.id]));
     const notFound = historySessionsComplete && !historyStreaming
-      ? linkCandidates.filter((session) => !linkMap.has(session.id) && shouldMarkHistoryLinkNotFound(session, timestamp))
+      ? linkCandidates.filter(
+          (session) =>
+            !linkMap.has(session.id) &&
+            normalizeHistoryLinkStatus(session.historyLinkStatus) !== "not-found" &&
+            shouldMarkHistoryLinkNotFound(session, timestamp),
+        )
       : [];
     if (updates.length === 0 && notFound.length === 0) return;
     if (updates.length > 0) {
@@ -1944,6 +2275,81 @@ export default function AgentWorkspacePage() {
         return b.lastActive - a.lastActive || compareText(aName, bName);
       });
   }, [mergeWorktrees, plainChatWorkspacePath, projectActivityByPath, projectPaths, projectStatsByPath, reorderGroups, rowsByProjectPath, selectedCwd, sortMode, workbenchRows]);
+  const dayOutline = useMemo<WorkbenchDayGroup[]>(() => {
+    const groups = new Map<number, {
+      key: string;
+      dayStart: number;
+      rows: WorkbenchConversation[];
+      lastActive: number;
+      running: number;
+      needsReview: number;
+    }>();
+
+    workbenchRows.forEach((row) => {
+      const dayStart = getLocalDayStart(row.timestamp);
+      const current = groups.get(dayStart) ?? {
+        key: String(dayStart),
+        dayStart,
+        rows: [],
+        lastActive: 0,
+        running: 0,
+        needsReview: 0,
+      };
+      current.rows.push(row);
+      current.lastActive = Math.max(current.lastActive, row.timestamp);
+      if (isConversationAgentRunning(row)) current.running += 1;
+      if (row.needsReview) current.needsReview += 1;
+      groups.set(dayStart, current);
+    });
+
+    return [...groups.values()]
+      .map((group) => {
+        const projectsByKey = new Map<string, WorkbenchDayProject>();
+
+        group.rows.forEach((row) => {
+          const projectPath = getProjectGroupPath(row.projectPath, mergeWorktrees);
+          const key = getProjectGroupKey(row.projectPath, mergeWorktrees) || normalizeProjectPath(projectPath) || projectPath;
+          const project = projectsByKey.get(key) ?? {
+            key,
+            path: projectPath,
+            rows: [],
+            lastActive: 0,
+            running: 0,
+            needsReview: 0,
+          };
+          project.rows.push(row);
+          project.lastActive = Math.max(project.lastActive, row.timestamp);
+          if (isConversationAgentRunning(row)) project.running += 1;
+          if (row.needsReview) project.needsReview += 1;
+          projectsByKey.set(key, project);
+        });
+
+        const projectsInDay = [...projectsByKey.values()].sort((a, b) => {
+          const aName = getWorkbenchProjectName(a.path);
+          const bName = getWorkbenchProjectName(b.path);
+          return b.lastActive - a.lastActive || compareText(aName, bName);
+        });
+
+        return {
+          ...group,
+          projects: projectsInDay,
+          projectCount: projectsInDay.length,
+        };
+      })
+      .sort((a, b) => b.dayStart - a.dayStart || b.lastActive - a.lastActive);
+  }, [mergeWorktrees, workbenchRows]);
+  const selectedDayOverviewDetails = useMemo(() => {
+    if (selectedDayOverview === null) return null;
+    return dayOutline.find((day) => day.dayStart === selectedDayOverview) ?? null;
+  }, [dayOutline, selectedDayOverview]);
+  const selectedDayOverviewEvidenceKey = selectedDayOverviewDetails
+    ? getDailyReportEvidenceCacheKey(selectedDayOverviewDetails)
+    : null;
+  const selectedDayOverviewEvidence = selectedDayOverviewEvidenceKey
+    ? dailyReportEvidenceByDay[selectedDayOverviewEvidenceKey]
+    : undefined;
+  const selectedDayOverviewEvidenceLoading =
+    Boolean(selectedDayOverviewEvidenceKey) && loadingDailyReportEvidenceKey === selectedDayOverviewEvidenceKey;
   const selectedProjectDetails = useMemo(() => {
     const key = getProjectGroupKey(selectedProjectDetailsPath, mergeWorktrees);
     if (!key || !selectedProjectDetailsPath) return null;
@@ -2592,6 +2998,11 @@ export default function AgentWorkspacePage() {
   const openLinkedChatAfterRuntimeExit = (session: AgentSession, transcript?: Session | null) => {
     const linkedTranscript = transcript ?? getLinkedTranscript(session);
     if (!linkedTranscript) return;
+    console.log("[DEBUG][WorkspaceDayOverview] openLinkedChatAfterRuntimeExit:", {
+      sessionId: session.id,
+      linkedTranscriptId: linkedTranscript.id,
+      selectedDayOverview,
+    });
 
     const conversationId = getRuntimeConversationId(session, linkedTranscript);
     const base = latestStateRef.current;
@@ -2624,6 +3035,7 @@ export default function AgentWorkspacePage() {
 
     setSessionListMode(nextSidebar.sessionListMode);
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setMainPanelClosed(false);
     setSelectedHistorySession(linkedTranscript);
     setSelectedCwd(linkedTranscript.project_path ?? session.cwd);
@@ -2862,6 +3274,7 @@ export default function AgentWorkspacePage() {
     if (session) setSelectedCwd(session.cwd);
     if (session) setPersistedActiveConversationId(getAgentConversationId(session), { immediate: false });
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setSelectedHistorySession(null);
     setMainPanelClosed(false);
     setCreatingSession(false);
@@ -2899,6 +3312,7 @@ export default function AgentWorkspacePage() {
   ) => {
     if (provider !== "terminal" && launchMode === "standard" && !prompt.trim()) return;
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     const requestedCwd = options?.cwd ?? options?.resumeHistorySession?.project_path ?? selectedCwd;
     let cwd = requestedCwd;
     if (!cwd) {
@@ -3012,6 +3426,7 @@ export default function AgentWorkspacePage() {
       setSelectedHistorySession(null);
       setSelectedCwd(existingRuntime.cwd);
       setSelectedProjectDetailsPath(null);
+      setSelectedDayOverview(null);
       setMainPanelClosed(false);
       setCreatingSession(false);
       persist({
@@ -3089,6 +3504,7 @@ export default function AgentWorkspacePage() {
     setSelectedHistorySession(null);
     setSelectedCwd(cwd);
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setMainPanelClosed(false);
     setCreatingSession(false);
     persist({
@@ -3199,31 +3615,6 @@ export default function AgentWorkspacePage() {
     }));
   };
 
-  const markNeedsReview = (session: AgentSession) => {
-    clearAgentIdleTimer(session.id);
-    const timestamp = now();
-    persist({
-      ...state,
-      conversationMeta: withConversationMeta(getAgentConversationId(session), {
-        needsReview: true,
-        unread: false,
-      }),
-      sessions: state.sessions.map((current) =>
-        current.id === session.id
-          ? {
-              ...current,
-              status: "needs-review",
-              workState: "stopped",
-              unread: false,
-              lastActivityAt: timestamp,
-              lastViewedAt: timestamp,
-              updatedAt: timestamp,
-            }
-          : current,
-      ),
-    }).catch(console.error);
-  };
-
   const archiveSession = (session: AgentSession) => {
     if (isHarnessSession(session) && isAgentRunning(session)) {
       invoke("cancel_agent_harness_session", { sessionId: session.id }).catch(() => {});
@@ -3299,6 +3690,7 @@ export default function AgentWorkspacePage() {
     const conversationId = getAgentConversationId(session);
     setSelectedCwd(session.cwd);
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setSelectedHistorySession(null);
     setPersistedActiveConversation(conversationId, { immediate: false });
     setMainPanelClosed(false);
@@ -3352,6 +3744,7 @@ export default function AgentWorkspacePage() {
     const conversationId = getHistoryConversationId(session);
     setSelectedCwd(session.project_path);
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setSelectedHistorySession(null);
     setPersistedActiveConversation(conversationId, { immediate: false });
     setMainPanelClosed(false);
@@ -3371,6 +3764,7 @@ export default function AgentWorkspacePage() {
     if (typeof picked === "string" && picked.length > 0) {
       setSelectedCwd(picked);
       setSelectedProjectDetailsPath(null);
+      setSelectedDayOverview(null);
       setSelectedHistorySession(null);
       setMainPanelClosed(false);
       setPersistedActiveConversation(null);
@@ -3381,6 +3775,7 @@ export default function AgentWorkspacePage() {
   const openNewSession = () => {
     setSelectedCwd(null);
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setSelectedHistorySession(null);
     setMainPanelClosed(false);
     setPersistedActiveConversation(null);
@@ -3390,6 +3785,7 @@ export default function AgentWorkspacePage() {
   const openNewSessionForProject = (path: string) => {
     setSelectedCwd(path);
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setSelectedHistorySession(null);
     setMainPanelClosed(false);
     setPersistedActiveConversation(null);
@@ -3408,6 +3804,7 @@ export default function AgentWorkspacePage() {
     projectDetailsOpenRef.current = true;
     setSelectedCwd(path);
     setSelectedProjectDetailsPath(path);
+    setSelectedDayOverview(null);
     setSelectedHistorySession(null);
     setMainPanelClosed(false);
     setCreatingSession(false);
@@ -3433,6 +3830,13 @@ export default function AgentWorkspacePage() {
       return;
     }
     if (!loaded || loadingHistorySessions) return;
+    if (selectedDayOverview !== null) {
+      console.log("[DEBUG][WorkspaceDayOverview] skip route project restore while day overview is open:", {
+        routeProjectPath: Boolean(routeProjectPath),
+        selectedDayOverview,
+      });
+      return;
+    }
 
     const routeKey = getProjectGroupKey(routeProjectPath, mergeWorktrees) || normalizeProjectPath(routeProjectPath);
     if (!routeKey) return;
@@ -3465,6 +3869,7 @@ export default function AgentWorkspacePage() {
     projects,
     mergeWorktrees,
     selectedProjectDetailsPath,
+    selectedDayOverview,
   ]);
 
   const activePtyId = activeSession?.ptyId ?? null;
@@ -3476,8 +3881,9 @@ export default function AgentWorkspacePage() {
   const activeConnected = activeHarnessRunning || activePtyExists || activePtyAttached || activeLaunching;
   const shouldMountTerminal = Boolean(activeSession?.ptyId && !isHarnessSession(activeSession) && activeConnected);
   const terminalRestoreOnly = Boolean(activeSession?.ptyId) && !isHarnessSession(activeSession) && !activeConnected;
-  const showProjectDetailsView = Boolean(selectedProjectDetailsPath) && !mainPanelClosed && !creatingSession;
-  const showNewSessionView = !showProjectDetailsView && !selectedHistorySession && (creatingSession || mainPanelClosed || !activeSession);
+  const showDayOverviewView = selectedDayOverview !== null && !mainPanelClosed && !creatingSession;
+  const showProjectDetailsView = !showDayOverviewView && Boolean(selectedProjectDetailsPath) && !mainPanelClosed && !creatingSession;
+  const showNewSessionView = !showDayOverviewView && !showProjectDetailsView && !selectedHistorySession && (creatingSession || mainPanelClosed || !activeSession);
 
   const getSessionConnected = (session: AgentSession) =>
     isHarnessSession(session)
@@ -3505,6 +3911,7 @@ export default function AgentWorkspacePage() {
   const selectConversation = (row: WorkbenchConversation) => {
     if (row.archived) return;
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setMainPanelClosed(false);
     const displayMode = getConversationDisplayMode(row);
     if (displayMode === "cli" && row.runtime && isHarnessSession(row.runtime) && row.transcript) {
@@ -3582,12 +3989,14 @@ export default function AgentWorkspacePage() {
       setSelectedHistorySession(null);
       setSelectedCwd(row.runtime.cwd);
       setSelectedProjectDetailsPath(null);
+      setSelectedDayOverview(null);
       setMainPanelClosed(false);
       setCreatingSession(false);
       return;
     }
     if (row.transcript) {
       setSelectedProjectDetailsPath(null);
+      setSelectedDayOverview(null);
       setMainPanelClosed(false);
       setSelectedHistorySession(row.transcript);
       setSelectedCwd(row.transcript.project_path ?? row.runtime?.cwd ?? row.projectPath);
@@ -3681,6 +4090,7 @@ export default function AgentWorkspacePage() {
   const closeCurrentConversation = () => {
     setSelectedCwd(null);
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setSelectedHistorySession(null);
     setCreatingSession(false);
     setMainPanelClosed(true);
@@ -3698,7 +4108,7 @@ export default function AgentWorkspacePage() {
     }
   };
   const isConversationActive = (row: WorkbenchConversation) =>
-    mainPanelClosed || selectedProjectDetailsPath
+    mainPanelClosed || selectedProjectDetailsPath || selectedDayOverview !== null
       ? false
       : row.runtime && !selectedHistorySession && row.runtime.id === activeSession?.id
       ? true
@@ -3724,6 +4134,7 @@ export default function AgentWorkspacePage() {
 
     restoredConversationIdRef.current = row.conversationId;
     setSelectedProjectDetailsPath(null);
+    setSelectedDayOverview(null);
     setMainPanelClosed(false);
     setCreatingSession(false);
 
@@ -3747,6 +4158,13 @@ export default function AgentWorkspacePage() {
       return;
     }
     if (!loaded || loadingHistorySessions) return;
+    if (selectedDayOverview !== null) {
+      console.log("[DEBUG][WorkspaceDayOverview] skip route conversation restore while day overview is open:", {
+        routeSessionId,
+        selectedDayOverview,
+      });
+      return;
+    }
 
     const row = allWorkbenchRows.find((item) => {
       if (item.transcript) {
@@ -3769,6 +4187,7 @@ export default function AgentWorkspacePage() {
     allWorkbenchRows,
     expandedProjectPaths,
     mergeWorktrees,
+    selectedDayOverview,
     isConversationActive,
   ]);
 
@@ -3776,14 +4195,38 @@ export default function AgentWorkspacePage() {
     const activeConversationId = state.sidebar?.activeConversationId ?? null;
     if (!loaded || loadingHistorySessions) return;
     if (mainPanelClosed || creatingSession) return;
-    if (selectedProjectDetailsPath || projectDetailsOpenRef.current) return;
+    if (selectedProjectDetailsPath || selectedDayOverview !== null || projectDetailsOpenRef.current) {
+      if (selectedDayOverview !== null) {
+        console.log("[DEBUG][WorkspaceDayOverview] skip sidebar active conversation restore while day overview is open:", {
+          activeConversationId,
+          selectedDayOverview,
+        });
+      }
+      return;
+    }
     if (!activeConversationId) {
       restoredConversationIdRef.current = null;
       return;
     }
+    const directRow = allWorkbenchRows.find((item) => item.conversationId === activeConversationId && !item.archived);
+    const remappedRow = !directRow && activeConversationId.startsWith("runtime:")
+      ? allWorkbenchRows.find((item) =>
+          item.runtime?.id === activeConversationId.slice("runtime:".length) &&
+          item.transcript &&
+          !item.archived,
+        )
+      : null;
+
+    if (remappedRow) {
+      restoredConversationIdRef.current = remappedRow.conversationId;
+      setPersistedActiveConversationId(remappedRow.conversationId, { immediate: false });
+      if (!isConversationActive(remappedRow)) selectConversation(remappedRow);
+      return;
+    }
+
     if (restoredConversationIdRef.current === activeConversationId) return;
 
-    const row = allWorkbenchRows.find((item) => item.conversationId === activeConversationId && !item.archived);
+    const row = directRow;
     if (!row) return;
 
     restoredConversationIdRef.current = activeConversationId;
@@ -3796,6 +4239,7 @@ export default function AgentWorkspacePage() {
     state.sidebar?.activeConversationId,
     allWorkbenchRows,
     selectedProjectDetailsPath,
+    selectedDayOverview,
     mainPanelClosed,
     creatingSession,
   ]);
@@ -3804,6 +4248,12 @@ export default function AgentWorkspacePage() {
     <ConversationButton
       key={row.id}
       conversation={row}
+      menuTranscript={
+        row.transcript ??
+        (row.runtime?.linkedHistorySessionId && selectedHistorySession?.id === row.runtime.linkedHistorySessionId
+          ? selectedHistorySession
+          : undefined)
+      }
       active={isConversationActive(row)}
       locateHighlightKey={
         locatedConversationHighlight?.conversationId === row.conversationId
@@ -3868,6 +4318,26 @@ export default function AgentWorkspacePage() {
   const activeSessionRow = activeSession
     ? allWorkbenchRows.find((row) => row.runtime?.id === activeSession.id) ?? null
     : null;
+  const activeSessionMenuProps = activeSession && activeSessionRow
+    ? {
+        conversation: activeSessionRow,
+        menuTranscript: activeSessionRow.transcript,
+        connected: activeConnected,
+        onSelect: () => selectConversation(activeSessionRow),
+        onStart: () => relaunchSession(activeSession),
+        onStop: () => stopSession(activeSession),
+        onToggleRead: () => setConversationReadState(activeSessionRow, !activeSessionRow.unread),
+        onTogglePin: () => toggleConversationPinnedState(activeSessionRow),
+        onMarkNeedsReview: () => markConversationNeedsReview(activeSessionRow),
+        onEnvironment: () => openConversationEnvironmentDialog(activeSessionRow),
+        onArchive: () => archiveConversation(activeSessionRow),
+        onRestore: () => restoreConversation(activeSessionRow),
+        onExport: activeSessionRow.transcript ? () => openSessionExportDialog(activeSessionRow.transcript!) : undefined,
+        onClose: closeCurrentConversation,
+        displayMode: getConversationDisplayMode(activeSessionRow),
+        onDisplayModeChange: (mode: WorkbenchDisplayMode) => setConversationDisplayMode(activeSessionRow, mode),
+      }
+    : null;
   const activeSessionProjectPath = activeSession ? getProjectGroupPath(activeSession.cwd, mergeWorktrees) : null;
   const activeHeaderProjectPath = activeSessionProjectPath ?? activeSession?.cwd ?? null;
   const selectedHistoryConversationId = selectedHistorySession ? getHistoryConversationId(selectedHistorySession) : null;
@@ -3917,6 +4387,7 @@ export default function AgentWorkspacePage() {
     });
   }, [activeSession?.id, standardDetailPendingMessages, standardDetailSession?.id]);
   const currentWorkbenchRow = allWorkbenchRows.find(isConversationActive) ?? null;
+  const currentWorkbenchDayStart = currentWorkbenchRow ? getLocalDayStart(currentWorkbenchRow.timestamp) : null;
 
   useEffect(() => {
     const id = pendingScrollToConversationRef.current;
@@ -3980,9 +4451,20 @@ export default function AgentWorkspacePage() {
 
   useEffect(() => {
     if (!activeSession || selectedHistorySession || mainPanelClosed || creatingSession) return;
+    if (selectedDayOverview !== null) {
+      console.log("[DEBUG][WorkspaceDayOverview] skip runtime-exit linked chat restore while day overview is open:", {
+        activeSessionId: activeSession.id,
+        selectedDayOverview,
+      });
+      return;
+    }
     if (isHarnessSession(activeSession)) return;
     if (!activePtyStatusKnown || activeConnected) return;
     if (!activeSessionRow?.transcript) return;
+    console.log("[DEBUG][WorkspaceDayOverview] runtime-exit linked chat restore is opening session:", {
+      activeSessionId: activeSession.id,
+      linkedTranscriptId: activeSessionRow.transcript.id,
+    });
     openLinkedChatAfterRuntimeExit(activeSession, activeSessionRow.transcript);
   }, [
     activeConnected,
@@ -3991,6 +4473,7 @@ export default function AgentWorkspacePage() {
     activeSessionRow?.transcript,
     creatingSession,
     mainPanelClosed,
+    selectedDayOverview,
     selectedHistorySession,
   ]);
 
@@ -4029,6 +4512,162 @@ export default function AgentWorkspacePage() {
       onConfigureRuntimeEnvironment={openProjectEnvironmentDialog}
     />
   );
+  const loadDailyReportEvidence = useCallback(async (day: WorkbenchDayGroup): Promise<DailyReportEvidence[]> => {
+    const transcriptRows = day.rows.filter((row) => row.transcript);
+    const evidence: DailyReportEvidence[] = [];
+
+    for (let index = 0; index < transcriptRows.length; index += DAILY_REPORT_EVIDENCE_BATCH_SIZE) {
+      const batch = transcriptRows.slice(index, index + DAILY_REPORT_EVIDENCE_BATCH_SIZE);
+      const loaded = await Promise.all(batch.map(async (row) => {
+        const transcript = row.transcript!;
+        try {
+          const messages = await invoke<Message[]>("get_session_messages", {
+            projectId: transcript.project_id,
+            sessionId: transcript.id,
+          });
+          const extracted = getDailyReportEvidenceFromMessages(messages);
+          return {
+            rowId: row.id,
+            userPrompts: extracted.userPrompts,
+            assistantExcerpts: extracted.assistantExcerpts,
+          };
+        } catch (error) {
+          console.warn("[DEBUG][WorkspaceDayOverview] daily report evidence load failed:", {
+            projectId: transcript.project_id,
+            sessionId: transcript.id,
+            error,
+          });
+          return {
+            rowId: row.id,
+            userPrompts: [],
+            assistantExcerpts: [],
+            loadFailed: true,
+          };
+        }
+      }));
+      evidence.push(...loaded);
+    }
+
+    return evidence;
+  }, []);
+  const getDailyReportEvidenceForDay = async (day: WorkbenchDayGroup) => {
+    const key = getDailyReportEvidenceCacheKey(day);
+    const cached = dailyReportEvidenceByDay[key];
+    if (cached) return cached;
+    const evidence = await loadDailyReportEvidence(day);
+    setDailyReportEvidenceByDay((prev) => (prev[key] ? prev : { ...prev, [key]: evidence }));
+    return evidence;
+  };
+  useEffect(() => {
+    if (!showDayOverviewView || !selectedDayOverviewDetails || !selectedDayOverviewEvidenceKey) return;
+    if (dailyReportEvidenceByDay[selectedDayOverviewEvidenceKey]) return;
+
+    let cancelled = false;
+    setLoadingDailyReportEvidenceKey(selectedDayOverviewEvidenceKey);
+    loadDailyReportEvidence(selectedDayOverviewDetails)
+      .then((evidence) => {
+        if (cancelled) return;
+        setDailyReportEvidenceByDay((prev) =>
+          prev[selectedDayOverviewEvidenceKey]
+            ? prev
+            : { ...prev, [selectedDayOverviewEvidenceKey]: evidence },
+        );
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingDailyReportEvidenceKey((current) =>
+          current === selectedDayOverviewEvidenceKey ? null : current,
+        );
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    dailyReportEvidenceByDay,
+    loadDailyReportEvidence,
+    selectedDayOverviewDetails,
+    selectedDayOverviewEvidenceKey,
+    showDayOverviewView,
+  ]);
+  const copyDailyReportPrompt = async (day: WorkbenchDayGroup, platform: DailyReportPlatform) => {
+    const platformLabel = getDailyReportPlatformLabel(platform, t);
+    try {
+      const evidence = await getDailyReportEvidenceForDay(day);
+      const content = buildDailyReportPrompt(day, platform, getWorkbenchProjectName, evidence);
+      await invoke("copy_to_clipboard", { text: content });
+      toast.success(t("workspace.dailyReportPromptCopied", { platform: platformLabel }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(t("workspace.dailyReportPromptCopyFailed", { message }));
+    }
+  };
+  const generateDailyReportWithAi = async (day: WorkbenchDayGroup, platform: DailyReportPlatform) => {
+    const platformLabel = getDailyReportPlatformLabel(platform, t);
+    const key = `${day.dayStart}:${platform}`;
+    setGeneratingDailyReportKey(key);
+    setSelectedDayOverview(day.dayStart);
+    setDailyReportPlatform(platform);
+    try {
+      const evidence = await getDailyReportEvidenceForDay(day);
+      const prompt = buildDailyReportPrompt(day, platform, getWorkbenchProjectName, evidence);
+      const providerFromDay = day.rows
+        .map(getConversationProvider)
+        .find((provider): provider is Exclude<AgentProvider, "terminal"> => provider === "claude" || provider === "codex");
+      const provider: Exclude<AgentProvider, "terminal"> =
+        providerFromDay ?? (newSessionDefaultProvider === "terminal" ? "claude" : newSessionDefaultProvider);
+      const cwd = await ensurePlainChatWorkspace();
+      await createSession(provider, prompt, "standard", {
+        cwd,
+        title: `${formatChineseReportDate(day.dayStart)} ${platformLabel}日报`,
+      });
+      toast.success(t("workspace.dailyReportGenerationStarted", { platform: platformLabel }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(t("workspace.dailyReportGenerationFailed", { message }));
+    } finally {
+      setGeneratingDailyReportKey((current) => (current === key ? null : current));
+    }
+  };
+  const openDayOverview = (dayStart: number, platform: DailyReportPlatform = dailyReportPlatform) => {
+    console.log("[DEBUG][WorkspaceDayOverview] openDayOverview:", {
+      dayStart,
+      platform,
+      activeSessionId: activeSession?.id ?? null,
+      selectedHistorySessionId: selectedHistorySession?.id ?? null,
+      routeSessionId,
+      routeProjectId,
+      previousSelectedDayOverview: selectedDayOverview,
+    });
+    projectDetailsOpenRef.current = false;
+    restoredConversationIdRef.current = null;
+    routeSelectionRestoredRef.current = routeSelectionKey;
+    setSelectedDayOverview(dayStart);
+    setDailyReportPlatform(platform);
+    setSelectedProjectDetailsPath(null);
+    setSelectedHistorySession(null);
+    setMainPanelClosed(false);
+    setCreatingSession(false);
+    setPersistedActiveConversationId(null);
+    if (routeProjectId || routeProjectPath || routeSessionId || routeTargetMessageId || routeTargetLineNumber !== null || routeTargetRoundIndex !== null || routeSearchHighlight) {
+      console.log("[DEBUG][WorkspaceDayOverview] clear route selection params for day overview:", {
+        routeSessionId,
+        routeProjectId,
+        routeProjectPath: Boolean(routeProjectPath),
+      });
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("projectId");
+        next.delete("projectPath");
+        next.delete("sessionId");
+        next.delete("messageId");
+        next.delete("lineNumber");
+        next.delete("roundIndex");
+        next.delete("q");
+        return next;
+      }, { replace: true });
+    }
+  };
   const continueHistorySession = async (
     session: Session,
     provider: AgentProvider,
@@ -4206,7 +4845,7 @@ export default function AgentWorkspacePage() {
           <div
             ref={conversationListScrollRef}
             className={`min-h-0 flex-1 overflow-y-auto ${
-              loaded && workbenchRows.length > 0 && outlineMode === "project" ? "p-0" : "p-3"
+              loaded && workbenchRows.length > 0 && outlineMode !== "recent" ? "p-0" : "p-3"
             }`}
           >
           {conversationListInitialLoading ? (
@@ -4242,6 +4881,124 @@ export default function AgentWorkspacePage() {
               <div className="space-y-px">
                 {workbenchRows.map(renderWorkbenchRow)}
               </div>
+            </div>
+          ) : outlineMode === "day" ? (
+            <div className="py-1">
+              {dayOutline.map((day) => {
+                const active = selectedDayOverview === day.dayStart || currentWorkbenchDayStart === day.dayStart;
+                const dayLabel = formatDayGroupLabel(day.dayStart, t);
+                return (
+                  <div key={day.key}>
+                    <div
+                      className={`group sticky top-0 z-30 flex h-8 w-full items-center gap-1 border-b border-l-2 bg-card px-2 text-left transition-colors ${
+                        active
+                          ? "border-b-border border-l-primary bg-card-alt"
+                          : "border-b-border border-l-transparent hover:bg-card-alt"
+                      }`}
+                      title={dayLabel}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => openDayOverview(day.dayStart)}
+                        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 self-stretch text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        aria-label={t("workspace.viewDayOverview", { day: dayLabel })}
+                      >
+                        <CalendarDays className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">
+                          {dayLabel}
+                        </span>
+                        {day.running ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" /> : null}
+                        {day.needsReview && !day.running ? <AlertCircle className="h-3.5 w-3.5 shrink-0 text-primary" /> : null}
+                        <span className="shrink-0 truncate text-xs tabular-nums text-muted-foreground">
+                          {t("workspace.projectCount", { count: day.projectCount })}
+                        </span>
+                        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{day.rows.length}</span>
+                      </button>
+                      <DropdownMenu modal={false}>
+                        <DropdownMenuTrigger asChild>
+                          <button
+                            type="button"
+                            className="pointer-events-none inline-flex h-6 w-0 shrink-0 items-center justify-center overflow-hidden rounded-md text-muted-foreground opacity-0 transition-[width,opacity,background-color,color] duration-150 hover:bg-card hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover:pointer-events-auto group-hover:w-6 group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:w-6 group-focus-within:opacity-100 data-[state=open]:pointer-events-auto data-[state=open]:w-6 data-[state=open]:opacity-100"
+                            title={t("workspace.dayActions")}
+                            aria-label={t("workspace.dayActions")}
+                          >
+                            <MoreHorizontal className="h-4 w-4" />
+                          </button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-60">
+                          <DropdownMenuItem onSelect={() => openDayOverview(day.dayStart)} className="gap-2">
+                            <FileText className="h-4 w-4" />
+                            {t("workspace.dayOverview")}
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel className="text-xs text-muted-foreground">{t("workspace.generateDailyReport")}</DropdownMenuLabel>
+                          {DAILY_REPORT_PLATFORMS.map((platform) => (
+                            <DropdownMenuItem
+                              key={platform}
+                              onSelect={() => void generateDailyReportWithAi(day, platform)}
+                              className="gap-2"
+                            >
+                              {platform === "blog" ? <FileText className="h-4 w-4" /> : <Newspaper className="h-4 w-4" />}
+                              {getDailyReportPlatformLabel(platform, t)}
+                            </DropdownMenuItem>
+                          ))}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </div>
+                    <div className="ml-5 space-y-1 border-l border-border py-1 pl-1 pr-2.5">
+                      {day.projects.map((project) => {
+                        const activeRowIndex = project.rows.findIndex(isConversationActive);
+                        const visibleRows =
+                          activeRowIndex >= PROJECT_GROUP_INLINE_LIMIT
+                            ? [
+                                ...project.rows.slice(0, PROJECT_GROUP_INLINE_LIMIT - 1),
+                                project.rows[activeRowIndex],
+                              ]
+                            : project.rows.slice(0, PROJECT_GROUP_INLINE_LIMIT);
+                        const visibleRowIds = new Set(visibleRows.map((row) => row.id));
+                        const overflowRows = project.rows.filter((row) => !visibleRowIds.has(row.id));
+
+                        return (
+                          <div key={project.key} className="space-y-px">
+                            <div className="flex h-6 min-w-0 items-center gap-1.5 px-2 text-xs font-medium text-muted-foreground">
+                              <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+                              <span className="min-w-0 flex-1 truncate" title={project.path}>
+                                {getWorkbenchProjectName(project.path)}
+                              </span>
+                              {project.running ? <LoaderCircle className="h-3 w-3 shrink-0 animate-spin text-primary" /> : null}
+                              {project.needsReview && !project.running ? <AlertCircle className="h-3 w-3 shrink-0 text-primary" /> : null}
+                              <span className="shrink-0 tabular-nums">{project.rows.length}</span>
+                            </div>
+                            {visibleRows.map(renderWorkbenchRow)}
+                            {overflowRows.length > 0 && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <button
+                                    type="button"
+                                    className="flex h-7 w-full items-center gap-2 rounded-md px-2 text-left text-xs font-medium text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
+                                    title={t("workspace.moreConversationCount", { count: overflowRows.length })}
+                                  >
+                                    <MoreHorizontal className="h-4 w-4 shrink-0" />
+                                    <span className="min-w-0 flex-1 truncate">{t("workspace.moreConversations")}</span>
+                                    <span className="shrink-0 text-xs">{overflowRows.length}</span>
+                                  </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent side="right" align="start" className="max-h-[min(420px,80vh)] w-80 overflow-y-auto">
+                                  <DropdownMenuLabel className="truncate text-xs text-muted-foreground">
+                                    {getWorkbenchProjectName(project.path)}
+                                  </DropdownMenuLabel>
+                                  <DropdownMenuSeparator />
+                                  {overflowRows.map(renderOverflowWorkbenchRow)}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <div className="py-1">
@@ -4392,7 +5149,27 @@ export default function AgentWorkspacePage() {
       )}
 
       <main className="relative flex min-w-0 flex-1 flex-col">
-        {showProjectDetailsView ? (
+        {showDayOverviewView ? (
+          selectedDayOverviewDetails ? (
+            <DayOverviewPanel
+              day={selectedDayOverviewDetails}
+              platform={dailyReportPlatform}
+              onPlatformChange={setDailyReportPlatform}
+              onClose={closeCurrentConversation}
+              generating={generatingDailyReportKey === `${selectedDayOverviewDetails.dayStart}:${dailyReportPlatform}`}
+              evidence={selectedDayOverviewEvidence}
+              evidenceLoading={selectedDayOverviewEvidenceLoading}
+              onGenerateReport={(platform) => void generateDailyReportWithAi(selectedDayOverviewDetails, platform)}
+              onCopyPrompt={(platform) => void copyDailyReportPrompt(selectedDayOverviewDetails, platform)}
+              onSelectConversation={selectConversation}
+              getProjectLabel={getWorkbenchProjectName}
+            />
+          ) : (
+            <div className="flex min-h-0 flex-1 items-center justify-center bg-background px-6 text-sm text-muted-foreground">
+              {t("common.loading")}
+            </div>
+          )
+        ) : showProjectDetailsView ? (
           selectedProjectDetails ? (
             <ProjectDetailsPanel
               projectPath={selectedProjectDetails.path}
@@ -4510,96 +5287,14 @@ export default function AgentWorkspacePage() {
                       <MoreHorizontal className="h-4 w-4" />
                     </button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end" className="w-56">
-                    {activeSessionRow?.transcript ? (
-                      <SessionDetailDropdownMenuItems
-                        projectId={activeSessionRow.transcript.project_id}
-                        sessionId={activeSessionRow.transcript.id}
-	                        title={getHistorySessionTitle(activeSessionRow.transcript, t("common.untitledConversation"))}
-                        source={activeSessionRow.transcript.source}
-                        projectPath={activeSessionRow.transcript.project_path ?? activeSession.cwd}
-                        onExport={() => openSessionExportDialog(activeSessionRow.transcript!)}
-                        onClose={closeCurrentConversation}
-                        displayMode={getConversationDisplayMode(activeSessionRow)}
-                        onDisplayModeChange={(mode) => setConversationDisplayMode(activeSessionRow, mode)}
-                        onOpenConversation={() => setConversationDisplayMode(activeSessionRow, "standard")}
-                        onEnvironment={() => openConversationEnvironmentDialog(activeSessionRow)}
-	                        environmentActionLabel={t("environment.runAction", { name: primaryEnvironmentAction?.name || t("environment.actionFallback") })}
-                        environmentActionDisabled={!primaryEnvironmentAction || !primaryEnvironmentConfig}
-                        onRunEnvironmentAction={() => {
-                          if (!primaryEnvironmentAction || !primaryEnvironmentConfig) return;
-                          runEnvironmentConfig(primaryEnvironmentScope, "action", primaryEnvironmentConfig, primaryEnvironmentAction);
-                        }}
-                        onRestartRuntime={() => relaunchSession(activeSession)}
-                        onStartRuntime={() => relaunchSession(activeSession)}
-                        onStopRuntime={() => stopSession(activeSession)}
-                        runtimeConnected={activeConnected}
-                        unread={activeSessionRow.unread}
-                        onToggleRead={() => setConversationReadState(activeSessionRow, !activeSessionRow.unread)}
-                        needsReview={activeSessionRow.needsReview || activeSession.status === "needs-review"}
-                        onMarkNeedsReview={() => markConversationNeedsReview(activeSessionRow)}
-                        isPinnedOverride={activeSessionRow.pinned}
-                        onTogglePinOverride={() => toggleConversationPinnedState(activeSessionRow)}
-                        isArchivedOverride={Boolean(activeSession.archived)}
-                        onToggleArchiveOverride={() => {
-                          if (activeSession.archived) restoreSession(activeSession);
-                          else archiveSession(activeSession);
-                        }}
-                      />
+                  <DropdownMenuContent align="end" className="w-56" onCloseAutoFocus={(event) => event.preventDefault()}>
+                    {activeSessionMenuProps ? (
+                      <WorkspaceConversationDropdownMenuItems {...activeSessionMenuProps} />
                     ) : (
-                      <>
-                        {activeSession.archived ? (
-	                          <DropdownMenuItem onClick={() => restoreSession(activeSession)} className="gap-2">
-	                            <ArchiveRestore className="h-4 w-4" />
-	                            {t("workspace.restoreConversation")}
-	                          </DropdownMenuItem>
-                        ) : (
-                          <>
-                            <DropdownMenuItem
-                              disabled={!primaryEnvironmentAction || !primaryEnvironmentConfig}
-                              onClick={() => {
-                                if (!primaryEnvironmentAction || !primaryEnvironmentConfig) return;
-                                runEnvironmentConfig(primaryEnvironmentScope, "action", primaryEnvironmentConfig, primaryEnvironmentAction);
-                              }}
-                              className="gap-2"
-                            >
-	                              <Terminal className="h-4 w-4" />
-	                              {t("environment.runAction", { name: primaryEnvironmentAction?.name || t("environment.actionFallback") })}
-	                            </DropdownMenuItem>
-	                            <DropdownMenuItem onClick={() => openEnvironmentDialog("session")} className="gap-2">
-	                              <Settings2 className="h-4 w-4" />
-	                              {t("common.environment")}
-	                            </DropdownMenuItem>
-	                            <DropdownMenuItem onClick={() => relaunchSession(activeSession)} className="gap-2">
-	                              <RotateCcw className="h-4 w-4" />
-	                              {t("workspace.runAgain")}
-	                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => {
-                                if (activeConnected) stopSession(activeSession);
-                                else relaunchSession(activeSession);
-                              }}
-                              className="gap-2"
-	                            >
-	                              {activeConnected ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-	                              {activeConnected ? t("workspace.stopRuntime") : t("workspace.startRuntime")}
-	                            </DropdownMenuItem>
-	                            <DropdownMenuItem onClick={() => markNeedsReview(activeSession)} className="gap-2">
-	                              <AlertCircle className="h-4 w-4" />
-	                              {t("workspace.markNeedsReview")}
-	                            </DropdownMenuItem>
-	                            <DropdownMenuItem onClick={() => archiveSession(activeSession)} className="gap-2">
-	                              <Archive className="h-4 w-4" />
-	                              {t("workspace.archiveConversation")}
-	                            </DropdownMenuItem>
-                          </>
-                        )}
-                        <DropdownMenuSeparator />
-	                        <DropdownMenuItem onClick={closeCurrentConversation} className="gap-2">
-	                          <X className="h-4 w-4" />
-	                          {t("workspace.closePanel")}
-	                        </DropdownMenuItem>
-                      </>
+                      <DropdownMenuItem onSelect={closeCurrentConversation} className="gap-2">
+                        <X className="h-4 w-4" />
+                        {t("workspace.closePanel")}
+                      </DropdownMenuItem>
                     )}
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -4760,6 +5455,200 @@ function getConversationStatusLabel(row: WorkbenchConversation, t?: TranslateFn)
   if (row.needsReview) return t ? t("workspace.needsReview") : "needs review";
   if (row.unread) return t ? t("workspace.unread") : "unread";
   return t ? t("workspace.history") : "history";
+}
+
+function DayOverviewPanel({
+  day,
+  platform,
+  onPlatformChange,
+  onClose,
+  generating,
+  evidence,
+  evidenceLoading,
+  onGenerateReport,
+  onCopyPrompt,
+  onSelectConversation,
+  getProjectLabel,
+}: {
+  day: WorkbenchDayGroup;
+  platform: DailyReportPlatform;
+  onPlatformChange: (platform: DailyReportPlatform) => void;
+  onClose: () => void;
+  generating: boolean;
+  evidence?: DailyReportEvidence[];
+  evidenceLoading: boolean;
+  onGenerateReport: (platform: DailyReportPlatform) => void;
+  onCopyPrompt: (platform: DailyReportPlatform) => void;
+  onSelectConversation: (row: WorkbenchConversation) => void;
+  getProjectLabel: (path: string) => string;
+}) {
+  const { t } = useI18n();
+  const totals = useMemo(() => getDailyReportTotals(day), [day]);
+  const prompt = useMemo(() => buildDailyReportPrompt(day, platform, getProjectLabel, evidence), [day, evidence, getProjectLabel, platform]);
+  const dateLabel = formatDayGroupLabel(day.dayStart, t);
+
+  return (
+    <>
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-background px-5 py-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-card-alt text-muted-foreground">
+              <CalendarDays className="h-4 w-4" />
+            </span>
+            <h2 className="truncate font-serif text-lg font-semibold text-foreground">
+              {t("workspace.dayOverviewTitle", { day: dateLabel })}
+            </h2>
+          </div>
+          <p className="mt-1 truncate text-xs text-muted-foreground">
+            {formatChineseReportDate(day.dayStart)} / {formatLocalDateKey(day.dayStart)}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <IconButton title={t("workspace.generateDailyReportWithAi")} onClick={() => onGenerateReport(platform)}>
+            {generating ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+          </IconButton>
+          <IconButton title={t("workspace.copyDailyReportPrompt")} onClick={() => onCopyPrompt(platform)}>
+            <Copy className="h-4 w-4" />
+          </IconButton>
+          <IconButton title={t("workspace.closeDetails")} onClick={onClose}>
+            <X className="h-4 w-4" />
+          </IconButton>
+        </div>
+      </header>
+
+      <div className="min-h-0 flex-1 overflow-y-auto bg-background px-5 py-5">
+        <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
+          <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <ProjectMetric
+              label={t("common.projects")}
+              value={formatNumber(day.projectCount)}
+              detail={t("workspace.conversationCount", { count: formatNumber(day.rows.length) })}
+              icon={<FolderOpen className="h-4 w-4" />}
+            />
+            <ProjectMetric
+              label={t("workspace.sessions")}
+              value={formatNumber(day.rows.length)}
+              detail={t("workspace.roundsMessages", { rounds: formatNumber(totals.rounds), messages: formatNumber(totals.messages) })}
+              icon={<MessageSquare className="h-4 w-4" />}
+            />
+            <ProjectMetric
+              label={t("common.runtime")}
+              value={formatNumber(totals.runtime)}
+              detail={t("workspace.runningCount", { count: formatNumber(day.running) })}
+              icon={<Terminal className="h-4 w-4" />}
+            />
+            <ProjectMetric
+              label={t("workspace.needsReview")}
+              value={formatNumber(day.needsReview)}
+              detail={t("workspace.conversationCount", { count: formatNumber(totals.history) })}
+              icon={<AlertCircle className="h-4 w-4" />}
+            />
+          </section>
+
+          <section className="rounded-xl border border-border bg-card">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <div>
+                <h3 className="font-serif text-base font-semibold text-foreground">{t("workspace.dailyReportBrief")}</h3>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {evidenceLoading ? t("workspace.loadingDailyReportEvidence") : getDailyReportPlatformLabel(platform, t)}
+                </p>
+              </div>
+              <div className="flex max-w-full flex-wrap items-center gap-1 rounded-xl border border-border bg-background p-1">
+                {DAILY_REPORT_PLATFORMS.map((option) => {
+                  const active = option === platform;
+                  return (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => onPlatformChange(option)}
+                      className={`inline-flex h-8 max-w-full items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors ${
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "text-muted-foreground hover:bg-card-alt hover:text-foreground"
+                      }`}
+                    >
+                      {option === "blog" ? <FileText className="h-3.5 w-3.5 shrink-0" /> : <Newspaper className="h-3.5 w-3.5 shrink-0" />}
+                      <span className="min-w-0 truncate">{getDailyReportPlatformLabel(option, t)}</span>
+                    </button>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => onGenerateReport(platform)}
+                  disabled={generating}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-wait disabled:opacity-70"
+                >
+                  {generating ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 shrink-0" />}
+                  {t("workspace.generateDailyReportWithAi")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onCopyPrompt(platform)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
+                >
+                  <Copy className="h-3.5 w-3.5 shrink-0" />
+                  {t("workspace.copyDailyReportPrompt")}
+                </button>
+              </div>
+            </div>
+            <pre className="max-h-[min(46vh,520px)] overflow-auto whitespace-pre-wrap px-4 py-4 font-mono text-xs leading-6 text-foreground">{prompt}</pre>
+          </section>
+
+          <section className="rounded-xl border border-border bg-card">
+            <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+              <h3 className="font-serif text-base font-semibold text-foreground">{t("workspace.projectResults")}</h3>
+              <span className="text-xs font-medium tabular-nums text-muted-foreground">{formatNumber(day.projectCount)}</span>
+            </div>
+            <div className="divide-y divide-border">
+              {day.projects.map((project) => (
+                <div key={project.key} className="px-4 py-4">
+                  <div className="mb-2 flex min-w-0 items-center gap-2">
+                    <FolderOpen className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <h4 className="min-w-0 flex-1 truncate font-serif text-base font-semibold text-foreground" title={project.path}>
+                      {getProjectLabel(project.path)}
+                    </h4>
+                    {project.running ? <LoaderCircle className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" /> : null}
+                    {project.needsReview && !project.running ? <AlertCircle className="h-3.5 w-3.5 shrink-0 text-primary" /> : null}
+                    <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{formatNumber(project.rows.length)}</span>
+                  </div>
+                  <div className="space-y-px">
+                    {project.rows.map((row) => {
+                      const provider = getConversationProvider(row);
+                      const title = getConversationTitle(row, {
+                        untitledConversation: t("common.untitledConversation"),
+                        shell: t("chat.shell"),
+                        newSession: t("chat.newSession"),
+                      });
+                      return (
+                        <button
+                          key={row.id}
+                          type="button"
+                          onClick={() => onSelectConversation(row)}
+                          disabled={row.archived}
+                          className="flex h-9 w-full min-w-0 items-center gap-2 rounded-lg px-2 text-left transition-colors hover:bg-card-alt disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
+                          title={title}
+                        >
+                          {provider ? (
+                            <ProviderIcon provider={provider} />
+                          ) : (
+                            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-card-alt text-muted-foreground">
+                              <MessageSquare className="h-3.5 w-3.5" />
+                            </span>
+                          )}
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{title}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">{getConversationStatusLabel(row, t)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
+      </div>
+    </>
+  );
 }
 
 function ProjectDetailsPanel({
@@ -5141,7 +6030,12 @@ function WorkbenchOutlineMenu({
   onReorderGroupsChange: (reorder: boolean) => void;
 }) {
   const { t } = useI18n();
-  const outlineLabel = outlineMode === "project" ? t("workspace.byProject") : t("common.none");
+  const outlineLabel =
+    outlineMode === "project"
+      ? t("workspace.byProject")
+      : outlineMode === "day"
+        ? t("workspace.byDay")
+        : t("common.none");
   const sortLabel = sortMode === "last-modified" ? t("workspace.latestModified") : sortMode === "created" ? t("workspace.created") : t("common.name");
   const filterLabel = displayFilter === "running" ? t("workspace.running") : displayFilter === "review" ? t("workspace.needsReview") : t("workspace.allConversations");
 
@@ -5184,6 +6078,13 @@ function WorkbenchOutlineMenu({
 	                rules={[t("workspace.projectConversationsUseSort"), t("workspace.groupOrderLatestUnlessReorder")]}
 	              >
                 <DropdownMenuRadioItem value="project">{t("workspace.byProject")}</DropdownMenuRadioItem>
+              </MenuItemTooltip>
+	              <MenuItemTooltip
+	                title={t("workspace.byDay")}
+	                description={t("workspace.groupConversationsByDay")}
+	                rules={[t("workspace.dayGroupsShowProjects"), t("workspace.dayConversationsUseSort")]}
+	              >
+                <DropdownMenuRadioItem value="day">{t("workspace.byDay")}</DropdownMenuRadioItem>
               </MenuItemTooltip>
             </DropdownMenuRadioGroup>
           </DropdownMenuSubContent>
@@ -5325,6 +6226,7 @@ function ConversationButton({
   displayMode,
   onDisplayModeChange,
   onLocateHighlightEnd,
+  menuTranscript,
 }: {
   conversation: WorkbenchConversation;
   active: boolean;
@@ -5344,13 +6246,15 @@ function ConversationButton({
   displayMode?: WorkbenchDisplayMode;
   onDisplayModeChange?: (mode: WorkbenchDisplayMode) => void;
   onLocateHighlightEnd?: (key: number) => void;
+  menuTranscript?: Session;
 }) {
   const { t } = useI18n();
   const [confirmingArchive, setConfirmingArchive] = useState(false);
   const [actionsMenuOpen, setActionsMenuOpen] = useState(false);
   const runtime = conversation.runtime;
   const transcript = conversation.transcript;
-  const provider = runtime?.provider ?? providerForTranscript(transcript);
+  const displayTranscript = transcript ?? menuTranscript;
+  const provider = runtime?.provider ?? providerForTranscript(displayTranscript);
   const displayTitle = transcript
     ? getHistorySessionTitle(transcript, t("common.untitledConversation"))
     : runtime
@@ -5366,7 +6270,7 @@ function ConversationButton({
         : t("workspace.conversation");
   const readLabel = conversation.unread ? t("workspace.unread") : t("workspace.read");
   const pinnedLabel = conversation.pinned ? t("workspace.pinned") : t("workspace.unpinned");
-  const providerLabel = provider ? labelForProvider(provider) : transcript?.source ?? t("workspace.conversation");
+  const providerLabel = provider ? labelForProvider(provider) : displayTranscript?.source ?? t("workspace.conversation");
   const relativeTime = formatRelativeTime(conversation.timestamp, t);
   const needsCheck = !agentRunning && conversation.needsReview;
   const defaultToolbarContent = agentRunning ? (
@@ -5384,32 +6288,6 @@ function ConversationButton({
         <MessageSquare className="h-3.5 w-3.5" />
       </span>
     );
-  const sessionContextMenuProps = transcript
-    ? {
-        projectId: transcript.project_id,
-        sessionId: transcript.id,
-        title: displayTitle,
-        source: transcript.source,
-        projectPath: transcript.project_path ?? conversation.projectPath,
-        isArchivedOverride: conversation.archived,
-        onToggleArchiveOverride: conversation.archived ? onRestore : onArchive,
-        isPinnedOverride: conversation.pinned,
-        onTogglePinOverride: onTogglePin,
-        onExport,
-        onClose,
-        displayMode,
-        onDisplayModeChange,
-        onOpenConversation: onSelect,
-        onEnvironment,
-        onStartRuntime: onStart,
-        onStopRuntime: onStop,
-        runtimeConnected: connected,
-        unread: conversation.unread,
-        onToggleRead,
-        needsReview: conversation.needsReview,
-        onMarkNeedsReview,
-      }
-    : null;
   const handleInlineArchiveClick = () => {
     if (confirmingArchive) {
       setConfirmingArchive(false);
@@ -5478,14 +6356,24 @@ function ConversationButton({
                 </SidebarActionButton>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56" onCloseAutoFocus={(event) => event.preventDefault()}>
-                {sessionContextMenuProps ? (
-                  <SessionDetailDropdownMenuItems {...sessionContextMenuProps} />
-                ) : (
-                  <DropdownMenuItem onSelect={conversation.archived ? onRestore : onArchive} className="gap-2">
-                    {conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
-                    {conversation.archived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
-                  </DropdownMenuItem>
-                )}
+                <WorkspaceConversationDropdownMenuItems
+                  conversation={conversation}
+                  menuTranscript={menuTranscript}
+                  connected={connected}
+                  onSelect={onSelect}
+                  onStart={onStart}
+                  onStop={onStop}
+                  onToggleRead={onToggleRead}
+                  onTogglePin={onTogglePin}
+                  onMarkNeedsReview={onMarkNeedsReview}
+                  onEnvironment={onEnvironment}
+                  onArchive={onArchive}
+                  onRestore={onRestore}
+                  onExport={onExport}
+                  onClose={onClose}
+                  displayMode={displayMode}
+                  onDisplayModeChange={onDisplayModeChange}
+                />
               </DropdownMenuContent>
             </DropdownMenu>
             {conversation.archived ? (
@@ -5505,36 +6393,494 @@ function ConversationButton({
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-56" onCloseAutoFocus={(event) => event.preventDefault()}>
-        {sessionContextMenuProps ? (
-          <SessionDetailContextMenuItems {...sessionContextMenuProps} />
-        ) : (
-	          <ContextMenuItem onSelect={conversation.archived ? onRestore : onArchive} className="gap-2">
-	            {conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
-	            {conversation.archived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
-	          </ContextMenuItem>
-        )}
+        <WorkspaceConversationContextMenuItems
+          conversation={conversation}
+          menuTranscript={menuTranscript}
+          connected={connected}
+          onSelect={onSelect}
+          onStart={onStart}
+          onStop={onStop}
+          onToggleRead={onToggleRead}
+          onTogglePin={onTogglePin}
+          onMarkNeedsReview={onMarkNeedsReview}
+          onEnvironment={onEnvironment}
+          onArchive={onArchive}
+          onRestore={onRestore}
+          onExport={onExport}
+          onClose={onClose}
+          displayMode={displayMode}
+          onDisplayModeChange={onDisplayModeChange}
+        />
       </ContextMenuContent>
     </ContextMenu>
   );
 }
 
-function SidebarActionButton({
-  title,
-  onClick,
-  children,
-  active = false,
-  destructive = false,
-}: {
+type RuntimeConversationMenuProps = {
+  conversation: WorkbenchConversation;
+  connected: boolean;
+  onStart?: () => void;
+  onStop?: () => void;
+  onToggleRead: () => void;
+  onTogglePin: () => void;
+  onMarkNeedsReview: () => void;
+  onEnvironment: () => void;
+  onArchive: () => void;
+  onRestore: () => void;
+  onClose?: () => void;
+};
+
+type WorkspaceConversationMenuProps = RuntimeConversationMenuProps & {
+  menuTranscript?: Session;
+  onSelect: () => void;
+  onExport?: () => void;
+  displayMode?: WorkbenchDisplayMode;
+  onDisplayModeChange?: (mode: WorkbenchDisplayMode) => void;
+};
+
+function getWorkspaceConversationSessionMenuProps(
+  {
+    conversation,
+    menuTranscript,
+    connected,
+    onSelect,
+    onStart,
+    onStop,
+    onToggleRead,
+    onTogglePin,
+    onMarkNeedsReview,
+    onEnvironment,
+    onArchive,
+    onRestore,
+    onExport,
+    onClose,
+    displayMode,
+    onDisplayModeChange,
+  }: WorkspaceConversationMenuProps,
+  t: TranslateFn,
+): SessionDetailMenuConfig | null {
+  const transcript = conversation.transcript ?? menuTranscript;
+  if (!transcript) return null;
+
+  return {
+    projectId: transcript.project_id,
+    sessionId: transcript.id,
+    title: getHistorySessionTitle(transcript, t("common.untitledConversation")),
+    source: transcript.source,
+    projectPath: transcript.project_path ?? conversation.projectPath,
+    isArchivedOverride: conversation.archived,
+    onToggleArchiveOverride: conversation.archived ? onRestore : onArchive,
+    isPinnedOverride: conversation.pinned,
+    onTogglePinOverride: onTogglePin,
+    onExport,
+    onClose,
+    displayMode,
+    onDisplayModeChange,
+    onOpenConversation: onSelect,
+    onEnvironment,
+    onStartRuntime: onStart,
+    onStopRuntime: onStop,
+    runtimeConnected: connected,
+    unread: conversation.unread,
+    onToggleRead,
+    needsReview: conversation.needsReview,
+    onMarkNeedsReview,
+  };
+}
+
+function WorkspaceConversationDropdownMenuItems(props: WorkspaceConversationMenuProps) {
+  const { t } = useI18n();
+  const sessionMenuProps = getWorkspaceConversationSessionMenuProps(props, t);
+
+  if (sessionMenuProps) {
+    return <SessionDetailDropdownMenuItems {...sessionMenuProps} />;
+  }
+
+  if (props.conversation.runtime) {
+    return <RuntimeConversationDropdownMenuItems {...props} />;
+  }
+
+  return (
+    <DropdownMenuItem onSelect={props.conversation.archived ? props.onRestore : props.onArchive} className="gap-2">
+      {props.conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+      {props.conversation.archived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
+    </DropdownMenuItem>
+  );
+}
+
+function WorkspaceConversationContextMenuItems(props: WorkspaceConversationMenuProps) {
+  const { t } = useI18n();
+  const sessionMenuProps = getWorkspaceConversationSessionMenuProps(props, t);
+
+  if (sessionMenuProps) {
+    return <SessionDetailContextMenuItems {...sessionMenuProps} />;
+  }
+
+  if (props.conversation.runtime) {
+    return <RuntimeConversationContextMenuItems {...props} />;
+  }
+
+  return (
+    <ContextMenuItem onSelect={props.conversation.archived ? props.onRestore : props.onArchive} className="gap-2">
+      {props.conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+      {props.conversation.archived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
+    </ContextMenuItem>
+  );
+}
+
+function RuntimeConversationDropdownMenuItems({
+  conversation,
+  connected,
+  onStart,
+  onStop,
+  onToggleRead,
+  onTogglePin,
+  onMarkNeedsReview,
+  onEnvironment,
+  onArchive,
+  onRestore,
+  onClose,
+}: RuntimeConversationMenuProps) {
+  const { t } = useI18n();
+  const startOrStop = connected ? onStop : onStart;
+  const copyRuntimeSessionId = () => {
+    const runtimeId = conversation.runtime?.id;
+    if (!runtimeId) return;
+    invoke("copy_to_clipboard", { text: runtimeId })
+      .then(() => toast.success(t("session.infoCopied", { label: "Session ID" })))
+      .catch((error) => toast.error(String(error)));
+  };
+
+  return (
+    <>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger className="gap-2">
+          <Eye className="h-4 w-4" />
+          {t("session.view")}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className="w-80">
+          <DropdownMenuItem disabled>{t("session.standardMode")}</DropdownMenuItem>
+          <DropdownMenuItem disabled>{t("session.promptsOnly")}</DropdownMenuItem>
+          <DropdownMenuItem disabled>{t("session.expandMessages")}</DropdownMenuItem>
+          <DropdownMenuItem disabled>{t("session.markdownPreview")}</DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem disabled className="gap-2">
+            <Info className="h-4 w-4" />
+            {t("session.informationEllipsis")}
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger className="gap-2">
+          <Pin className="h-4 w-4" />
+          {t("session.manage")}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          <DropdownMenuItem disabled={conversation.archived} onSelect={onTogglePin} className="gap-2">
+            {conversation.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+            {conversation.pinned ? t("session.unpin") : t("session.pinToTop")}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={conversation.archived} onSelect={onToggleRead} className="gap-2">
+            {conversation.unread ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+            {conversation.unread ? t("session.markAsRead") : t("session.markAsUnread")}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled={conversation.archived} onSelect={onMarkNeedsReview} className="gap-2">
+            <AlertCircle className="h-4 w-4" />
+            {conversation.needsReview ? t("workspace.needsReview") : t("workspace.markNeedsReview")}
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={conversation.archived ? onRestore : onArchive} className="gap-2">
+            {conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+            {conversation.archived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger className="gap-2">
+          <Settings2 className="h-4 w-4" />
+          {t("workspace.advanced")}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          <DropdownMenuItem disabled={conversation.archived} onSelect={onEnvironment} className="gap-2">
+            <Settings2 className="h-4 w-4" />
+            {t("session.configureRunScripts")}
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger className="gap-2">
+          <Copy className="h-4 w-4" />
+          {t("session.copy")}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          <DropdownMenuItem disabled className="gap-2">
+            <Info className="h-4 w-4" />
+            {t("session.sessionInfo")}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled className="gap-2">
+            <FolderInput className="h-4 w-4" />
+            {t("session.relatedFilePaths")}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled className="gap-2">
+            <ClipboardList className="h-4 w-4" />
+            {t("session.traceContext")}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={copyRuntimeSessionId} className="gap-2">
+            <Copy className="h-4 w-4" />
+            Session ID
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled className="gap-2">
+            <Terminal className="h-4 w-4" />
+            {t("session.resumeCommand")}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled className="gap-2">
+            <FolderInput className="h-4 w-4" />
+            {t("session.filePath")}
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger className="gap-2">
+          <ArrowRightLeft className="h-4 w-4" />
+          {t("session.resumeInRuntime")}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          {startOrStop ? (
+            <DropdownMenuItem disabled={conversation.archived} onSelect={startOrStop} className="gap-2">
+              {connected ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              {connected ? t("workspace.stopRuntime") : t("workspace.startRuntime")}
+            </DropdownMenuItem>
+          ) : null}
+          {onStart ? (
+            <DropdownMenuItem disabled={conversation.archived} onSelect={onStart} className="gap-2">
+              <RotateCcw className="h-4 w-4" />
+              {t("workspace.runAgain")}
+            </DropdownMenuItem>
+          ) : null}
+          {!startOrStop && !onStart ? (
+            <DropdownMenuItem disabled className="gap-2">
+              <Terminal className="h-4 w-4" />
+              {t("workspace.startRuntime")}
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      <DropdownMenuItem disabled className="gap-2">
+        <Download className="h-4 w-4" />
+        Export
+      </DropdownMenuItem>
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger className="gap-2">
+          <FolderOpen className="h-4 w-4" />
+          {t("session.files")}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent>
+          <DropdownMenuItem disabled className="gap-2">
+            <FolderOpen className="h-4 w-4" />
+            {t("fileViewer.revealInFinder")}
+          </DropdownMenuItem>
+          <DropdownMenuItem disabled className="gap-2">
+            <ArrowRightLeft className="h-4 w-4" />
+            {t("common.openInEditor")}
+          </DropdownMenuItem>
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+      {onClose ? (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={onClose} className="gap-2">
+            <X className="h-4 w-4" />
+            {t("workspace.closePanel")}
+          </DropdownMenuItem>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+function RuntimeConversationContextMenuItems({
+  conversation,
+  connected,
+  onStart,
+  onStop,
+  onToggleRead,
+  onTogglePin,
+  onMarkNeedsReview,
+  onEnvironment,
+  onArchive,
+  onRestore,
+  onClose,
+}: RuntimeConversationMenuProps) {
+  const { t } = useI18n();
+  const startOrStop = connected ? onStop : onStart;
+  const copyRuntimeSessionId = () => {
+    const runtimeId = conversation.runtime?.id;
+    if (!runtimeId) return;
+    invoke("copy_to_clipboard", { text: runtimeId })
+      .then(() => toast.success(t("session.infoCopied", { label: "Session ID" })))
+      .catch((error) => toast.error(String(error)));
+  };
+
+  return (
+    <>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger className="gap-2">
+          <Eye className="h-4 w-4" />
+          {t("session.view")}
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent className="w-80">
+          <ContextMenuItem disabled>{t("session.standardMode")}</ContextMenuItem>
+          <ContextMenuItem disabled>{t("session.promptsOnly")}</ContextMenuItem>
+          <ContextMenuItem disabled>{t("session.expandMessages")}</ContextMenuItem>
+          <ContextMenuItem disabled>{t("session.markdownPreview")}</ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem disabled className="gap-2">
+            <Info className="h-4 w-4" />
+            {t("session.informationEllipsis")}
+          </ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger className="gap-2">
+          <Pin className="h-4 w-4" />
+          {t("session.manage")}
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          <ContextMenuItem disabled={conversation.archived} onSelect={onTogglePin} className="gap-2">
+            {conversation.pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+            {conversation.pinned ? t("session.unpin") : t("session.pinToTop")}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={conversation.archived} onSelect={onToggleRead} className="gap-2">
+            {conversation.unread ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+            {conversation.unread ? t("session.markAsRead") : t("session.markAsUnread")}
+          </ContextMenuItem>
+          <ContextMenuItem disabled={conversation.archived} onSelect={onMarkNeedsReview} className="gap-2">
+            <AlertCircle className="h-4 w-4" />
+            {conversation.needsReview ? t("workspace.needsReview") : t("workspace.markNeedsReview")}
+          </ContextMenuItem>
+          <ContextMenuItem onSelect={conversation.archived ? onRestore : onArchive} className="gap-2">
+            {conversation.archived ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+            {conversation.archived ? t("workspace.unarchiveConversation") : t("workspace.archiveConversation")}
+          </ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger className="gap-2">
+          <Settings2 className="h-4 w-4" />
+          {t("workspace.advanced")}
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          <ContextMenuItem disabled={conversation.archived} onSelect={onEnvironment} className="gap-2">
+            <Settings2 className="h-4 w-4" />
+            {t("session.configureRunScripts")}
+          </ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger className="gap-2">
+          <Copy className="h-4 w-4" />
+          {t("session.copy")}
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          <ContextMenuItem disabled className="gap-2">
+            <Info className="h-4 w-4" />
+            {t("session.sessionInfo")}
+          </ContextMenuItem>
+          <ContextMenuItem disabled className="gap-2">
+            <FolderInput className="h-4 w-4" />
+            {t("session.relatedFilePaths")}
+          </ContextMenuItem>
+          <ContextMenuItem disabled className="gap-2">
+            <ClipboardList className="h-4 w-4" />
+            {t("session.traceContext")}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={copyRuntimeSessionId} className="gap-2">
+            <Copy className="h-4 w-4" />
+            Session ID
+          </ContextMenuItem>
+          <ContextMenuItem disabled className="gap-2">
+            <Terminal className="h-4 w-4" />
+            {t("session.resumeCommand")}
+          </ContextMenuItem>
+          <ContextMenuItem disabled className="gap-2">
+            <FolderInput className="h-4 w-4" />
+            {t("session.filePath")}
+          </ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger className="gap-2">
+          <ArrowRightLeft className="h-4 w-4" />
+          {t("session.resumeInRuntime")}
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          {startOrStop ? (
+            <ContextMenuItem disabled={conversation.archived} onSelect={startOrStop} className="gap-2">
+              {connected ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              {connected ? t("workspace.stopRuntime") : t("workspace.startRuntime")}
+            </ContextMenuItem>
+          ) : null}
+          {onStart ? (
+            <ContextMenuItem disabled={conversation.archived} onSelect={onStart} className="gap-2">
+              <RotateCcw className="h-4 w-4" />
+              {t("workspace.runAgain")}
+            </ContextMenuItem>
+          ) : null}
+          {!startOrStop && !onStart ? (
+            <ContextMenuItem disabled className="gap-2">
+              <Terminal className="h-4 w-4" />
+              {t("workspace.startRuntime")}
+            </ContextMenuItem>
+          ) : null}
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      <ContextMenuItem disabled className="gap-2">
+        <Download className="h-4 w-4" />
+        Export
+      </ContextMenuItem>
+      <ContextMenuSub>
+        <ContextMenuSubTrigger className="gap-2">
+          <FolderOpen className="h-4 w-4" />
+          {t("session.files")}
+        </ContextMenuSubTrigger>
+        <ContextMenuSubContent>
+          <ContextMenuItem disabled className="gap-2">
+            <FolderOpen className="h-4 w-4" />
+            {t("fileViewer.revealInFinder")}
+          </ContextMenuItem>
+          <ContextMenuItem disabled className="gap-2">
+            <ArrowRightLeft className="h-4 w-4" />
+            {t("common.openInEditor")}
+          </ContextMenuItem>
+        </ContextMenuSubContent>
+      </ContextMenuSub>
+      {onClose ? (
+        <>
+          <ContextMenuSeparator />
+          <ContextMenuItem onSelect={onClose} className="gap-2">
+            <X className="h-4 w-4" />
+            {t("workspace.closePanel")}
+          </ContextMenuItem>
+        </>
+      ) : null}
+    </>
+  );
+}
+
+type SidebarActionButtonProps = Omit<ButtonHTMLAttributes<HTMLButtonElement>, "title"> & {
   title: string;
-  onClick: () => void;
-  children: ReactNode;
   active?: boolean;
   destructive?: boolean;
-}) {
-  return (
+};
+
+const SidebarActionButton = forwardRef<HTMLButtonElement, SidebarActionButtonProps>(
+  ({ title, onClick, children, active = false, destructive = false, className = "", ...props }, ref) => (
     <button
+      ref={ref}
       type="button"
       aria-label={title}
+      title={title}
       onClick={onClick}
       className={`inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors ${
         active
@@ -5542,12 +6888,15 @@ function SidebarActionButton({
           : "border-transparent text-muted-foreground hover:bg-card hover:text-foreground"
       } ${
         destructive && !active ? "hover:border-destructive/40 hover:text-destructive" : ""
-      }`}
+      } ${className}`}
+      {...props}
     >
       {children}
     </button>
-  );
-}
+  ),
+);
+
+SidebarActionButton.displayName = "SidebarActionButton";
 
 function IconButton({
   title,
