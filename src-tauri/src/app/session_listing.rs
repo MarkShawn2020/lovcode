@@ -159,21 +159,28 @@ pub(crate) async fn list_projects() -> Result<Vec<Project>, String> {
         }
 
         for codex_path in collect_codex_session_paths() {
-            let Some(session) = build_codex_session(&codex_path) else {
-                continue;
-            };
-            if let Some(existing) = projects.iter_mut().find(|p| p.id == session.project_id) {
+            let metadata = fs::metadata(&codex_path).ok();
+            let last_modified = metadata
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let head = read_codex_session_meta_lightweight(&codex_path);
+            let cwd = head.cwd.unwrap_or_else(|| "Codex".to_string());
+            let project_id = encode_project_path(&cwd);
+            if let Some(existing) = projects.iter_mut().find(|p| p.id == project_id) {
                 existing.session_count += 1;
-                existing.last_active = existing.last_active.max(session.last_modified);
+                existing.last_active = existing.last_active.max(last_modified);
                 if existing.path.is_empty() {
-                    existing.path = session.project_path.unwrap_or_default();
+                    existing.path = cwd;
                 }
             } else {
                 projects.push(Project {
-                    id: session.project_id,
-                    path: session.project_path.unwrap_or_default(),
+                    id: project_id,
+                    path: cwd,
                     session_count: 1,
-                    last_active: session.last_modified,
+                    last_active: last_modified,
                 });
             }
         }

@@ -94,6 +94,132 @@ pub(crate) fn save_sessions_cache(entries: Vec<SessionCacheEntry>) {
     }
 }
 
+fn load_cached_sessions_snapshot() -> Vec<Session> {
+    let mut by_id: std::collections::HashMap<String, Session> = std::collections::HashMap::new();
+    for entry in load_sessions_cache().into_values() {
+        let session = entry.session;
+        let key = if session.source == "codex" {
+            format!("codex:{}", session.id)
+        } else {
+            session.id.clone()
+        };
+
+        match by_id.get(&key) {
+            Some(existing) if existing.last_modified >= session.last_modified => {}
+            _ => {
+                by_id.insert(key, session);
+            }
+        }
+    }
+
+    let mut sessions: Vec<Session> = by_id.into_values().collect();
+    sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    sessions
+}
+
+fn collect_lightweight_sessions_snapshot() -> Vec<Session> {
+    let mut sessions = Vec::new();
+    let projects_dir = get_claude_dir().join("projects");
+
+    if projects_dir.exists() {
+        for project_entry in fs::read_dir(&projects_dir).into_iter().flatten().flatten() {
+            let project_path = project_entry.path();
+            if !project_path.is_dir() {
+                continue;
+            }
+            let project_id = project_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let display_path = decode_project_path(&project_id);
+
+            for entry in fs::read_dir(&project_path).into_iter().flatten().flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !name.ends_with(".jsonl") || name.starts_with("agent-") {
+                    continue;
+                }
+                let metadata = match entry.metadata() {
+                    Ok(metadata) => metadata,
+                    Err(_) => continue,
+                };
+                let last_modified = metadata
+                    .modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0);
+                let created_at = metadata
+                    .created()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(last_modified);
+                sessions.push(Session {
+                    id: name.trim_end_matches(".jsonl").to_string(),
+                    project_id: project_id.clone(),
+                    project_path: Some(display_path.clone()),
+                    title: None,
+                    summary: None,
+                    last_prompt: None,
+                    title_source: None,
+                    rounds: 0,
+                    message_count: 0,
+                    created_at,
+                    last_modified,
+                    usage: None,
+                    source: if project_id == "-claude-ai" {
+                        "app-web".to_string()
+                    } else {
+                        "cli".to_string()
+                    },
+                });
+            }
+        }
+    }
+
+    for path in collect_codex_session_paths() {
+        let metadata = match fs::metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        let last_modified = metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let head = read_codex_session_meta_lightweight(&path);
+        let cwd = head.cwd.unwrap_or_else(|| "Codex".to_string());
+        let created_at = metadata
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .or(head.created_at)
+            .unwrap_or(last_modified);
+        sessions.push(Session {
+            id: head.id,
+            project_id: encode_project_path(&cwd),
+            project_path: Some(cwd),
+            title: head.title,
+            summary: None,
+            last_prompt: None,
+            title_source: None,
+            rounds: 0,
+            message_count: 0,
+            created_at,
+            last_modified,
+            usage: None,
+            source: "codex".to_string(),
+        });
+    }
+
+    sessions.sort_by(|a, b| b.last_modified.cmp(&a.last_modified));
+    sessions
+}
+
 /// Core sync logic: build the full Session list (cli + app sources, deduped,
 /// sorted desc by last_modified). Used by both the bulk command and the
 /// streamed command — they only differ in how they ship the result back.
@@ -606,6 +732,11 @@ pub(crate) async fn list_all_sessions() -> Result<Vec<Session>, String> {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub(crate) enum SessionStreamEvent {
+    /// Fast preview from Lovcode's own on-disk cache. The full scan will follow.
+    Cached {
+        sessions: Vec<Session>,
+        total: usize,
+    },
     /// One batch of sessions — front-end appends as they arrive.
     Batch { sessions: Vec<Session> },
     /// All batches sent. Front-end can flip loading=false for sure.
@@ -628,19 +759,108 @@ pub(crate) struct SessionFileActivity {
     pub(crate) size: u64,
 }
 
-/// Streamed variant of list_all_sessions. The Rust side still computes the
-/// full list (sorted), then ships it to the webview in 200-session batches
-/// over a Tauri Channel — each batch is a separate IPC message, so the
-/// webview can render the first slice (~200 most-recent sessions) within a
-/// few hundred ms instead of waiting for the whole 5-6s JSON.parse.
+/// Streamed variant of list_all_sessions. It first ships a small cached preview,
+/// then computes the full sorted list and sends it in 200-session batches over a
+/// Tauri Channel.
 #[tauri::command]
 pub(crate) async fn list_all_sessions_streamed(
     stream_id: String,
     on_event: Channel<SessionStreamEvent>,
+    refresh: Option<bool>,
 ) -> Result<(), String> {
     let token = register_session_stream(&stream_id);
 
     tauri::async_runtime::spawn(async move {
+        let refresh = refresh.unwrap_or(false);
+        let cached_sessions = tauri::async_runtime::spawn_blocking(load_cached_sessions_snapshot)
+            .await
+            .unwrap_or_default();
+        if token.load(Ordering::Relaxed) {
+            unregister_session_stream(&stream_id, &token);
+            return;
+        }
+        if !cached_sessions.is_empty() {
+            let total = cached_sessions.len();
+            if on_event
+                .send(SessionStreamEvent::Cached {
+                    sessions: cached_sessions.iter().take(200).cloned().collect(),
+                    total,
+                })
+                .is_err()
+            {
+                token.store(true, Ordering::Relaxed);
+                unregister_session_stream(&stream_id, &token);
+                return;
+            }
+
+            if !refresh {
+                let send_token = token.clone();
+                let send_stream_id = stream_id.clone();
+                let _ = tauri::async_runtime::spawn_blocking(move || {
+                    const BATCH: usize = 200;
+                    for batch in cached_sessions.chunks(BATCH) {
+                        if send_token.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if on_event
+                            .send(SessionStreamEvent::Batch {
+                                sessions: batch.to_vec(),
+                            })
+                            .is_err()
+                        {
+                            send_token.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                    if !send_token.load(Ordering::Relaxed) {
+                        let _ = on_event.send(SessionStreamEvent::Done { total });
+                    }
+                })
+                .await;
+
+                unregister_session_stream(&send_stream_id, &token);
+                return;
+            }
+        }
+
+        if !refresh {
+            let lightweight_sessions =
+                tauri::async_runtime::spawn_blocking(collect_lightweight_sessions_snapshot)
+                    .await
+                    .unwrap_or_default();
+            if token.load(Ordering::Relaxed) {
+                unregister_session_stream(&stream_id, &token);
+                return;
+            }
+            let total = lightweight_sessions.len();
+            let send_token = token.clone();
+            let send_stream_id = stream_id.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                const BATCH: usize = 200;
+                for batch in lightweight_sessions.chunks(BATCH) {
+                    if send_token.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    if on_event
+                        .send(SessionStreamEvent::Batch {
+                            sessions: batch.to_vec(),
+                        })
+                        .is_err()
+                    {
+                        send_token.store(true, Ordering::Relaxed);
+                        return;
+                    }
+                }
+                if !send_token.load(Ordering::Relaxed) {
+                    let _ = on_event.send(SessionStreamEvent::Done { total });
+                }
+            })
+            .await;
+
+            unregister_session_stream(&send_stream_id, &token);
+            return;
+        }
+
         let mut all = compute_all_sessions_dedup().await;
         if token.load(Ordering::Relaxed) {
             unregister_session_stream(&stream_id, &token);

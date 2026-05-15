@@ -138,6 +138,99 @@ pub(crate) fn read_codex_session_head(path: &Path) -> CodexSessionHead {
     head
 }
 
+/// Read only enough Codex rollout metadata for list/startup surfaces.
+/// Full Codex transcripts can be large; startup needs cwd/id/time, not
+/// message counts or title quality.
+pub(crate) fn read_codex_session_meta_lightweight(path: &Path) -> CodexSessionHead {
+    use std::io::{BufRead, BufReader};
+
+    let canonical_id = codex_session_id_from_path(path);
+    let fallback_id = canonical_id.clone().unwrap_or_else(|| {
+        path.file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    });
+    let mut head = CodexSessionHead {
+        id: fallback_id,
+        cwd: None,
+        title: None,
+        last_prompt: None,
+        rounds: 0,
+        message_count: 0,
+        model: None,
+        created_at: None,
+    };
+    let Ok(file) = fs::File::open(path) else {
+        return head;
+    };
+    let reader = BufReader::new(file);
+    let mut primary_meta_seen = false;
+
+    for line in reader.lines().map_while(Result::ok).take(200) {
+        let Ok(parsed) = serde_json::from_str::<CodexRolloutLine>(&line) else {
+            continue;
+        };
+        if head.created_at.is_none() {
+            head.created_at = parsed.timestamp.as_deref().and_then(timestamp_to_secs);
+        }
+        let Some(payload) = parsed.payload.as_ref() else {
+            continue;
+        };
+
+        match parsed.line_type.as_deref() {
+            Some("session_meta") => {
+                let payload_id = payload.get("id").and_then(|v| v.as_str());
+                let is_primary_meta = match canonical_id.as_deref() {
+                    Some(id) => payload_id == Some(id),
+                    None => !primary_meta_seen,
+                };
+                if !is_primary_meta {
+                    continue;
+                }
+                primary_meta_seen = true;
+                if let Some(id) = payload_id {
+                    head.id = id.to_string();
+                }
+                if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
+                    if !cwd.is_empty() {
+                        head.cwd = Some(cwd.to_string());
+                    }
+                }
+                if let Some(model) = payload.get("model_provider").and_then(|v| v.as_str()) {
+                    if !model.is_empty() {
+                        head.model = Some(model.to_string());
+                    }
+                }
+                if head.created_at.is_none() {
+                    head.created_at = payload
+                        .get("timestamp")
+                        .and_then(|v| v.as_str())
+                        .and_then(timestamp_to_secs);
+                }
+                if head.cwd.is_some() {
+                    break;
+                }
+            }
+            Some("event_msg") => {
+                if payload.get("type").and_then(|v| v.as_str()) == Some("thread_name_updated") {
+                    let thread_id = payload.get("thread_id").and_then(|v| v.as_str());
+                    if thread_id.map_or(true, |id| id == head.id) {
+                        if let Some(title) = payload.get("thread_name").and_then(|v| v.as_str()) {
+                            if !title.trim().is_empty() {
+                                head.title = Some(title.trim().to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    head
+}
+
 pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, String> {
     use std::collections::HashSet;
 

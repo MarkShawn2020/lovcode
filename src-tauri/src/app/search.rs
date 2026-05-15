@@ -24,93 +24,473 @@ pub(crate) struct SearchResult {
     pub score: f32,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SearchIndexBuildStatus {
+    pub state: String,
+    pub total_sessions: usize,
+    pub processed_sessions: usize,
+    pub indexed_messages: usize,
+    pub skipped_sessions: usize,
+    pub current_session_id: Option<String>,
+    pub current_title: Option<String>,
+    pub current_project_path: Option<String>,
+    pub started_at: Option<u64>,
+    pub updated_at: Option<u64>,
+    pub completed_at: Option<u64>,
+    pub error: Option<String>,
+}
+
+impl Default for SearchIndexBuildStatus {
+    fn default() -> Self {
+        Self {
+            state: "idle".to_string(),
+            total_sessions: 0,
+            processed_sessions: 0,
+            indexed_messages: 0,
+            skipped_sessions: 0,
+            current_session_id: None,
+            current_title: None,
+            current_project_path: None,
+            started_at: None,
+            updated_at: None,
+            completed_at: None,
+            error: None,
+        }
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(rename_all = "camelCase")]
+struct SearchIndexManifestEntry {
+    path: String,
+    size: u64,
+    mtime: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchIndexManifest {
+    version: u32,
+    indexed_at: u64,
+    entries: Vec<SearchIndexManifestEntry>,
+}
+
+#[derive(Clone)]
+struct ClaudeSearchSource {
+    project_id: String,
+    display_path: String,
+    path: PathBuf,
+    session_id: String,
+    size: u64,
+    mtime: u64,
+}
+
+#[derive(Clone)]
+struct CodexSearchSource {
+    path: PathBuf,
+    session_id: String,
+    size: u64,
+    mtime: u64,
+}
+
+static SEARCH_INDEX_BUILD_STATUS: LazyLock<Mutex<SearchIndexBuildStatus>> =
+    LazyLock::new(|| Mutex::new(SearchIndexBuildStatus::default()));
+static SEARCH_INDEX_BUILD_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+const SEARCH_INDEX_MANIFEST_VERSION: u32 = 1;
+const SEARCH_INDEX_EVENT: &str = "search-index:build";
+
+struct SearchIndexBuildRunningGuard;
+
+impl Drop for SearchIndexBuildRunningGuard {
+    fn drop(&mut self) {
+        SEARCH_INDEX_BUILD_RUNNING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+fn search_index_manifest_path() -> PathBuf {
+    get_index_dir()
+        .parent()
+        .map(|parent| parent.join("search-index-manifest.json"))
+        .unwrap_or_else(|| PathBuf::from("search-index-manifest.json"))
+}
+
+fn emit_search_index_status(app: Option<&tauri::AppHandle>, status: SearchIndexBuildStatus) {
+    if let Ok(mut guard) = SEARCH_INDEX_BUILD_STATUS.lock() {
+        *guard = status.clone();
+    }
+    if let Some(app) = app {
+        let _ = app.emit(SEARCH_INDEX_EVENT, status);
+    }
+}
+
+fn current_search_index_status() -> SearchIndexBuildStatus {
+    let mut status = SEARCH_INDEX_BUILD_STATUS
+        .lock()
+        .map(|guard| guard.clone())
+        .unwrap_or_default();
+    if status.state == "idle" && get_index_dir().exists() {
+        status.state = "ready".to_string();
+    }
+    status
+}
+
+fn try_mark_search_index_build_running() -> Option<SearchIndexBuildRunningGuard> {
+    if SEARCH_INDEX_BUILD_RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        None
+    } else {
+        Some(SearchIndexBuildRunningGuard)
+    }
+}
+
+fn collect_claude_search_sources(projects_dir: &Path) -> Result<Vec<ClaudeSearchSource>, String> {
+    let mut sources = Vec::new();
+    if !projects_dir.exists() {
+        return Ok(sources);
+    }
+
+    for project_entry in fs::read_dir(projects_dir).map_err(|e| e.to_string())? {
+        let project_entry = project_entry.map_err(|e| e.to_string())?;
+        let project_path_buf = project_entry.path();
+        if !project_path_buf.is_dir() {
+            continue;
+        }
+
+        let project_id = project_path_buf
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let display_path = decode_project_path(&project_id);
+
+        for entry in fs::read_dir(&project_path_buf).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            if !name.ends_with(".jsonl") || name.starts_with("agent-") {
+                continue;
+            }
+            let metadata = entry.metadata().map_err(|e| e.to_string())?;
+            let mtime = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            sources.push(ClaudeSearchSource {
+                project_id: project_id.clone(),
+                display_path: display_path.clone(),
+                path,
+                session_id: name.trim_end_matches(".jsonl").to_string(),
+                size: metadata.len(),
+                mtime,
+            });
+        }
+    }
+
+    Ok(sources)
+}
+
+fn collect_codex_search_sources() -> Vec<CodexSearchSource> {
+    collect_codex_session_paths()
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = fs::metadata(&path).ok()?;
+            let mtime = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let session_id = codex_session_id_from_path(&path).unwrap_or_else(|| {
+                path.file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string()
+            });
+            Some(CodexSearchSource {
+                path,
+                session_id,
+                size: metadata.len(),
+                mtime,
+            })
+        })
+        .collect()
+}
+
+fn build_manifest_entries(
+    claude_sources: &[ClaudeSearchSource],
+    codex_sources: &[CodexSearchSource],
+) -> Vec<SearchIndexManifestEntry> {
+    let mut entries = Vec::with_capacity(claude_sources.len() + codex_sources.len());
+    entries.extend(
+        claude_sources
+            .iter()
+            .map(|source| SearchIndexManifestEntry {
+                path: source.path.to_string_lossy().into_owned(),
+                size: source.size,
+                mtime: source.mtime,
+            }),
+    );
+    entries.extend(codex_sources.iter().map(|source| SearchIndexManifestEntry {
+        path: source.path.to_string_lossy().into_owned(),
+        size: source.size,
+        mtime: source.mtime,
+    }));
+    entries.sort();
+    entries
+}
+
+fn load_search_index_manifest() -> Option<SearchIndexManifest> {
+    let bytes = fs::read(search_index_manifest_path()).ok()?;
+    let manifest = serde_json::from_slice::<SearchIndexManifest>(&bytes).ok()?;
+    (manifest.version == SEARCH_INDEX_MANIFEST_VERSION).then_some(manifest)
+}
+
+fn save_search_index_manifest(entries: Vec<SearchIndexManifestEntry>) {
+    let path = search_index_manifest_path();
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let manifest = SearchIndexManifest {
+        version: SEARCH_INDEX_MANIFEST_VERSION,
+        indexed_at: now_secs(),
+        entries,
+    };
+    if let Ok(bytes) = serde_json::to_vec(&manifest) {
+        let _ = fs::write(path, bytes);
+    }
+}
+
+fn search_index_sources_unchanged(entries: &[SearchIndexManifestEntry]) -> bool {
+    if !get_index_dir().exists() {
+        return false;
+    }
+    load_search_index_manifest()
+        .map(|manifest| manifest.entries == entries)
+        .unwrap_or(false)
+}
+
+fn ensure_search_index_loaded() -> Result<(), String> {
+    let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
+    if guard.is_some() {
+        return Ok(());
+    }
+    let index_dir = get_index_dir();
+    if !index_dir.exists() {
+        return Ok(());
+    }
+    let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
+    let schema = index.schema();
+    register_jieba_tokenizer(&index);
+    *guard = Some(SearchIndex { index, schema });
+    Ok(())
+}
+
+fn update_search_index_progress(
+    app: Option<&tauri::AppHandle>,
+    status: &mut SearchIndexBuildStatus,
+    current_session_id: Option<String>,
+    current_title: Option<String>,
+    current_project_path: Option<String>,
+) {
+    status.processed_sessions += 1;
+    status.current_session_id = current_session_id;
+    status.current_title = current_title;
+    status.current_project_path = current_project_path;
+    status.updated_at = Some(now_secs());
+    emit_search_index_status(app, status.clone());
+}
+
 #[tauri::command]
 pub(crate) async fn build_search_index() -> Result<usize, String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let _build_guard = SEARCH_INDEX_BUILD_LOCK.lock().map_err(|e| e.to_string())?;
-        let index_dir = get_index_dir();
-        let index_parent = index_dir
-            .parent()
-            .ok_or_else(|| "Search index path has no parent".to_string())?;
-        let build_dir = index_parent.join("search-index-building");
+        let _running_guard = try_mark_search_index_build_running()
+            .ok_or_else(|| "Search index is already building".to_string())?;
+        run_search_index_build(None, true)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
 
-        if build_dir.exists() {
-            fs::remove_dir_all(&build_dir).map_err(|e| e.to_string())?;
+#[tauri::command]
+pub(crate) fn get_search_index_status() -> Result<SearchIndexBuildStatus, String> {
+    Ok(current_search_index_status())
+}
+
+#[tauri::command]
+pub(crate) fn start_search_index_build(
+    app_handle: tauri::AppHandle,
+    force: Option<bool>,
+) -> Result<SearchIndexBuildStatus, String> {
+    if SEARCH_INDEX_BUILD_RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+        return Ok(current_search_index_status());
+    }
+
+    let app_for_task = app_handle.clone();
+    let force = force.unwrap_or(false);
+    tauri::async_runtime::spawn(async move {
+        let app_for_blocking = app_for_task.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            run_search_index_build(Some(app_for_blocking), force)
+        })
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|inner| inner);
+
+        if let Err(error) = result {
+            let mut status = current_search_index_status();
+            status.state = "error".to_string();
+            status.error = Some(error);
+            status.completed_at = Some(now_secs());
+            status.updated_at = status.completed_at;
+            emit_search_index_status(Some(&app_for_task), status);
         }
-        fs::create_dir_all(&build_dir).map_err(|e| e.to_string())?;
 
-        let schema = create_schema();
-        let index = Index::create_in_dir(&build_dir, schema.clone()).map_err(|e| e.to_string())?;
+        SEARCH_INDEX_BUILD_RUNNING.store(false, std::sync::atomic::Ordering::Release);
+    });
 
-        // Register jieba tokenizer for Chinese support
-        register_jieba_tokenizer(&index);
+    Ok(current_search_index_status())
+}
 
-        let mut index_writer: IndexWriter = index
-            .writer(50_000_000) // 50MB heap
-            .map_err(|e| e.to_string())?;
+fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<usize, String> {
+    let _build_guard = SEARCH_INDEX_BUILD_LOCK.lock().map_err(|e| e.to_string())?;
+    let index_dir = get_index_dir();
+    let index_parent = index_dir
+        .parent()
+        .ok_or_else(|| "Search index path has no parent".to_string())?;
+    let build_dir = index_parent.join("search-index-building");
 
-        let uuid_field = schema.get_field("uuid").unwrap();
-        let content_field = schema.get_field("content").unwrap();
-        let title_field = schema.get_field("title").unwrap();
-        let summary_field = schema.get_field("summary").unwrap();
-        let last_prompt_field = schema.get_field("last_prompt").unwrap();
-        let prompt_field = schema.get_field("prompt").unwrap();
-        let user_field = schema.get_field("user").unwrap();
-        let assistant_field = schema.get_field("assistant").unwrap();
-        let project_field = schema.get_field("project").unwrap();
-        let role_field = schema.get_field("role").unwrap();
-        let project_id_field = schema.get_field("project_id").unwrap();
-        let project_path_field = schema.get_field("project_path").unwrap();
-        let session_id_field = schema.get_field("session_id").unwrap();
-        let session_summary_field = schema.get_field("session_summary").unwrap();
-        let timestamp_field = schema.get_field("timestamp").unwrap();
-        let line_number_field = schema.get_field("line_number").unwrap();
-        let round_index_field = schema.get_field("round_index").unwrap();
-        let round_prompt_field = schema.get_field("round_prompt").unwrap();
-        let round_timestamp_field = schema.get_field("round_timestamp").unwrap();
+    let projects_dir = get_claude_dir().join("projects");
+    let claude_sources = collect_claude_search_sources(&projects_dir)?;
+    let codex_sources = collect_codex_search_sources();
+    let manifest_entries = build_manifest_entries(&claude_sources, &codex_sources);
+    let total_sessions = manifest_entries.len();
+    let started_at = now_secs();
+    let mut status = SearchIndexBuildStatus {
+        state: "building".to_string(),
+        total_sessions,
+        processed_sessions: 0,
+        indexed_messages: 0,
+        skipped_sessions: 0,
+        current_session_id: None,
+        current_title: None,
+        current_project_path: None,
+        started_at: Some(started_at),
+        updated_at: Some(started_at),
+        completed_at: None,
+        error: None,
+    };
+    emit_search_index_status(app.as_ref(), status.clone());
 
-        let projects_dir = get_claude_dir().join("projects");
-        let mut indexed_count = 0;
+    if !force && search_index_sources_unchanged(&manifest_entries) {
+        ensure_search_index_loaded()?;
+        status.state = "ready".to_string();
+        status.processed_sessions = total_sessions;
+        status.skipped_sessions = total_sessions;
+        status.current_session_id = None;
+        status.current_title = None;
+        status.current_project_path = None;
+        status.completed_at = Some(now_secs());
+        status.updated_at = status.completed_at;
+        emit_search_index_status(app.as_ref(), status);
+        return Ok(0);
+    }
 
-        // === Command stats collection ===
-        let mut command_stats: HashMap<String, HashMap<String, usize>> = HashMap::new();
-        let command_pattern = regex::Regex::new(r"<command-name>(/[^<]+)</command-name>")
-            .map_err(|e| e.to_string())?;
+    if build_dir.exists() {
+        fs::remove_dir_all(&build_dir).map_err(|e| e.to_string())?;
+    }
+    fs::create_dir_all(&build_dir).map_err(|e| e.to_string())?;
 
-        // Build alias -> canonical name mapping
-        let mut alias_map: HashMap<String, String> = HashMap::new();
-        let commands_dir = get_claude_dir().join("commands");
+    let schema = create_schema();
+    let index = Index::create_in_dir(&build_dir, schema.clone()).map_err(|e| e.to_string())?;
 
-        fn scan_commands_for_aliases(dir: &std::path::Path, alias_map: &mut HashMap<String, String>, base_dir: &std::path::Path) {
-            if let Ok(entries) = fs::read_dir(dir) {
-                for entry in entries.filter_map(|e| e.ok()) {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        scan_commands_for_aliases(&path, alias_map, base_dir);
-                    } else if path.extension().map_or(false, |e| e == "md") {
-                        let rel_path = path.strip_prefix(base_dir).unwrap_or(&path);
-                        let canonical = rel_path
-                            .with_extension("")
-                            .to_string_lossy()
-                            .replace('/', ":")
-                            .replace('\\', ":");
+    // Register jieba tokenizer for Chinese support
+    register_jieba_tokenizer(&index);
 
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            if content.starts_with("---") {
-                                if let Some(end) = content[3..].find("---") {
-                                    let fm = &content[3..3 + end];
-                                    for line in fm.lines() {
-                                        if line.starts_with("aliases:") {
-                                            let aliases_str = line.trim_start_matches("aliases:").trim();
-                                            for alias in aliases_str.split(',') {
-                                                let alias = alias.trim()
-                                                    .trim_matches('"')
-                                                    .trim_matches('\'')
-                                                    .trim_start_matches('/')
-                                                    .to_string();
-                                                if !alias.is_empty() {
-                                                    alias_map.insert(alias, canonical.clone());
-                                                }
+    let mut index_writer: IndexWriter = index
+        .writer(50_000_000) // 50MB heap
+        .map_err(|e| e.to_string())?;
+
+    let uuid_field = schema.get_field("uuid").unwrap();
+    let content_field = schema.get_field("content").unwrap();
+    let title_field = schema.get_field("title").unwrap();
+    let summary_field = schema.get_field("summary").unwrap();
+    let last_prompt_field = schema.get_field("last_prompt").unwrap();
+    let prompt_field = schema.get_field("prompt").unwrap();
+    let user_field = schema.get_field("user").unwrap();
+    let assistant_field = schema.get_field("assistant").unwrap();
+    let project_field = schema.get_field("project").unwrap();
+    let role_field = schema.get_field("role").unwrap();
+    let project_id_field = schema.get_field("project_id").unwrap();
+    let project_path_field = schema.get_field("project_path").unwrap();
+    let session_id_field = schema.get_field("session_id").unwrap();
+    let session_summary_field = schema.get_field("session_summary").unwrap();
+    let timestamp_field = schema.get_field("timestamp").unwrap();
+    let line_number_field = schema.get_field("line_number").unwrap();
+    let round_index_field = schema.get_field("round_index").unwrap();
+    let round_prompt_field = schema.get_field("round_prompt").unwrap();
+    let round_timestamp_field = schema.get_field("round_timestamp").unwrap();
+
+    let mut indexed_count = 0;
+
+    // === Command stats collection ===
+    let mut command_stats: HashMap<String, HashMap<String, usize>> = HashMap::new();
+    let command_pattern =
+        regex::Regex::new(r"<command-name>(/[^<]+)</command-name>").map_err(|e| e.to_string())?;
+
+    // Build alias -> canonical name mapping
+    let mut alias_map: HashMap<String, String> = HashMap::new();
+    let commands_dir = get_claude_dir().join("commands");
+
+    fn scan_commands_for_aliases(
+        dir: &std::path::Path,
+        alias_map: &mut HashMap<String, String>,
+        base_dir: &std::path::Path,
+    ) {
+        if let Ok(entries) = fs::read_dir(dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() {
+                    scan_commands_for_aliases(&path, alias_map, base_dir);
+                } else if path.extension().map_or(false, |e| e == "md") {
+                    let rel_path = path.strip_prefix(base_dir).unwrap_or(&path);
+                    let canonical = rel_path
+                        .with_extension("")
+                        .to_string_lossy()
+                        .replace('/', ":")
+                        .replace('\\', ":");
+
+                    if let Ok(content) = fs::read_to_string(&path) {
+                        if content.starts_with("---") {
+                            if let Some(end) = content[3..].find("---") {
+                                let fm = &content[3..3 + end];
+                                for line in fm.lines() {
+                                    if line.starts_with("aliases:") {
+                                        let aliases_str =
+                                            line.trim_start_matches("aliases:").trim();
+                                        for alias in aliases_str.split(',') {
+                                            let alias = alias
+                                                .trim()
+                                                .trim_matches('"')
+                                                .trim_matches('\'')
+                                                .trim_start_matches('/')
+                                                .to_string();
+                                            if !alias.is_empty() {
+                                                alias_map.insert(alias, canonical.clone());
                                             }
                                         }
                                     }
@@ -121,143 +501,118 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                 }
             }
         }
+    }
 
-        if commands_dir.exists() {
-            scan_commands_for_aliases(&commands_dir, &mut alias_map, &commands_dir);
-        }
-        // === End command stats setup ===
+    if commands_dir.exists() {
+        scan_commands_for_aliases(&commands_dir, &mut alias_map, &commands_dir);
+    }
+    // === End command stats setup ===
 
-        if projects_dir.exists() {
-            for project_entry in fs::read_dir(&projects_dir).map_err(|e| e.to_string())? {
-                let project_entry = project_entry.map_err(|e| e.to_string())?;
-                let project_path_buf = project_entry.path();
+    for source in &claude_sources {
+        let session_head = read_session_head(&source.path, 0);
+        let session_title = session_head.title.unwrap_or_default();
+        let session_last_prompt = session_head.last_prompt.unwrap_or_default();
+        let file_content = fs::read_to_string(&source.path).unwrap_or_default();
 
-                if !project_path_buf.is_dir() {
-                    continue;
+        let mut session_summary: Option<String> = session_head.summary;
+
+        if session_summary.is_none() {
+            for line in file_content.lines() {
+                if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+                    if parsed.line_type.as_deref() == Some("summary") {
+                        session_summary = parsed.summary;
+                        break;
+                    }
                 }
+            }
+        }
 
-                let project_id = project_path_buf.file_name().unwrap().to_string_lossy().to_string();
-                let display_path = decode_project_path(&project_id);
+        let mut round_index = 0usize;
+        let mut round_prompt = String::new();
+        let mut round_timestamp = String::new();
+        for (line_idx, line) in file_content.lines().enumerate() {
+            if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+                let line_type = parsed.line_type.as_deref();
 
-                for entry in fs::read_dir(&project_path_buf).map_err(|e| e.to_string())? {
-                    let entry = entry.map_err(|e| e.to_string())?;
-                    let path = entry.path();
-                    let name = path.file_name().unwrap().to_string_lossy().to_string();
+                let is_msg_line = matches!(
+                    line_type,
+                    Some("user") | Some("assistant") | Some("message")
+                );
+                if is_msg_line {
+                    if let Some(msg) = &parsed.message {
+                        let role = msg.role.clone().unwrap_or_default();
+                        if role == "user" || role == "assistant" {
+                            let (text_content, is_tool) = extract_content_with_meta(&msg.content);
+                            let is_meta = parsed.is_meta.unwrap_or(false);
+                            if !is_meta && !is_tool && role == "user" && !text_content.is_empty() {
+                                round_index += 1;
+                                round_prompt = text_content.clone();
+                                round_timestamp = parsed.timestamp.clone().unwrap_or_default();
+                            }
 
-                    if name.ends_with(".jsonl") && !name.starts_with("agent-") {
-                        let session_id = name.trim_end_matches(".jsonl").to_string();
-                        let session_head = read_session_head(&path, 0);
-                        let session_title = session_head.title.unwrap_or_default();
-                        let session_last_prompt = session_head.last_prompt.unwrap_or_default();
-                        let file_content = fs::read_to_string(&path).unwrap_or_default();
+                            if !is_meta
+                                && !text_content.is_empty()
+                                && !(role == "assistant"
+                                    && is_no_response_placeholder(&text_content))
+                            {
+                                let prompt_text = if role == "user" {
+                                    text_content.clone()
+                                } else {
+                                    String::new()
+                                };
+                                let assistant_text = if role == "assistant" {
+                                    text_content.clone()
+                                } else {
+                                    String::new()
+                                };
+                                let summary_text = session_summary.clone().unwrap_or_default();
 
-                        let mut session_summary: Option<String> = session_head.summary;
+                                index_writer.add_document(doc!(
+                                        uuid_field => parsed.uuid.clone().unwrap_or_default(),
+                                        content_field => text_content,
+                                        title_field => session_title.clone(),
+                                        summary_field => summary_text.clone(),
+                                        last_prompt_field => session_last_prompt.clone(),
+                                        prompt_field => prompt_text.clone(),
+                                        user_field => prompt_text,
+                                        assistant_field => assistant_text,
+                                        project_field => source.display_path.clone(),
+                                        role_field => role,
+                                        project_id_field => source.project_id.clone(),
+                                        project_path_field => source.display_path.clone(),
+                                        session_id_field => source.session_id.clone(),
+                                        session_summary_field => summary_text,
+                                        timestamp_field => parsed.timestamp.clone().unwrap_or_default(),
+                                        line_number_field => (line_idx + 1) as u64,
+                                        round_index_field => round_index as u64,
+                                        round_prompt_field => round_prompt.clone(),
+                                        round_timestamp_field => round_timestamp.clone(),
+                                    )).map_err(|e| e.to_string())?;
 
-                        // First pass: get summary
-                        if session_summary.is_none() {
-                            for line in file_content.lines() {
-                                if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
-                                    if parsed.line_type.as_deref() == Some("summary") {
-                                        session_summary = parsed.summary;
-                                        break;
-                                    }
-                                }
+                                indexed_count += 1;
+                                status.indexed_messages = indexed_count;
                             }
                         }
+                    }
+                }
 
-                        // Second pass: index messages + collect command stats.
-                        // A round starts at each real user prompt; tool results inherit
-                        // the current round so searches can surface the actual turn.
-                        let mut round_index = 0usize;
-                        let mut round_prompt = String::new();
-                        let mut round_timestamp = String::new();
-                        for (line_idx, line) in file_content.lines().enumerate() {
-                            if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
-                                let line_type = parsed.line_type.as_deref();
-
-                                let is_msg_line = matches!(line_type, Some("user") | Some("assistant") | Some("message"));
-                                if is_msg_line {
-                                    if let Some(msg) = &parsed.message {
-                                        let role = msg.role.clone().unwrap_or_default();
-                                        if role == "user" || role == "assistant" {
-                                            let (text_content, is_tool) = extract_content_with_meta(&msg.content);
-                                            let is_meta = parsed.is_meta.unwrap_or(false);
-                                            if !is_meta
-                                                && !is_tool
-                                                && role == "user"
-                                                && !text_content.is_empty()
-                                            {
-                                                round_index += 1;
-                                                round_prompt = text_content.clone();
-                                                round_timestamp =
-                                                    parsed.timestamp.clone().unwrap_or_default();
-                                            }
-
-                                            if !is_meta
-                                                && !text_content.is_empty()
-                                                && !(role == "assistant"
-                                                    && is_no_response_placeholder(&text_content))
-                                            {
-                                                let prompt_text = if role == "user" {
-                                                    text_content.clone()
-                                                } else {
-                                                    String::new()
-                                                };
-                                                let assistant_text = if role == "assistant" {
-                                                    text_content.clone()
-                                                } else {
-                                                    String::new()
-                                                };
-                                                let summary_text = session_summary.clone().unwrap_or_default();
-
-                                                index_writer.add_document(doc!(
-                                                    uuid_field => parsed.uuid.clone().unwrap_or_default(),
-                                                    content_field => text_content,
-                                                    title_field => session_title.clone(),
-                                                    summary_field => summary_text.clone(),
-                                                    last_prompt_field => session_last_prompt.clone(),
-                                                    prompt_field => prompt_text.clone(),
-                                                    user_field => prompt_text,
-                                                    assistant_field => assistant_text,
-                                                    project_field => display_path.clone(),
-                                                    role_field => role,
-                                                    project_id_field => project_id.clone(),
-                                                    project_path_field => display_path.clone(),
-                                                    session_id_field => session_id.clone(),
-                                                    session_summary_field => summary_text,
-                                                    timestamp_field => parsed.timestamp.clone().unwrap_or_default(),
-                                                    line_number_field => (line_idx + 1) as u64,
-                                                    round_index_field => round_index as u64,
-                                                    round_prompt_field => round_prompt.clone(),
-                                                    round_timestamp_field => round_timestamp.clone(),
-                                                )).map_err(|e| e.to_string())?;
-
-                                                indexed_count += 1;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Collect command stats from any line containing <command-name>
-                                // Skip queue-operation entries (internal logs, not actual command invocations)
-                                if line.contains("<command-name>") && !line.contains("\"type\":\"queue-operation\"") {
-                                    if let Some(ts_str) = &parsed.timestamp {
-                                        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(ts_str) {
-                                            let week_key = ts.format("%Y-W%V").to_string();
-                                            for cap in command_pattern.captures_iter(line) {
-                                                if let Some(cmd_match) = cap.get(1) {
-                                                    let raw_name = cmd_match.as_str().trim_start_matches('/').to_string();
-                                                    let name = alias_map.get(&raw_name).cloned().unwrap_or(raw_name);
-                                                    command_stats
-                                                        .entry(name)
-                                                        .or_default()
-                                                        .entry(week_key.clone())
-                                                        .and_modify(|c| *c += 1)
-                                                        .or_insert(1);
-                                                }
-                                            }
-                                        }
-                                    }
+                if line.contains("<command-name>") && !line.contains("\"type\":\"queue-operation\"")
+                {
+                    if let Some(ts_str) = &parsed.timestamp {
+                        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(ts_str) {
+                            let week_key = ts.format("%Y-W%V").to_string();
+                            for cap in command_pattern.captures_iter(line) {
+                                if let Some(cmd_match) = cap.get(1) {
+                                    let raw_name =
+                                        cmd_match.as_str().trim_start_matches('/').to_string();
+                                    let name =
+                                        alias_map.get(&raw_name).cloned().unwrap_or(raw_name);
+                                    command_stats
+                                        .entry(name)
+                                        .or_default()
+                                        .entry(week_key.clone())
+                                        .and_modify(|c| *c += 1)
+                                        .or_insert(1);
                                 }
                             }
                         }
@@ -265,49 +620,77 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                 }
             }
         }
+        update_search_index_progress(
+            app.as_ref(),
+            &mut status,
+            Some(source.session_id.clone()),
+            Some(session_title),
+            Some(source.display_path.clone()),
+        );
+    }
 
-        for codex_path in collect_codex_session_paths() {
-            let Some(session) = build_codex_session(&codex_path) else {
+    for source in &codex_sources {
+        let codex_path = &source.path;
+        let Some(session) = build_codex_session(&codex_path) else {
+            status.skipped_sessions += 1;
+            update_search_index_progress(
+                app.as_ref(),
+                &mut status,
+                Some(source.session_id.clone()),
+                None,
+                None,
+            );
+            continue;
+        };
+        let messages = match parse_codex_rollout_messages(&codex_path) {
+            Ok(messages) => messages,
+            Err(_) => {
+                status.skipped_sessions += 1;
+                update_search_index_progress(
+                    app.as_ref(),
+                    &mut status,
+                    Some(source.session_id.clone()),
+                    session.title.clone(),
+                    session.project_path.clone(),
+                );
                 continue;
+            }
+        };
+        let project_path = session.project_path.clone().unwrap_or_default();
+        let session_title = session.title.clone().unwrap_or_default();
+        let session_last_prompt = session.last_prompt.clone().unwrap_or_default();
+        let session_summary = session
+            .title
+            .clone()
+            .or_else(|| session.last_prompt.clone())
+            .unwrap_or_default();
+
+        let mut round_index = 0usize;
+        let mut round_prompt = String::new();
+        let mut round_timestamp = String::new();
+
+        for message in messages {
+            if message.content.trim().is_empty() {
+                continue;
+            }
+            if message.role == "user" && !message.is_tool && !message.is_meta {
+                round_index += 1;
+                round_prompt = message.content.clone();
+                round_timestamp = message.timestamp.clone();
+            }
+            let prompt_text = if message.role == "user" {
+                message.content.clone()
+            } else {
+                String::new()
             };
-            let messages = match parse_codex_rollout_messages(&codex_path) {
-                Ok(messages) => messages,
-                Err(_) => continue,
+            let assistant_text = if message.role == "assistant" {
+                message.content.clone()
+            } else {
+                String::new()
             };
-            let project_path = session.project_path.clone().unwrap_or_default();
-            let session_title = session.title.clone().unwrap_or_default();
-            let session_last_prompt = session.last_prompt.clone().unwrap_or_default();
-            let session_summary = session
-                .title
-                .clone()
-                .or_else(|| session.last_prompt.clone())
-                .unwrap_or_default();
 
-            let mut round_index = 0usize;
-            let mut round_prompt = String::new();
-            let mut round_timestamp = String::new();
-
-            for message in messages {
-                if message.content.trim().is_empty() {
-                    continue;
-                }
-                if message.role == "user" && !message.is_tool && !message.is_meta {
-                    round_index += 1;
-                    round_prompt = message.content.clone();
-                    round_timestamp = message.timestamp.clone();
-                }
-                let prompt_text = if message.role == "user" {
-                    message.content.clone()
-                } else {
-                    String::new()
-                };
-                let assistant_text = if message.role == "assistant" {
-                    message.content.clone()
-                } else {
-                    String::new()
-                };
-
-                index_writer.add_document(doc!(
+            index_writer
+                .add_document(doc!(
                     uuid_field => message.uuid,
                     content_field => message.content,
                     title_field => session_title.clone(),
@@ -327,40 +710,59 @@ pub(crate) async fn build_search_index() -> Result<usize, String> {
                     round_index_field => round_index as u64,
                     round_prompt_field => round_prompt.clone(),
                     round_timestamp_field => round_timestamp.clone(),
-                )).map_err(|e| e.to_string())?;
+                ))
+                .map_err(|e| e.to_string())?;
 
-                indexed_count += 1;
-            }
+            indexed_count += 1;
+            status.indexed_messages = indexed_count;
         }
+        update_search_index_progress(
+            app.as_ref(),
+            &mut status,
+            Some(source.session_id.clone()),
+            session.title.clone(),
+            session.project_path.clone(),
+        );
+    }
 
-        index_writer.commit().map_err(|e| e.to_string())?;
+    index_writer.commit().map_err(|e| e.to_string())?;
 
-        let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
-        if index_dir.exists() {
-            fs::remove_dir_all(&index_dir).map_err(|e| e.to_string())?;
-        }
-        fs::rename(&build_dir, &index_dir).map_err(|e| e.to_string())?;
-        let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
-        register_jieba_tokenizer(&index);
+    let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
+    if index_dir.exists() {
+        fs::remove_dir_all(&index_dir).map_err(|e| e.to_string())?;
+    }
+    fs::rename(&build_dir, &index_dir).map_err(|e| e.to_string())?;
+    let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
+    register_jieba_tokenizer(&index);
 
-        // Store search index in global state
-        *guard = Some(SearchIndex { index, schema });
+    // Store search index in global state
+    *guard = Some(SearchIndex { index, schema });
 
-        // Write command stats to file
-        let stats_path = get_command_stats_path();
-        if let Some(parent) = stats_path.parent() {
-            fs::create_dir_all(parent).ok();
-        }
-        let stats_json = serde_json::json!({
-            "updated_at": chrono::Utc::now().timestamp(),
-            "commands": command_stats,
-        });
-        fs::write(&stats_path, serde_json::to_string_pretty(&stats_json).unwrap_or_default()).ok();
+    // Write command stats to file
+    let stats_path = get_command_stats_path();
+    if let Some(parent) = stats_path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let stats_json = serde_json::json!({
+        "updated_at": chrono::Utc::now().timestamp(),
+        "commands": command_stats,
+    });
+    fs::write(
+        &stats_path,
+        serde_json::to_string_pretty(&stats_json).unwrap_or_default(),
+    )
+    .ok();
 
-        Ok(indexed_count)
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    status.state = "ready".to_string();
+    status.current_session_id = None;
+    status.current_title = None;
+    status.current_project_path = None;
+    status.completed_at = Some(now_secs());
+    status.updated_at = status.completed_at;
+    emit_search_index_status(app.as_ref(), status);
+    save_search_index_manifest(manifest_entries);
+
+    Ok(indexed_count)
 }
 
 fn tokenize_search_query(query: &str) -> Vec<String> {

@@ -5,7 +5,7 @@ import { invoke } from "@/lib/tauri";
 import { Window, getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
-import { useSessionsCache } from "../hooks";
+import { useSearchIndexBuildStatus, useSessionsCache } from "../hooks";
 import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/searchScopes";
 import type { Session } from "../types";
 import { useReadableText, formatDate } from "../views/Chat/utils";
@@ -18,13 +18,20 @@ const SEARCH_WINDOW_LABEL = "search";
 
 function getSessionSelectionPath(
   session: Pick<Session, "project_id" | "id">,
-  options: { messageId?: string | null; highlight?: string | null } = {},
+  options: {
+    messageId?: string | null;
+    lineNumber?: number | null;
+    roundIndex?: number | null;
+    highlight?: string | null;
+  } = {},
 ): string {
   const params = new URLSearchParams({
     projectId: session.project_id,
     sessionId: session.id,
   });
   if (options.messageId) params.set("messageId", options.messageId);
+  if (options.lineNumber && options.lineNumber > 0) params.set("lineNumber", String(options.lineNumber));
+  if (options.roundIndex && options.roundIndex > 0) params.set("roundIndex", String(options.roundIndex));
   if (options.highlight) params.set("q", options.highlight);
   return `/workbench?${params.toString()}`;
 }
@@ -69,6 +76,7 @@ export function GlobalChatSearch() {
   const [searching, setSearching] = useState(false);
   const [indexReady, setIndexReady] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const { status: searchIndexStatus, start: startSearchIndexBuild } = useSearchIndexBuildStatus();
 
   // Listen for navigation requests emitted by the overlay window. Only the
   // main window has a viewAtom, so this handler stays here.
@@ -79,6 +87,8 @@ export function GlobalChatSearch() {
       sessionId: string;
       summary: string | null;
       messageId?: string | null;
+      lineNumber?: number | null;
+      roundIndex?: number | null;
       highlight?: string | null;
     }>("open-chat", (e) => {
       navigate(getSessionSelectionPath({
@@ -86,6 +96,8 @@ export function GlobalChatSearch() {
         id: e.payload.sessionId,
       }, {
         messageId: e.payload.messageId,
+        lineNumber: e.payload.lineNumber,
+        roundIndex: e.payload.roundIndex,
         highlight: e.payload.highlight,
       }));
       const main = getCurrentWindow();
@@ -130,13 +142,14 @@ export function GlobalChatSearch() {
     }
   }, [open, setOpen]);
 
-  // Build search index lazily on first open.
   useEffect(() => {
-    if (!open || indexReady) return;
-    invoke<number>("build_search_index")
-      .then(() => setIndexReady(true))
-      .catch(() => {});
-  }, [open, indexReady]);
+    setIndexReady(searchIndexStatus?.state === "ready");
+  }, [searchIndexStatus]);
+
+  useEffect(() => {
+    if (!open || searchIndexStatus?.state === "ready" || searchIndexStatus?.state === "building") return;
+    startSearchIndexBuild(false).catch(() => {});
+  }, [open, searchIndexStatus?.state, startSearchIndexBuild]);
 
   useEffect(() => {
     if (!query.trim()) {

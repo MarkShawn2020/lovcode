@@ -211,6 +211,18 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     const params = new URLSearchParams(location.search);
     return params.get("messageId");
   }, [location.search]);
+  const targetLineNumberFromUrl = useMemo(() => {
+    const raw = new URLSearchParams(location.search).get("lineNumber");
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }, [location.search]);
+  const targetRoundIndexFromUrl = useMemo(() => {
+    const raw = new URLSearchParams(location.search).get("roundIndex");
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }, [location.search]);
   const searchHighlightFromUrl = useMemo(() => {
     const params = new URLSearchParams(location.search);
     return params.get("q") ?? undefined;
@@ -561,16 +573,17 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appStarredIds]);
 
-  const loading = loadingProjects || loadingSessions;
+  const loading = loadingProjects;
 
-  // Hold the index.html splash up until the initial session list is ready,
-  // then fade. Only the first transition matters — re-fetches don't replay.
+  // The shell can paint before chat history finishes. Session loading is shown
+  // inside the panel; keeping the first-frame splash up during a cold scan makes
+  // restarts feel hung.
   const splashDismissedRef = useRef(false);
   useEffect(() => {
     if (loading || splashDismissedRef.current) return;
     splashDismissedRef.current = true;
     window.dispatchEvent(new Event("app:ready"));
-  }, [loading, allSessions.length, projects.length]);
+  }, [loading, projects.length]);
 
   // Sessions visible under the current data source — used for the header counter
   // so it matches what the user actually sees in the list.
@@ -1151,6 +1164,8 @@ export function ProjectList({ onSelectProject, onSelectSession: _onSelectSession
               session={selectedSession}
               onClose={clearSelectedSession}
               targetMessageId={targetMessageIdFromUrl}
+              targetLineNumber={targetLineNumberFromUrl}
+              targetRoundIndex={targetRoundIndexFromUrl}
               highlight={searchHighlightFromUrl}
             />
           </ChatFilePreviewProvider>
@@ -1434,10 +1449,6 @@ function messageContentMatches(a: Message, b: Message) {
   );
 }
 
-function isCoveredByPendingMessage(message: Message, pendingMessages: Message[]) {
-  return pendingMessages.some((pending) => messageContentMatches(message, pending));
-}
-
 function mergePendingMessages(messages: Message[], pendingMessages: Message[]) {
   if (pendingMessages.length === 0) return messages;
   const next = [...messages];
@@ -1463,26 +1474,21 @@ function mergePendingMessages(messages: Message[], pendingMessages: Message[]) {
   return next;
 }
 
-function getMessageIdentity(message: Pick<Message, "uuid" | "line_number">) {
-  return `${message.uuid || "message"}:${message.line_number}`;
-}
+function findRenderedMessageElement(root: HTMLElement, messageId: string, lineNumber?: number | null) {
+  const idSelector = `[data-message-id="${CSS.escape(messageId)}"]`;
+  if (lineNumber && lineNumber > 0) {
+    const exact = root.querySelector<HTMLElement>(`${idSelector}[data-line-number="${lineNumber}"]`);
+    if (exact) return exact;
 
-function findRenderedMessageElement(root: HTMLElement, messageId: string) {
-  const direct = root.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(messageId)}"]`);
+    const byLine = root.querySelector<HTMLElement>(`[data-line-number="${lineNumber}"]`);
+    if (byLine) return byLine;
+  }
+
+  const direct = root.querySelector<HTMLElement>(idSelector);
   if (direct) return direct;
   return Array.from(root.querySelectorAll<HTMLElement>("[data-message-ids]")).find((element) =>
     (element.dataset.messageIds ?? "").split("\n").includes(messageId)
   ) ?? null;
-}
-
-function isAnimatableAssistantMessage(message: Message) {
-  return (
-    message.role === "assistant" &&
-    !message.is_meta &&
-    !message.is_tool &&
-    !message.content_blocks?.some((block) => block.type !== "text") &&
-    message.content.trim().length > 0
-  );
 }
 
 function shouldRenderStreamingText(message: Message) {
@@ -1494,8 +1500,45 @@ function shouldRenderStreamingText(message: Message) {
   );
 }
 
-function getTranscriptTypewriterDuration(content: string) {
-  return Math.min(15000, Math.max(1200, content.length * 24 + 600));
+function isLivePendingMessage(message: Message) {
+  return Boolean(message.is_streaming) || message.uuid.includes(":assistant:live");
+}
+
+const LARGE_TRANSCRIPT_RENDER_LIMIT = 700;
+const LARGE_TRANSCRIPT_RENDER_INCREMENT = 700;
+const TARGET_TRANSCRIPT_CONTEXT_BEFORE = 40;
+const TRANSCRIPT_SCROLL_LOAD_THRESHOLD = 180;
+
+type MessageRenderRange = { start: number; end: number };
+
+function findRoundStartMessageIndex(messages: Message[], roundIndex: number | null | undefined) {
+  if (roundIndex === null || roundIndex === undefined) return -1;
+  if (roundIndex <= 0) return 0;
+
+  let currentRound = 0;
+  for (let index = 0; index < messages.length; index += 1) {
+    if (isUserPromptMessage(messages[index])) {
+      currentRound += 1;
+      if (currentRound === roundIndex) return index;
+    }
+  }
+
+  return -1;
+}
+
+function normalizeMessageRenderRange(range: MessageRenderRange, total: number): MessageRenderRange {
+  const start = Math.max(0, Math.min(range.start, total));
+  const end = Math.max(start, Math.min(range.end, total));
+  return { start, end };
+}
+
+function getWindowedMessageRange(total: number, limit: number, targetIndex: number): MessageRenderRange {
+  if (total <= limit) return { start: 0, end: total };
+  if (targetIndex >= 0) {
+    const start = Math.max(0, Math.min(targetIndex - TARGET_TRANSCRIPT_CONTEXT_BEFORE, total - limit));
+    return { start, end: Math.min(total, start + limit) };
+  }
+  return { start: Math.max(0, total - limit), end: total };
 }
 
 export interface SessionForkPayload {
@@ -1540,6 +1583,7 @@ function useGroupCollapse(deps: unknown[], initialExpanded = false) {
 
 export function StandardMessageList({
   messages,
+  promptIndexOffset = 0,
   userPromptsOnly,
   originalChat,
   markdownPreview,
@@ -1551,6 +1595,7 @@ export function StandardMessageList({
   cwd,
 }: {
   messages: Message[];
+  promptIndexOffset?: number;
   userPromptsOnly: boolean;
   originalChat: boolean;
   markdownPreview: boolean;
@@ -1571,6 +1616,7 @@ export function StandardMessageList({
   return (
     <StickyPromptList
       groupedMessages={groupedMessages}
+      promptIndexOffset={promptIndexOffset}
       userPromptsOnly={userPromptsOnly}
       originalChat={originalChat}
       markdownPreview={markdownPreview}
@@ -1586,6 +1632,7 @@ export function StandardMessageList({
 
 function StickyPromptList({
   groupedMessages,
+  promptIndexOffset,
   userPromptsOnly,
   originalChat,
   markdownPreview,
@@ -1597,6 +1644,7 @@ function StickyPromptList({
   cwd,
 }: {
   groupedMessages: Message[][];
+  promptIndexOffset: number;
   userPromptsOnly: boolean;
   originalChat: boolean;
   markdownPreview: boolean;
@@ -1628,7 +1676,7 @@ function StickyPromptList({
     return result;
   }, [groupedMessages]);
 
-  let userCounter = 0;
+  let userCounter = promptIndexOffset;
   return (
     <>
       {sections.map((section) => {
@@ -1799,7 +1847,7 @@ function StreamingCollapsibleContent({
   streaming?: boolean;
   streamingMode?: Message["streaming_mode"];
 }) {
-  const typewriter = Boolean(streaming && streamingMode !== "live");
+  const typewriter = false;
   const { text: typewriterText, done } = useTypewriterText(content, typewriter);
   const visible = streamingMode === "live" ? content : typewriterText;
   const showCursor = Boolean(streaming && (streamingMode === "live" || !done));
@@ -2332,6 +2380,8 @@ export function SessionDetail({
   onClose,
   highlight,
   targetMessageId,
+  targetLineNumber,
+  targetRoundIndex,
   composerOverride,
   projectPath,
   projectPathMenuItems,
@@ -2344,12 +2394,14 @@ export function SessionDetail({
   onClose: () => void;
   highlight?: string;
   targetMessageId?: string | null;
+  targetLineNumber?: number | null;
   composerOverride?: ReactNode;
   projectPath?: string | null;
   projectPathMenuItems?: ReactNode;
   onFork?: (payload: SessionForkPayload) => void;
   displayMode?: SessionDetailDisplayMode;
   onDisplayModeChange?: (mode: SessionDetailDisplayMode) => void;
+  targetRoundIndex?: number | null;
   pendingMessages?: Message[];
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -2360,7 +2412,6 @@ export function SessionDetail({
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [messageLoadError, setMessageLoadError] = useState<string | null>(null);
-  const [streamingMessageIds, setStreamingMessageIds] = useState<Set<string>>(() => new Set());
   const [originalChat] = useAtom(originalChatAtom);
   const [markdownPreview] = useAtom(markdownPreviewAtom);
   const [userPromptsOnly] = useAtom(userPromptsOnlyAtom);
@@ -2397,7 +2448,6 @@ export function SessionDetail({
   const selection = useMaasActiveSelection();
   const messageLoadSeqRef = useRef(0);
   const messagesRef = useRef<Message[]>([]);
-  const streamingClearTimersRef = useRef<number[]>([]);
   const pendingMessagesRef = useRef<Message[]>(pendingMessages);
   const liveSyncScrollRef = useRef(false);
   const livePollInFlightRef = useRef(false);
@@ -2411,6 +2461,11 @@ export function SessionDetail({
     pendingMessagesRef.current = pendingMessages;
   }, [pendingMessages]);
 
+  const hasLivePendingMessages = useMemo(
+    () => pendingMessages.some(isLivePendingMessage),
+    [pendingMessages],
+  );
+
   const loadMessages = useCallback((reset: boolean) => {
     const seq = messageLoadSeqRef.current + 1;
     messageLoadSeqRef.current = seq;
@@ -2418,7 +2473,6 @@ export function SessionDetail({
     if (reset) {
       setLoading(true);
       setMessages([]);
-      setStreamingMessageIds(new Set());
       messagesRef.current = [];
       setMessageLoadError(null);
     }
@@ -2429,33 +2483,6 @@ export function SessionDetail({
     })
       .then((m) => {
         if (messageLoadSeqRef.current === seq) {
-          if (!reset) {
-            const previousIds = new Set(messagesRef.current.map(getMessageIdentity));
-            const newAssistantIds = m
-              .filter((message) => !previousIds.has(getMessageIdentity(message)))
-              .filter(isAnimatableAssistantMessage)
-              .filter((message) => !isCoveredByPendingMessage(message, pendingMessagesRef.current))
-              .map(getMessageIdentity);
-            if (newAssistantIds.length > 0) {
-              setStreamingMessageIds((current) => {
-                const next = new Set(current);
-                newAssistantIds.forEach((id) => next.add(id));
-                return next;
-              });
-              m.filter((message) => newAssistantIds.includes(getMessageIdentity(message))).forEach((message) => {
-                const id = getMessageIdentity(message);
-                const timer = window.setTimeout(() => {
-                  setStreamingMessageIds((current) => {
-                    if (!current.has(id)) return current;
-                    const next = new Set(current);
-                    next.delete(id);
-                    return next;
-                  });
-                }, getTranscriptTypewriterDuration(message.content));
-                streamingClearTimersRef.current.push(timer);
-              });
-            }
-          }
           messagesRef.current = m;
           setMessages(m);
           setMessageLoadError(null);
@@ -2465,7 +2492,6 @@ export function SessionDetail({
         if (messageLoadSeqRef.current === seq) {
           messagesRef.current = [];
           setMessages([]);
-          setStreamingMessageIds(new Set());
           setMessageLoadError(error instanceof Error ? error.message : String(error));
         }
       })
@@ -2479,13 +2505,12 @@ export function SessionDetail({
     void loadMessages(true);
     return () => {
       messageLoadSeqRef.current += 1;
-      streamingClearTimersRef.current.forEach(window.clearTimeout);
-      streamingClearTimersRef.current = [];
     };
   }, [loadMessages]);
 
   useEffect(() => {
     const unlisten = listen("sessions-changed", () => {
+      if (!pendingMessagesRef.current.some(isLivePendingMessage)) return;
       captureLiveSyncScrollIntent();
       queryClient.invalidateQueries({ queryKey: ["session-usage", session.project_id, session.id] });
       void loadMessages(false);
@@ -2509,6 +2534,7 @@ export function SessionDetail({
 
   useEffect(() => {
     if (effectiveDisplayMode !== "standard") return;
+    if (!hasLivePendingMessages) return;
 
     const refreshLiveTranscript = () => {
       if (document.visibilityState === "hidden") return;
@@ -2533,23 +2559,11 @@ export function SessionDetail({
       window.clearInterval(intervalId);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [captureLiveSyncScrollIntent, effectiveDisplayMode, loadMessages, queryClient, session.project_id, session.id]);
-
-  const liveMessages = useMemo(
-    () =>
-      streamingMessageIds.size === 0
-        ? messages
-        : messages.map((message) =>
-            streamingMessageIds.has(getMessageIdentity(message))
-              ? { ...message, is_streaming: true, streaming_mode: "replay" as const }
-              : message,
-          ),
-    [messages, streamingMessageIds],
-  );
+  }, [captureLiveSyncScrollIntent, effectiveDisplayMode, hasLivePendingMessages, loadMessages, queryClient, session.project_id, session.id]);
 
   const displayMessages = useMemo(
-    () => mergePendingMessages(liveMessages, pendingMessages),
-    [liveMessages, pendingMessages],
+    () => mergePendingMessages(messages, pendingMessages),
+    [messages, pendingMessages],
   );
 
   const filteredMessages = useMemo(() => {
@@ -2557,6 +2571,70 @@ export function SessionDetail({
     if (userPromptsOnly) result = result.filter((m) => isUserPromptMessage(m));
     return result;
   }, [displayMessages, originalChat, userPromptsOnly]);
+
+  const explicitTargetMessageIndex = useMemo(() => {
+    if (!targetMessageId && !targetLineNumber) return -1;
+
+    if (targetMessageId && targetLineNumber) {
+      const exact = filteredMessages.findIndex(
+        (message) => message.uuid === targetMessageId && message.line_number === targetLineNumber,
+      );
+      if (exact >= 0) return exact;
+    }
+
+    if (targetMessageId) {
+      const byId = filteredMessages.findIndex((message) => message.uuid === targetMessageId);
+      if (byId >= 0) return byId;
+    }
+
+    if (targetLineNumber) {
+      return filteredMessages.findIndex((message) => message.line_number === targetLineNumber);
+    }
+
+    return -1;
+  }, [filteredMessages, targetMessageId, targetLineNumber]);
+  const targetRoundMessageIndex = useMemo(
+    () => findRoundStartMessageIndex(filteredMessages, targetRoundIndex),
+    [filteredMessages, targetRoundIndex],
+  );
+  const targetMessageIndex = explicitTargetMessageIndex >= 0 ? explicitTargetMessageIndex : targetRoundMessageIndex;
+  const targetScrollMessage = targetMessageIndex >= 0 ? filteredMessages[targetMessageIndex] : null;
+  const targetScrollMessageId = targetScrollMessage?.uuid || null;
+  const targetScrollLineNumber = targetScrollMessage?.line_number ?? targetLineNumber ?? null;
+  const [renderedMessageRangeState, setRenderedMessageRangeState] = useState<MessageRenderRange | null>(null);
+
+  useEffect(() => {
+    setRenderedMessageRangeState(
+      getWindowedMessageRange(filteredMessages.length, LARGE_TRANSCRIPT_RENDER_LIMIT, targetMessageIndex),
+    );
+  }, [
+    session.id,
+    originalChat,
+    userPromptsOnly,
+    targetMessageId,
+    targetLineNumber,
+    targetRoundIndex,
+    filteredMessages.length,
+    targetMessageIndex,
+  ]);
+
+  const renderedMessageRange = useMemo(
+    () => normalizeMessageRenderRange(
+      renderedMessageRangeState
+        ?? getWindowedMessageRange(filteredMessages.length, LARGE_TRANSCRIPT_RENDER_LIMIT, targetMessageIndex),
+      filteredMessages.length,
+    ),
+    [filteredMessages.length, renderedMessageRangeState, targetMessageIndex],
+  );
+  const renderedMessages = useMemo(() => {
+    return filteredMessages.slice(renderedMessageRange.start, renderedMessageRange.end);
+  }, [filteredMessages, renderedMessageRange]);
+  const renderedPromptIndexOffset = useMemo(() => {
+    return filteredMessages
+      .slice(0, renderedMessageRange.start)
+      .filter((message) => isUserPromptMessage(message))
+      .length;
+  }, [filteredMessages, renderedMessageRange.start]);
   const hasRenderableMessages = filteredMessages.length > 0;
   const showBlockingLoading = loading && !hasRenderableMessages;
 
@@ -2590,6 +2668,71 @@ export function SessionDetail({
   const [matchCount, setMatchCount] = useState(0);
   const bottomScrolledSessionRef = useRef<string | null>(null);
   const targetMessageScrollKeyRef = useRef<string | null>(null);
+  const matchNavigationRequestedRef = useRef(false);
+  const pendingScrollRestoreRef = useRef<{ scrollHeight: number; scrollTop: number } | null>(null);
+
+  const expandTranscriptWindow = useCallback((direction: "before" | "after") => {
+    const scroller = scrollRef.current;
+    setRenderedMessageRangeState((current) => {
+      const range = normalizeMessageRenderRange(current ?? renderedMessageRange, filteredMessages.length);
+      if (direction === "before") {
+        if (range.start <= 0) return current;
+        if (scroller) {
+          pendingScrollRestoreRef.current = {
+            scrollHeight: scroller.scrollHeight,
+            scrollTop: scroller.scrollTop,
+          };
+        }
+        return {
+          start: Math.max(0, range.start - LARGE_TRANSCRIPT_RENDER_INCREMENT),
+          end: range.end,
+        };
+      }
+
+      if (range.end >= filteredMessages.length) return current;
+      return {
+        start: range.start,
+        end: Math.min(filteredMessages.length, range.end + LARGE_TRANSCRIPT_RENDER_INCREMENT),
+      };
+    });
+  }, [filteredMessages.length, renderedMessageRange]);
+
+  const handleTranscriptScroll = useCallback(() => {
+    if (showBlockingLoading) return;
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+
+    if (
+      renderedMessageRange.start > 0 &&
+      scroller.scrollTop <= TRANSCRIPT_SCROLL_LOAD_THRESHOLD
+    ) {
+      expandTranscriptWindow("before");
+      return;
+    }
+
+    const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    if (
+      renderedMessageRange.end < filteredMessages.length &&
+      distanceFromBottom <= TRANSCRIPT_SCROLL_LOAD_THRESHOLD
+    ) {
+      expandTranscriptWindow("after");
+    }
+  }, [
+    expandTranscriptWindow,
+    filteredMessages.length,
+    renderedMessageRange.end,
+    renderedMessageRange.start,
+    showBlockingLoading,
+  ]);
+
+  useLayoutEffect(() => {
+    const restore = pendingScrollRestoreRef.current;
+    if (!restore) return;
+    const scroller = scrollRef.current;
+    pendingScrollRestoreRef.current = null;
+    if (!scroller) return;
+    scroller.scrollTop = restore.scrollTop + (scroller.scrollHeight - restore.scrollHeight);
+  }, [renderedMessageRange.start, renderedMessages.length]);
 
   // Resume-conversation state: prompt-box + spawned terminal
   // Only local CLI sessions can be resumed via `claude --resume`/`codex resume`.
@@ -2614,10 +2757,11 @@ export function SessionDetail({
       setMatchCount(hits.length);
     });
     return () => cancelAnimationFrame(raf);
-  }, [highlight, filteredMessages, showBlockingLoading, originalChat]);
+  }, [highlight, renderedMessages, showBlockingLoading, originalChat]);
 
   useEffect(() => {
     setActiveMatch(0);
+    matchNavigationRequestedRef.current = false;
   }, [highlight, filteredMessages]);
 
   useEffect(() => {
@@ -2626,7 +2770,7 @@ export function SessionDetail({
 
   useEffect(() => {
     targetMessageScrollKeyRef.current = null;
-  }, [session.id, targetMessageId]);
+  }, [session.id, targetMessageId, targetLineNumber, targetRoundIndex]);
 
   useEffect(() => {
     if (showBlockingLoading || highlight?.trim() || filteredMessages.length === 0) return;
@@ -2645,7 +2789,15 @@ export function SessionDetail({
 
   useEffect(() => {
     if (!contentRef.current || matchCount === 0 || showBlockingLoading) return;
+    const hasExplicitSearchTarget = Boolean(
+      targetMessageId ||
+      targetLineNumber ||
+      (targetRoundIndex !== null && targetRoundIndex !== undefined),
+    );
+    if (hasExplicitSearchTarget && !matchNavigationRequestedRef.current) return;
+
     const raf = requestAnimationFrame(() => {
+      matchNavigationRequestedRef.current = false;
       const root = contentRef.current;
       const scroller = scrollRef.current;
       if (!root) return;
@@ -2677,17 +2829,24 @@ export function SessionDetail({
       }
     });
     return () => cancelAnimationFrame(raf);
-  }, [activeMatch, matchCount, showBlockingLoading]);
+  }, [
+    activeMatch,
+    matchCount,
+    showBlockingLoading,
+    targetMessageId,
+    targetLineNumber,
+    targetRoundIndex,
+  ]);
 
   useEffect(() => {
-    if (!targetMessageId || showBlockingLoading || filteredMessages.length === 0) return;
-    const key = `${session.id}:${targetMessageId}`;
+    if (!targetScrollMessageId || showBlockingLoading || renderedMessages.length === 0) return;
+    const key = `${session.id}:${targetScrollMessageId}:${targetScrollLineNumber ?? ""}`;
     if (targetMessageScrollKeyRef.current === key) return;
 
     const raf = requestAnimationFrame(() => {
       const root = contentRef.current;
       if (!root) return;
-      const target = findRenderedMessageElement(root, targetMessageId);
+      const target = findRenderedMessageElement(root, targetScrollMessageId, targetScrollLineNumber);
       if (!target) return;
 
       const scroller = scrollRef.current;
@@ -2697,18 +2856,19 @@ export function SessionDetail({
         const delta = targetRect.top - scrollerRect.top - scrollerRect.height / 2 + targetRect.height / 2;
         scroller.scrollTo({
           top: scroller.scrollTop + delta,
-          behavior: "smooth",
+          behavior: "auto",
         });
       } else {
-        target.scrollIntoView({ block: "center", behavior: "smooth" });
+        target.scrollIntoView({ block: "center", behavior: "auto" });
       }
       targetMessageScrollKeyRef.current = key;
     });
     return () => cancelAnimationFrame(raf);
-  }, [targetMessageId, session.id, filteredMessages, showBlockingLoading]);
+  }, [targetScrollMessageId, targetScrollLineNumber, session.id, renderedMessages, showBlockingLoading]);
 
   const gotoMatch = (delta: number) => {
     if (matchCount === 0) return;
+    matchNavigationRequestedRef.current = true;
     setActiveMatch((prev) => (prev + delta + matchCount) % matchCount);
   };
 
@@ -2828,7 +2988,11 @@ export function SessionDetail({
 
       {effectiveDisplayMode === "standard" ? (
         <>
-          <div ref={scrollRef} className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain">
+          <div
+            ref={scrollRef}
+            onScroll={handleTranscriptScroll}
+            className="flex-1 min-h-0 min-w-0 overflow-y-auto overflow-x-hidden overscroll-contain"
+          >
             <div ref={contentRef}>
               {showBlockingLoading ? (
                 <div className="flex items-center justify-center py-12">
@@ -2848,7 +3012,8 @@ export function SessionDetail({
               ) : (
                 <div className="border-t border-border/40">
                   <StandardMessageList
-                    messages={filteredMessages}
+                    messages={renderedMessages}
+                    promptIndexOffset={renderedPromptIndexOffset}
                     userPromptsOnly={userPromptsOnly}
                     originalChat={originalChat}
                     markdownPreview={markdownPreview}

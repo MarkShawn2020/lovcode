@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@/lib/tauri";
+import { Channel, invoke } from "@/lib/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emitTo, listen } from "@tauri-apps/api/event";
 import { Loader2, Search } from "lucide-react";
@@ -7,6 +7,7 @@ import type { Session } from "../types";
 import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/searchScopes";
 import { formatDate, formatRelativeTime, restoreSlashCommand } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
+import { useSearchIndexBuildStatus } from "../hooks";
 
 interface SearchChatHit {
   session_id: string;
@@ -25,18 +26,40 @@ interface SearchChatHit {
   score?: number;
 }
 
+type SessionStreamEvent =
+  | { kind: "cached"; sessions: Session[]; total: number }
+  | { kind: "batch"; sessions: Session[] }
+  | { kind: "done"; total: number };
+
 interface ContentMatchPreview {
   text: string;
   highlightQuery: string;
 }
 
-type SearchViewMode = "round" | "session" | "project";
+interface SearchResultVariant {
+  key: string;
+  session: Session;
+  hit: SearchChatHit;
+  preview: ContentMatchPreview | null;
+}
+
+type SearchViewMode = "message" | "round" | "session" | "project";
 
 const SEARCH_VIEW_MODES: Array<{ id: SearchViewMode; label: string }> = [
+  { id: "message", label: "Message" },
   { id: "round", label: "Round" },
   { id: "session", label: "Session" },
   { id: "project", label: "Project" },
 ];
+
+interface MessageSearchResultItem {
+  kind: "message";
+  key: string;
+  session: Session;
+  hit: SearchChatHit;
+  preview: ContentMatchPreview | null;
+  variants?: SearchResultVariant[];
+}
 
 interface RoundSearchResultItem {
   kind: "round";
@@ -44,6 +67,7 @@ interface RoundSearchResultItem {
   session: Session;
   hit: SearchChatHit;
   preview: ContentMatchPreview | null;
+  variants?: SearchResultVariant[];
 }
 
 interface SessionSearchResultItem {
@@ -68,7 +92,11 @@ interface ProjectSearchResultItem {
   matchedSessionCount: number;
 }
 
-type SearchResultItem = RoundSearchResultItem | SessionSearchResultItem | ProjectSearchResultItem;
+type SearchResultItem =
+  | MessageSearchResultItem
+  | RoundSearchResultItem
+  | SessionSearchResultItem
+  | ProjectSearchResultItem;
 
 const RECENT_SEARCH_LIMIT = 20;
 const RECENT_SEARCH_BADGE_LIMIT = 8;
@@ -77,7 +105,7 @@ const SEARCH_VIEW_STORAGE_KEY = "lovcode:search-overlay:view-mode";
 const FULL_TEXT_SEARCH_LIMIT = 600;
 const MATCH_CONTEXT_RADIUS = 96;
 
-const SEARCH_PLACEHOLDER = "Search rounds, title:..., round:..., AND/OR, -exclude";
+const SEARCH_PLACEHOLDER = "Search messages, rounds, title:..., round:..., AND/OR, -exclude";
 const SEARCH_EMPTY_LABEL = "Search conversations";
 
 function getProjectName(session: Session) {
@@ -198,23 +226,245 @@ function timestampToSeconds(timestamp: string | null | undefined, fallback: numb
 }
 
 function getItemHit(item: SearchResultItem) {
-  return item.kind === "round" ? item.hit : item.hit ?? null;
+  return item.kind === "message" || item.kind === "round" ? item.hit : item.hit ?? null;
 }
 
 function itemTimestampSeconds(item: SearchResultItem) {
   const hit = getItemHit(item);
-  if (hit) return timestampToSeconds(hit.round_timestamp ?? hit.timestamp, item.session.last_modified);
+  if (hit) return timestampToSeconds(hit.timestamp ?? hit.round_timestamp, item.session.last_modified);
   return item.session.last_modified;
 }
 
+function itemLineNumber(item: SearchResultItem) {
+  return getItemHit(item)?.line_number ?? 0;
+}
+
+function itemRoundIndex(item: SearchResultItem) {
+  return getItemHit(item)?.round_index ?? 0;
+}
+
+function compareItemOccurrenceAsc(a: SearchResultItem, b: SearchResultItem) {
+  const timestampDiff = itemTimestampSeconds(a) - itemTimestampSeconds(b);
+  if (timestampDiff !== 0) return timestampDiff;
+
+  const sameSession = a.session.id === b.session.id;
+  if (sameSession) {
+    const lineDiff = itemLineNumber(a) - itemLineNumber(b);
+    if (lineDiff !== 0) return lineDiff;
+  }
+
+  const roundDiff = itemRoundIndex(a) - itemRoundIndex(b);
+  if (roundDiff !== 0) return roundDiff;
+
+  return a.key.localeCompare(b.key);
+}
+
+function compactSearchTextKey(value: string | null | undefined) {
+  const normalized = normalizeSnippetValue(restoreSlashCommand(value ?? "")).toLowerCase();
+  if (!normalized) return "";
+
+  let hash = 0;
+  for (let i = 0; i < normalized.length; i += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(i)) | 0;
+  }
+
+  return `${normalized.length}:${hash.toString(36)}:${normalized.slice(0, 48)}`;
+}
+
+function sessionVariantTime(session: Session) {
+  return session.created_at || session.last_modified;
+}
+
+function compareVariantSessionAsc(a: SearchResultVariant, b: SearchResultVariant) {
+  const timeDiff = sessionVariantTime(a.session) - sessionVariantTime(b.session);
+  if (timeDiff !== 0) return timeDiff;
+  return a.session.id.localeCompare(b.session.id);
+}
+
+function sortSearchVariants(variants: SearchResultVariant[]) {
+  return [...variants].sort(compareVariantSessionAsc);
+}
+
+function variantFromItem(item: MessageSearchResultItem | RoundSearchResultItem): SearchResultVariant {
+  return {
+    key: `${item.session.id}:${item.hit.uuid || "message"}:${item.hit.line_number ?? 0}`,
+    session: item.session,
+    hit: item.hit,
+    preview: item.preview,
+  };
+}
+
 function sortSearchItems(items: SearchResultItem[]) {
-  return [...items].sort((a, b) => itemTimestampSeconds(b) - itemTimestampSeconds(a));
+  return [...items].sort((a, b) => {
+    const timestampDiff = itemTimestampSeconds(b) - itemTimestampSeconds(a);
+    if (timestampDiff !== 0) return timestampDiff;
+
+    const sameSession = a.session.id === b.session.id;
+    if (sameSession) {
+      const lineDiff = itemLineNumber(b) - itemLineNumber(a);
+      if (lineDiff !== 0) return lineDiff;
+
+      const roundDiff = itemRoundIndex(b) - itemRoundIndex(a);
+      if (roundDiff !== 0) return roundDiff;
+    }
+
+    const sessionDiff = b.session.last_modified - a.session.last_modified;
+    if (sessionDiff !== 0) return sessionDiff;
+
+    return a.key.localeCompare(b.key);
+  });
 }
 
 function getItemRoundKey(item: SearchResultItem) {
   const hit = getItemHit(item);
   if (!hit) return null;
+
+  if (hit.round_timestamp) {
+    const projectKey = item.session.project_path || item.session.project_id;
+    const promptKey = compactSearchTextKey(hit.round_prompt);
+    return `${projectKey}:${hit.round_timestamp}:${promptKey}`;
+  }
+
   return `${hit.session_id}:${hit.round_index ?? 0}`;
+}
+
+function getItemMessageSourceKey(item: SearchResultItem) {
+  const hit = getItemHit(item);
+  if (!hit) return null;
+  const timestamp = hit.timestamp;
+  const contentKey = compactSearchTextKey(hit.content);
+  if (!timestamp || !contentKey) {
+    return `${hit.session_id}:${hit.uuid || "message"}:${hit.line_number ?? 0}`;
+  }
+  const projectKey = item.session.project_path || item.session.project_id;
+  return `${projectKey}:${timestamp}:${hit.role || "message"}:${contentKey}`;
+}
+
+function chooseCanonicalVariant<T extends MessageSearchResultItem | RoundSearchResultItem>(current: T, candidate: T) {
+  const currentVariant = variantFromItem(current);
+  const candidateVariant = variantFromItem(candidate);
+  return compareVariantSessionAsc(candidateVariant, currentVariant) < 0 ? candidate : current;
+}
+
+function dedupeMessageItems(items: SearchResultItem[]): MessageSearchResultItem[] {
+  const byMessage = new Map<
+    string,
+    {
+      item: MessageSearchResultItem;
+      variants: SearchResultVariant[];
+    }
+  >();
+
+  for (const item of items) {
+    if (item.kind !== "message") continue;
+    const messageKey = getItemMessageSourceKey(item) ?? item.key;
+    const existing = byMessage.get(messageKey);
+    if (!existing) {
+      byMessage.set(messageKey, {
+        item: { ...item, key: `message:${messageKey}` },
+        variants: [variantFromItem(item)],
+      });
+      continue;
+    }
+
+    existing.variants.push(variantFromItem(item));
+    existing.item = chooseCanonicalVariant(existing.item, item);
+    existing.item.key = `message:${messageKey}`;
+  }
+
+  return sortSearchItems(
+    Array.from(byMessage.entries()).map(([messageKey, { item, variants }]) => {
+      const sortedVariants = sortSearchVariants(variants);
+      const primary = sortedVariants[0] ?? variantFromItem(item);
+      return {
+        kind: "message" as const,
+        key: `message:${messageKey}`,
+        session: primary.session,
+        hit: primary.hit,
+        preview: primary.preview,
+        variants: sortedVariants,
+      };
+    })
+  ) as MessageSearchResultItem[];
+}
+
+function toRoundSearchResultItem(
+  item: MessageSearchResultItem | RoundSearchResultItem,
+  roundKey: string,
+): RoundSearchResultItem {
+  return {
+    kind: "round",
+    key: `round:${roundKey}`,
+    session: item.session,
+    hit: item.hit,
+    preview: item.preview,
+  };
+}
+
+function dedupeRoundItems(items: SearchResultItem[]) {
+  const byRound = new Map<
+    string,
+    {
+      item: RoundSearchResultItem;
+      variantsBySession: Map<string, SearchResultVariant>;
+    }
+  >();
+  const passthroughItems: SearchResultItem[] = [];
+
+  for (const item of items) {
+    if (item.kind !== "message" && item.kind !== "round") {
+      passthroughItems.push(item);
+      continue;
+    }
+
+    const roundKey = getItemRoundKey(item) ?? item.key;
+    const roundItem = toRoundSearchResultItem(item, roundKey);
+    const variant = variantFromItem(roundItem);
+    const existing = byRound.get(roundKey);
+    if (!existing) {
+      byRound.set(roundKey, {
+        item: roundItem,
+        variantsBySession: new Map([[variant.session.id, variant]]),
+      });
+      continue;
+    }
+
+    const existingVariant = existing.variantsBySession.get(variant.session.id);
+    if (!existingVariant || compareItemOccurrenceAsc(roundItem, {
+      kind: "round",
+      key: existingVariant.key,
+      session: existingVariant.session,
+      hit: existingVariant.hit,
+      preview: existingVariant.preview,
+    }) < 0) {
+      existing.variantsBySession.set(variant.session.id, variant);
+    }
+
+    if (
+      compareItemOccurrenceAsc(roundItem, existing.item) < 0 ||
+      (
+        compareItemOccurrenceAsc(roundItem, existing.item) === 0 &&
+        compareVariantSessionAsc(variant, variantFromItem(existing.item)) < 0
+      )
+    ) {
+      existing.item = roundItem;
+    }
+  }
+
+  const roundItems = Array.from(byRound.entries()).map(([roundKey, { item, variantsBySession }]) => {
+    const variants = sortSearchVariants(Array.from(variantsBySession.values()));
+    const primary = variants[0] ?? variantFromItem(item);
+    return {
+      kind: "round" as const,
+      key: `round:${roundKey}`,
+      session: primary.session,
+      hit: primary.hit,
+      preview: primary.preview,
+      variants,
+    };
+  });
+
+  return sortSearchItems([...passthroughItems, ...roundItems]);
 }
 
 function aggregateSessionItems(items: SearchResultItem[]): SearchResultItem[] {
@@ -316,14 +566,22 @@ function aggregateProjectItems(items: SearchResultItem[]): SearchResultItem[] {
 }
 
 function aggregateSearchItems(items: SearchResultItem[], viewMode: SearchViewMode) {
+  if (viewMode === "message") return dedupeMessageItems(items);
   if (viewMode === "session") return aggregateSessionItems(items);
   if (viewMode === "project") return aggregateProjectItems(items);
-  return items;
+  return dedupeRoundItems(items);
 }
 
 function roundLabel(hit: SearchChatHit) {
   const index = hit.round_index ?? 0;
   return index > 0 ? `Round ${index}` : "Session prelude";
+}
+
+function getItemVariants(item: SearchResultItem): SearchResultVariant[] {
+  if (item.kind === "message" || item.kind === "round") {
+    return item.variants?.length ? item.variants : [variantFromItem(item)];
+  }
+  return [];
 }
 
 function readRecentSearches() {
@@ -380,8 +638,12 @@ export default function SearchOverlay() {
   const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
   const [activeIdx, setActiveIdx] = useState(0);
+  const [expandedVariantKey, setExpandedVariantKey] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const indexBuildInFlightRef = useRef(false);
+  const sessionStreamSeqRef = useRef(0);
+  const resultsScrollRef = useRef<HTMLDivElement | null>(null);
+  const expandedVariantsRef = useRef<HTMLDivElement | null>(null);
+  const { status: searchIndexStatus, start: startSearchIndexBuild } = useSearchIndexBuildStatus();
   const sessionsById = useMemo(() => {
     return new Map(allSessions.map((session) => [session.id, session]));
   }, [allSessions]);
@@ -391,10 +653,16 @@ export default function SearchOverlay() {
   }, [recentSearches]);
   const results = useMemo(() => aggregateSearchItems(sourceResults, viewMode), [sourceResults, viewMode]);
   const viewCounts = useMemo(() => ({
-    round: sourceResults.length,
+    message: dedupeMessageItems(sourceResults).length,
+    round: dedupeRoundItems(sourceResults).length,
     session: aggregateSessionItems(sourceResults).length,
     project: aggregateProjectItems(sourceResults).length,
   }), [sourceResults]);
+  useEffect(() => {
+    setIndexBuilding(searchIndexStatus?.state === "building");
+    setIndexReady(searchIndexStatus?.state === "ready");
+  }, [searchIndexStatus]);
+
   const fullTextIndexing = indexBuilding;
   const fullTextModePending = !indexReady && indexBuilding && !!trimmedQuery && sourceResults.length === 0;
   const parsedQuery = useMemo(() => parseScopedSearchQuery(trimmedQuery), [trimmedQuery]);
@@ -415,19 +683,36 @@ export default function SearchOverlay() {
   }, []);
 
   const refreshSearchData = useCallback((options: { rebuildIndex?: boolean } = {}) => {
-    invoke<Session[]>("list_all_sessions").then(setAllSessions).catch(() => {});
+    const seq = sessionStreamSeqRef.current + 1;
+    sessionStreamSeqRef.current = seq;
+    const streamId = `search-${Date.now()}-${seq}-${Math.random().toString(36).slice(2)}`;
+    const channel = new Channel<SessionStreamEvent>();
+    const accumulated: Session[] = [];
 
-    if (!options.rebuildIndex || indexBuildInFlightRef.current) return;
-    indexBuildInFlightRef.current = true;
-    setIndexBuilding(true);
-    invoke<number>("build_search_index")
-      .then(() => setIndexReady(true))
-      .catch(() => {})
-      .finally(() => {
-        indexBuildInFlightRef.current = false;
-        setIndexBuilding(false);
-      });
-  }, []);
+    channel.onmessage = (event) => {
+      if (sessionStreamSeqRef.current !== seq) return;
+      if (event.kind === "cached") {
+        if (event.sessions.length > 0) setAllSessions(event.sessions);
+        return;
+      }
+      if (event.kind === "batch") {
+        accumulated.push(...event.sessions);
+        setAllSessions([...accumulated]);
+        return;
+      }
+      setAllSessions([...accumulated]);
+    };
+
+    invoke("list_all_sessions_streamed", {
+      streamId,
+      onEvent: channel,
+      refresh: false,
+    }).catch(() => {});
+
+    if (options.rebuildIndex) {
+      startSearchIndexBuild(false).catch(() => {});
+    }
+  }, [startSearchIndexBuild]);
 
   // Make html/body transparent so only the floating card paints. This window
   // has `transparent: true` in tauri.conf.json — without this the canvas
@@ -495,26 +780,23 @@ export default function SearchOverlay() {
           { query: trimmedQuery, limit: FULL_TEXT_SEARCH_LIMIT }
         ).catch(() => []);
 
-        const seenRoundKeys = new Set<string>();
         const contentSessionIds = new Set<string>();
-        const roundItems: SearchResultItem[] = [];
+        const messageItems: SearchResultItem[] = [];
 
-        for (const result of contentResults) {
+        contentResults.forEach((result, resultIndex) => {
           const session = sessionsById.get(result.session_id);
-          if (!session) continue;
-          const roundKey = `${result.session_id}:${result.round_index ?? 0}`;
-          if (seenRoundKeys.has(roundKey)) continue;
-          seenRoundKeys.add(roundKey);
+          if (!session) return;
+          const messageKey = `${result.session_id}:${result.uuid || "message"}:${result.line_number ?? resultIndex}`;
           contentSessionIds.add(result.session_id);
           const preview = buildSearchHitPreview(result, highlightQuery);
-          roundItems.push({
-            kind: "round",
-            key: `round:${roundKey}`,
+          messageItems.push({
+            kind: "message",
+            key: `message:${messageKey}:${resultIndex}`,
             session,
             hit: result,
             preview,
           });
-        }
+        });
 
         const metadataItems: SearchResultItem[] = sortByLastModified(
           metadataMatches.filter((session) => !contentSessionIds.has(session.id))
@@ -527,7 +809,7 @@ export default function SearchOverlay() {
 
         if (cancelled) return;
 
-        const nextResults = sortSearchItems([...roundItems, ...metadataItems]);
+        const nextResults = sortSearchItems([...messageItems, ...metadataItems]);
 
         setSourceResults(nextResults);
       } finally {
@@ -553,7 +835,29 @@ export default function SearchOverlay() {
 
   useEffect(() => {
     setActiveIdx(0);
+    setExpandedVariantKey(null);
   }, [query, results.length, viewMode]);
+
+  useEffect(() => {
+    if (!expandedVariantKey) return;
+    const frame = requestAnimationFrame(() => {
+      const scroller = resultsScrollRef.current;
+      const expanded = expandedVariantsRef.current;
+      if (!scroller || !expanded) return;
+
+      const scrollerRect = scroller.getBoundingClientRect();
+      const expandedRect = expanded.getBoundingClientRect();
+      const bottomOverflow = expandedRect.bottom - (scrollerRect.bottom - 12);
+      const topOverflow = (scrollerRect.top + 8) - expandedRect.top;
+
+      if (bottomOverflow > 0) {
+        scroller.scrollBy({ top: bottomOverflow, behavior: "smooth" });
+      } else if (topOverflow > 0) {
+        scroller.scrollBy({ top: -topOverflow, behavior: "smooth" });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [expandedVariantKey]);
 
   const hide = () => {
     getCurrentWindow().hide().catch(() => {});
@@ -563,18 +867,39 @@ export default function SearchOverlay() {
     setActiveIdx(index);
   };
 
+  const onToggleVariants = (key: string, index: number) => {
+    setActiveIdx(index);
+    setExpandedVariantKey((current) => current === key ? null : key);
+  };
+
   const onSelectRecentSearch = (term: string) => {
     rememberSearch(term);
     setQuery(term);
     requestAnimationFrame(() => inputRef.current?.focus());
   };
 
+  const openChatResult = (session: Session, hit: SearchChatHit | null) => {
+    rememberSearch(query);
+
+    emitTo("main", "open-chat", {
+      projectId: session.project_id,
+      projectPath: session.project_path || "",
+      sessionId: session.id,
+      summary: session.summary,
+      messageId: hit?.uuid ?? null,
+      lineNumber: hit?.line_number ?? null,
+      roundIndex: hit?.round_index ?? null,
+      highlight: highlightQuery,
+    }).catch(() => {});
+    hide();
+  };
+
   const onSelect = (item: SearchResultItem) => {
     const s = item.session;
     const hit = getItemHit(item);
-    rememberSearch(query);
 
     if (item.kind === "project" && item.projectPath) {
+      rememberSearch(query);
       emitTo("main", "open-project", {
         projectId: item.projectId,
         projectPath: item.projectPath,
@@ -583,16 +908,11 @@ export default function SearchOverlay() {
       return;
     }
 
-    emitTo("main", "open-chat", {
-      projectId: s.project_id,
-      projectPath: s.project_path || "",
-      sessionId: s.id,
-      summary: s.summary,
-      messageId: hit?.uuid ?? null,
-      lineNumber: hit?.line_number ?? null,
-      highlight: highlightQuery,
-    }).catch(() => {});
-    hide();
+    openChatResult(s, hit);
+  };
+
+  const onSelectVariant = (variant: SearchResultVariant) => {
+    openChatResult(variant.session, variant.hit);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -700,7 +1020,7 @@ export default function SearchOverlay() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div ref={resultsScrollRef} className="min-h-0 flex-1 overflow-y-auto">
           {!trimmedQuery && results.length === 0 ? (
             <div className="px-4 py-8 text-center">
               <div className="font-serif text-base font-semibold text-foreground">{SEARCH_EMPTY_LABEL}</div>
@@ -733,7 +1053,12 @@ export default function SearchOverlay() {
                 let metaLabel = `${s.rounds} rounds`;
                 let metaTitle = `${s.message_count} messages total`;
 
-                if (item.kind === "round") {
+                if (item.kind === "message") {
+                  label = `${roundLabel(item.hit)}${item.hit.role ? ` · ${item.hit.role}` : ""}`;
+                  contextLabel = [title, projectName].filter(Boolean).join(" · ");
+                  metaLabel = item.hit.line_number ? `record ${item.hit.line_number}` : "message";
+                  metaTitle = `${item.hit.role || "message"} message`;
+                } else if (item.kind === "round") {
                   label = `${roundLabel(item.hit)}${item.hit.role ? ` · ${item.hit.role}` : ""}`;
                   contextLabel = [title, projectName].filter(Boolean).join(" · ");
                   metaLabel = roundLabel(item.hit);
@@ -756,47 +1081,108 @@ export default function SearchOverlay() {
 
                 const matchPreview = item.preview;
                 const timestamp = itemTimestampSeconds(item);
+                const variants = getItemVariants(item);
+                const hasVariants = variants.length > 1;
+                const variantsOpen = expandedVariantKey === item.key;
                 return (
-                  <button
+                  <div
                     key={item.key}
-                    onClick={() => onSelect(item)}
                     onMouseEnter={() => onResultMouseEnter(i)}
-                    aria-current={isActive ? "true" : undefined}
-                    className={`flex w-full items-center gap-3 px-4 py-2.5 text-left text-sm transition-colors ${
+                    className={`transition-colors ${
                       isActive ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-card-alt hover:text-foreground"
                     }`}
                   >
-                    <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-current opacity-50" />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate font-medium">
-                        <HighlightText text={label} query={highlightQuery} />
-                      </div>
-                      <div className="mt-0.5 min-w-0 text-[11px] text-muted-foreground/75">
-                        {matchPreview ? (
-                          <span className="block line-clamp-2 leading-4">
-                            <HighlightText text={matchPreview.text} query={matchPreview.highlightQuery} />
-                          </span>
-                        ) : (
-                          <div className="flex min-w-0 items-center gap-2">
-                            {contextLabel && (
-                              <span className="truncate">
-                                <HighlightText text={contextLabel} query={highlightQuery} />
+                    <div className="flex w-full items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => onSelect(item)}
+                        aria-current={isActive ? "true" : undefined}
+                        className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2.5 text-left text-sm"
+                      >
+                        <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full border border-current opacity-50" />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate font-medium">
+                            <HighlightText text={label} query={highlightQuery} />
+                          </div>
+                          <div className="mt-0.5 min-w-0 text-[11px] text-muted-foreground/75">
+                            {matchPreview ? (
+                              <span className="block line-clamp-2 leading-4">
+                                <HighlightText text={matchPreview.text} query={matchPreview.highlightQuery} />
                               </span>
+                            ) : (
+                              <div className="flex min-w-0 items-center gap-2">
+                                {contextLabel && (
+                                  <span className="truncate">
+                                    <HighlightText text={contextLabel} query={highlightQuery} />
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
-                        )}
-                      </div>
-                      {contextLabel && matchPreview ? (
-                        <div className="mt-0.5 truncate text-[10px] text-muted-foreground/60">
-                          <HighlightText text={contextLabel} query={highlightQuery} />
+                          {contextLabel && matchPreview ? (
+                            <div className="mt-0.5 truncate text-[10px] text-muted-foreground/60">
+                              <HighlightText text={contextLabel} query={highlightQuery} />
+                            </div>
+                          ) : null}
                         </div>
-                      ) : null}
+                      </button>
+                      <div className="flex shrink-0 items-center gap-2 pr-4 text-[10px] text-muted-foreground tabular-nums">
+                        <div className="flex flex-col items-end gap-0.5">
+                          <span title={formatDate(timestamp)}>{formatRelativeTime(timestamp)}</span>
+                          <span title={metaTitle}>{metaLabel}</span>
+                        </div>
+                        {hasVariants ? (
+                          <button
+                            type="button"
+                            onClick={() => onToggleVariants(item.key, i)}
+                            aria-expanded={variantsOpen}
+                            className="rounded-lg border border-border bg-card px-2 py-1 font-medium text-muted-foreground transition-colors hover:bg-card-alt hover:text-foreground"
+                            title="Choose session"
+                          >
+                            {variants.length} sessions
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
-                    <div className="flex shrink-0 flex-col items-end gap-0.5 text-[10px] text-muted-foreground tabular-nums">
-                      <span title={formatDate(timestamp)}>{formatRelativeTime(timestamp)}</span>
-                      <span title={metaTitle}>{metaLabel}</span>
-                    </div>
-                  </button>
+                    {hasVariants && variantsOpen ? (
+                      <div
+                        ref={expandedVariantsRef}
+                        className="max-h-52 overflow-y-auto border-t border-border/50 bg-card-alt/50 py-1 pl-10 pr-4"
+                      >
+                        {variants.map((variant, variantIndex) => {
+                          const variantTitle = getSessionTitle(variant.session);
+                          const variantProjectName = getProjectName(variant.session);
+                          const variantTime = sessionVariantTime(variant.session);
+                          const variantContext = [
+                            variantIndex === 0 ? "original" : `copy ${variantIndex + 1}`,
+                            variantProjectName,
+                            variant.session.source,
+                          ].filter(Boolean).join(" · ");
+
+                          return (
+                            <button
+                              key={variant.key}
+                              type="button"
+                              onClick={() => onSelectVariant(variant)}
+                              className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-1.5 text-left text-[11px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+                            >
+                              <span className="min-w-0">
+                                <span className="block truncate font-medium">
+                                  <HighlightText text={variantTitle} query={highlightQuery} />
+                                </span>
+                                <span className="block truncate text-[10px] text-muted-foreground/70">
+                                  {variantContext}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-[10px] tabular-nums" title={formatDate(variantTime)}>
+                                {formatRelativeTime(variantTime)}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
             </div>

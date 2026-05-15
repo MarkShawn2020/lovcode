@@ -5,12 +5,13 @@ import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-quer
 import type { Session } from "../types";
 
 type SessionStreamEvent =
+  | { kind: "cached"; sessions: Session[]; total: number }
   | { kind: "batch"; sessions: Session[] }
   | { kind: "done"; total: number };
 
 interface UseStreamedSessions {
   sessions: Session[];
-  /** True until the first batch arrives. */
+  /** True until the first cached preview or fresh batch arrives. */
   initialLoading: boolean;
   /** True while a backend refresh is running. */
   streaming: boolean;
@@ -147,6 +148,26 @@ function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClien
   channel.onmessage = (event) => {
     if (streamSeq !== seq || activeStreamId !== streamId) return;
 
+    if (event.kind === "cached") {
+      if (
+        !sessionSnapshot.hasCompleteSnapshot &&
+        sessionSnapshot.sessions.length === 0 &&
+        event.sessions.length > 0
+      ) {
+        patchSessionSnapshot({
+          sessions: event.sessions,
+          initialLoading: false,
+          hasCompleteSnapshot: false,
+        });
+      } else if (sessionSnapshot.initialLoading) {
+        patchSessionSnapshot({ initialLoading: false });
+      }
+      debugSessionStream(
+        `cached n=${event.sessions.length}, total=${event.total} at +${(performance.now() - t0).toFixed(0)}ms`,
+      );
+      return;
+    }
+
     if (event.kind === "batch") {
       accumulated.push(...event.sessions);
       if (publishBatches) {
@@ -175,7 +196,7 @@ function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClien
     maybeRunPendingRefresh(queryClient);
   };
 
-  invoke("list_all_sessions_streamed", { streamId, onEvent: channel })
+  invoke("list_all_sessions_streamed", { streamId, onEvent: channel, refresh: mode === "refresh" })
     .catch((err) => {
       console.warn("[sessions-stream] failed:", err);
       if (streamSeq !== seq || activeStreamId !== streamId) return;

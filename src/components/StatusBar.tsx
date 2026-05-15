@@ -6,7 +6,7 @@
  * - ANSI color code support
  * - Fallback to built-in status bar if no script configured
  */
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAtomValue } from "jotai";
 import { invoke } from "@/lib/tauri";
 import {
@@ -15,8 +15,10 @@ import {
   GlobeIcon,
   ClockIcon,
   SettingsIcon,
+  SearchIcon,
+  Loader2Icon,
 } from "lucide-react";
-import { useInvokeQuery } from "../hooks";
+import { useInvokeQuery, useSearchIndexBuildStatus } from "../hooks";
 import type { Project } from "../types";
 import { version as VERSION } from "../../package.json";
 import { AppVersionManager } from "./AppVersionManager";
@@ -170,6 +172,9 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
   const [scriptOutput, setScriptOutput] = useState<string | null>(null);
   const [homeDir, setHomeDir] = useState("");
   const [versionManagerOpen, setVersionManagerOpen] = useState(false);
+  const [indexDetailsOpen, setIndexDetailsOpen] = useState(false);
+  const indexAutoStartRef = useRef(false);
+  const { status: searchIndexStatus, progress: searchIndexProgress, start: startSearchIndexBuild } = useSearchIndexBuildStatus();
 
   // Load statusbar settings
   useEffect(() => {
@@ -196,6 +201,20 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
   }, []);
 
   const projectCount = ccProjects.length;
+
+  useEffect(() => {
+    if (!searchIndexStatus || indexAutoStartRef.current) return;
+    if (searchIndexStatus.state === "building") {
+      indexAutoStartRef.current = true;
+      return;
+    }
+
+    indexAutoStartRef.current = true;
+    const timer = window.setTimeout(() => {
+      startSearchIndexBuild(false).catch(() => {});
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [searchIndexStatus, startSearchIndexBuild]);
 
   // Fetch today's coding stats
   useEffect(() => {
@@ -316,6 +335,18 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
     );
   }, [scriptOutput]);
 
+  const searchIndexPercent = Math.round(searchIndexProgress * 100);
+  const searchIndexLabel = searchIndexStatus?.state === "building"
+    ? `Index ${searchIndexPercent}%`
+    : searchIndexStatus?.state === "error"
+      ? "Index error"
+      : searchIndexStatus?.state === "ready"
+        ? "Index ready"
+        : "Index";
+  const searchIndexTitle = searchIndexStatus?.state === "building"
+    ? `${searchIndexStatus.processedSessions}/${searchIndexStatus.totalSessions} sessions · ${searchIndexStatus.indexedMessages} messages`
+    : searchIndexStatus?.error || searchIndexLabel;
+
   // Script mode: show script output + settings gear
   if (settings?.enabled && scriptOutput !== null) {
     return (
@@ -353,6 +384,54 @@ export function StatusBar({ onOpenSettings }: StatusBarProps) {
             <div className="flex items-center gap-1" title={t("common.projects")}>
               <FolderIcon className="w-3 h-3" />
               <span>{projectCount}</span>
+            </div>
+            <div className="relative">
+              <button
+                type="button"
+                className={`flex items-center gap-1 rounded px-1 py-0.5 hover:bg-muted ${
+                  searchIndexStatus?.state === "building"
+                    ? "text-primary"
+                    : searchIndexStatus?.state === "error"
+                      ? "text-destructive"
+                      : ""
+                }`}
+                title={searchIndexTitle}
+                onClick={() => setIndexDetailsOpen((open) => !open)}
+              >
+                {searchIndexStatus?.state === "building" ? (
+                  <Loader2Icon className="w-3 h-3 animate-spin" />
+                ) : (
+                  <SearchIcon className="w-3 h-3" />
+                )}
+                <span>{searchIndexLabel}</span>
+              </button>
+              {indexDetailsOpen && (
+                <div className="absolute bottom-6 left-0 z-50 w-80 rounded-lg border border-border bg-popover p-3 text-xs text-popover-foreground shadow-lg">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-medium text-foreground">Search index</span>
+                    <span className="text-muted-foreground">{searchIndexLabel}</span>
+                  </div>
+                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
+                    <div
+                      className="h-full rounded-full bg-primary transition-[width]"
+                      style={{ width: `${searchIndexStatus?.state === "building" ? searchIndexPercent : 100}%` }}
+                    />
+                  </div>
+                  <div className="mt-2 space-y-1 text-muted-foreground">
+                    <div>{searchIndexStatus?.processedSessions ?? 0}/{searchIndexStatus?.totalSessions ?? 0} sessions</div>
+                    <div>{searchIndexStatus?.indexedMessages ?? 0} messages indexed</div>
+                    {searchIndexStatus?.currentProjectPath && (
+                      <div className="truncate">{searchIndexStatus.currentProjectPath}</div>
+                    )}
+                    {searchIndexStatus?.currentTitle && (
+                      <div className="truncate text-foreground">{searchIndexStatus.currentTitle}</div>
+                    )}
+                    {searchIndexStatus?.error && (
+                      <div className="text-destructive">{searchIndexStatus.error}</div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             {(todayStats.lines_added > 0 || todayStats.lines_deleted > 0) && (
               <div className="flex items-center gap-1" title={t("status.todayChanges")}>

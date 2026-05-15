@@ -1035,6 +1035,20 @@ export default function AgentWorkspacePage() {
   const routeProjectId = searchParams.get("projectId");
   const routeProjectPath = searchParams.get("projectPath");
   const routeSessionId = searchParams.get("sessionId");
+  const routeTargetMessageId = searchParams.get("messageId");
+  const routeTargetLineNumber = (() => {
+    const raw = searchParams.get("lineNumber");
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  })();
+  const routeTargetRoundIndex = (() => {
+    const raw = searchParams.get("roundIndex");
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  })();
+  const routeSearchHighlight = searchParams.get("q") ?? undefined;
   const routeSelectionKey = routeSessionId ? `${routeProjectId ?? ""}:${routeSessionId}` : null;
   const { data: projects = [] } = useInvokeQuery<Project[]>(["projects"], "list_projects");
   const {
@@ -1484,9 +1498,9 @@ export default function AgentWorkspacePage() {
   }, []);
 
   useEffect(() => {
-    if (!loaded || loadingHistorySessions) return;
+    if (!loaded) return;
     window.dispatchEvent(new Event("app:ready"));
-  }, [loaded, loadingHistorySessions]);
+  }, [loaded]);
 
   const activeSession = useMemo(
     () => {
@@ -3473,7 +3487,7 @@ export default function AgentWorkspacePage() {
         : false;
   const activeConversationCount = allWorkbenchRows.filter((row) => !row.archived).length;
   const archivedConversationCount = allWorkbenchRows.filter((row) => row.archived).length;
-  const conversationListInitialLoading = !loaded || !historySessionsComplete;
+  const conversationListInitialLoading = !loaded || (!historySessionsComplete && allWorkbenchRows.length === 0);
   const sessionsHeaderTitle = sessionListMode === "archived" ? t("common.archived") : activeLanguage === "zh" ? "历史对话" : "Sessions";
   const sessionsHeaderCount = conversationListInitialLoading
     ? null
@@ -4455,6 +4469,10 @@ export default function AgentWorkspacePage() {
             onFork={forkHistorySession}
             displayMode={standardDetailDisplayMode}
             onDisplayModeChange={(mode) => setHistorySessionDisplayMode(standardDetailSession, mode)}
+            targetMessageId={routeTargetMessageId}
+            targetLineNumber={routeTargetLineNumber}
+            targetRoundIndex={routeTargetRoundIndex}
+            highlight={routeSearchHighlight}
             pendingMessages={standardDetailPendingMessages}
             composerOverride={
               <AgentComposer
