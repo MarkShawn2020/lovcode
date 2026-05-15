@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.6
+
+### Patch Changes
+
+- a715c2d: 启动遮罩改为在 React 首帧后关闭，不再等待历史记录读取完成。
+
 ## 0.39.5
 
 ### Patch Changes
