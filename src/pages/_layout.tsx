@@ -105,14 +105,9 @@ export default function RootLayout() {
     } catch {}
   }, []);
 
-  // Splash dismissal:
-  //   - On /workbench (and "/" which redirects via HomePage), the workbench
-  //     controls the splash — wait until the session list is
-  //     actually ready, no jarring "empty shell" gap.
-  //   - On every other route, RootLayout dismisses immediately — those
-  //     pages don't have a multi-second initial query.
-  // The lastPath resume target may be anything, so we also skip dispatch
-  // on "/" because HomePage will redirect within a microtask.
+  // Non-workbench routes can still report readiness explicitly. The global
+  // splash is dismissed after React's first paint, so workbench data loading is
+  // shown inside the app shell instead of blocking startup.
   useEffect(() => {
     const p = location.pathname;
     if (p === "/" || p.startsWith("/workbench")) return;

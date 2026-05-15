@@ -51,6 +51,21 @@ const persister = createSyncStoragePersister({
   key: "lovcode:rq-cache",
 });
 
+const notifyAppReady = () => window.dispatchEvent(new Event("app:ready"));
+
+// Splash is a first-paint guard only. Chat history, sessions, and search index
+// work should render progressive loading states inside the app shell.
+window.addEventListener("app:ready", () => {
+  const splash = document.getElementById("splash");
+  if (!splash) return;
+  splash.classList.add("fade");
+  splash.addEventListener("transitionend", () => splash.remove(), { once: true });
+}, { once: true });
+
+// Safety net: if React render is delayed or a route never reports readiness,
+// drop the splash quickly so startup cannot get stuck behind data loading.
+setTimeout(notifyAppReady, 1500);
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <I18nProvider>
     <PersistQueryClientProvider
@@ -81,16 +96,4 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   </I18nProvider>,
 );
 
-// Splash fade-out is triggered explicitly by the first layout that mounts
-// (RootLayout / standalone pages dispatch "app:ready"). This avoids the
-// flash of "Loading app…" between the splash and the real shell.
-window.addEventListener("app:ready", () => {
-  const splash = document.getElementById("splash");
-  if (!splash) return;
-  splash.classList.add("fade");
-  splash.addEventListener("transitionend", () => splash.remove(), { once: true });
-}, { once: true });
-
-// Safety net: if no layout reports ready within 8s (e.g. unexpected error
-// boundary), drop the splash anyway so the user isn't stuck staring at it.
-setTimeout(() => window.dispatchEvent(new Event("app:ready")), 8000);
+requestAnimationFrame(() => requestAnimationFrame(notifyAppReady));
