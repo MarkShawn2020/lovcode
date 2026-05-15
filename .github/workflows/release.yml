@@ -153,6 +153,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-bin: "false"
 
       - run: pnpm install
 
