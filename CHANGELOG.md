@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.5
+
+### Patch Changes
+
+- 大幅优化了启动性能与搜索体验。
+
 ## 0.39.2
 
 ### Patch Changes
