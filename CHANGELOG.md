@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.39.9
+
+### Patch Changes
+
+- Improve MaaS runtime provider switching, preserve Codex archived-session search results, and use configured proxy settings for Lovcode update checks.
+
 ## 0.39.8
 
 ### Patch Changes

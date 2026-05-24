@@ -50,10 +50,49 @@ pub(crate) fn snapshot_provider_context(
     }
 
     let mut contexts = load_provider_contexts()?;
-    contexts.insert(
-        provider_key,
-        serde_json::json!({ "env": Value::Object(snapshot) }),
-    );
+    let entry = contexts
+        .entry(provider_key)
+        .or_insert_with(|| serde_json::json!({}));
+    let entry = entry.as_object_mut().ok_or("provider context not object")?;
+    entry.insert("env".to_string(), Value::Object(snapshot));
     save_provider_contexts(&contexts)?;
     Ok(())
+}
+
+pub(crate) fn restore_provider_context(
+    provider_key: String,
+    env_keys: Vec<String>,
+) -> Result<bool, String> {
+    let contexts = load_provider_contexts()?;
+    let Some(env) = contexts
+        .get(&provider_key)
+        .and_then(|value| value.get("env"))
+        .and_then(|value| value.as_object())
+    else {
+        return Ok(false);
+    };
+
+    if !env_keys
+        .iter()
+        .any(|key| env.get(key).and_then(|value| value.as_str()).is_some())
+    {
+        return Ok(false);
+    }
+
+    let patches = env_keys
+        .into_iter()
+        .map(|env_key| {
+            env.get(&env_key)
+                .and_then(|value| value.as_str())
+                .map(|env_value| SettingsPatch::SetEnv {
+                    env_key: env_key.clone(),
+                    env_value: env_value.to_string(),
+                    is_new: None,
+                })
+                .unwrap_or(SettingsPatch::DeleteEnv { env_key })
+        })
+        .collect();
+
+    apply_settings_patches(patches)?;
+    Ok(true)
 }

@@ -187,21 +187,39 @@ pub fn run() {
                 }
             });
 
-            // Start watching ~/.codex/sessions/ for Codex rollout changes.
+            // Start watching Codex rollout files and session_index.jsonl title changes.
             let app_handle = app.handle().clone();
             std::thread::spawn(move || {
+                let codex_dir = get_codex_dir();
                 let sessions_dir = get_codex_sessions_dir();
+                let archived_sessions_dir = get_codex_archived_sessions_dir();
+                let session_index_path = codex_dir.join("session_index.jsonl");
+                let sessions_dir_for_events = sessions_dir.clone();
+                let archived_sessions_dir_for_events = archived_sessions_dir.clone();
+                let session_index_path_for_events = session_index_path.clone();
+                if !codex_dir.exists() {
+                    let _ = fs::create_dir_all(&codex_dir);
+                }
                 if !sessions_dir.exists() {
                     let _ = fs::create_dir_all(&sessions_dir);
+                }
+                if !archived_sessions_dir.exists() {
+                    let _ = fs::create_dir_all(&archived_sessions_dir);
                 }
 
                 let (tx, rx) = channel();
                 let mut watcher: RecommendedWatcher =
                     match notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
                         if let Ok(event) = res {
-                            if event.kind.is_create()
-                                || event.kind.is_modify()
-                                || event.kind.is_remove()
+                            let is_relevant_path = event.paths.iter().any(|path| {
+                                path.starts_with(&sessions_dir_for_events)
+                                    || path.starts_with(&archived_sessions_dir_for_events)
+                                    || path == &session_index_path_for_events
+                            });
+                            if is_relevant_path
+                                && (event.kind.is_create()
+                                    || event.kind.is_modify()
+                                    || event.kind.is_remove())
                             {
                                 let _ = tx.send(());
                             }
@@ -213,6 +231,18 @@ pub fn run() {
 
                 if watcher
                     .watch(&sessions_dir, RecursiveMode::Recursive)
+                    .is_err()
+                {
+                    return;
+                }
+                if watcher
+                    .watch(&archived_sessions_dir, RecursiveMode::Recursive)
+                    .is_err()
+                {
+                    return;
+                }
+                if watcher
+                    .watch(&codex_dir, RecursiveMode::NonRecursive)
                     .is_err()
                 {
                     return;

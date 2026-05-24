@@ -657,6 +657,7 @@ export default function SearchOverlay() {
   const sessionStreamSeqRef = useRef(0);
   const resultsScrollRef = useRef<HTMLDivElement | null>(null);
   const expandedVariantsRef = useRef<HTMLDivElement | null>(null);
+  const searchIndexStateRef = useRef<string | undefined>(undefined);
   const {
     status: searchIndexStatus,
     progress: searchIndexProgress,
@@ -677,6 +678,7 @@ export default function SearchOverlay() {
     project: aggregateProjectItems(sourceResults).length,
   }), [sourceResults]);
   useEffect(() => {
+    searchIndexStateRef.current = searchIndexStatus?.state;
     setIndexBuilding(searchIndexStatus?.state === "building");
     setIndexReady(searchIndexStatus?.state === "ready");
   }, [searchIndexStatus]);
@@ -725,17 +727,13 @@ export default function SearchOverlay() {
     invoke("list_all_sessions_streamed", {
       streamId,
       onEvent: channel,
-      refresh: false,
+      refresh: options.rebuildIndex ?? false,
     }).catch(() => {});
 
-    if (
-      options.rebuildIndex &&
-      searchIndexStatus?.state !== "building" &&
-      searchIndexStatus?.state !== "ready"
-    ) {
+    if (options.rebuildIndex && searchIndexStateRef.current !== "building") {
       startSearchIndexBuild(false).catch(() => {});
     }
-  }, [searchIndexStatus?.state, startSearchIndexBuild]);
+  }, [startSearchIndexBuild]);
 
   // Make html/body transparent so only the floating card paints. This window
   // has `transparent: true` in tauri.conf.json — without this the canvas
@@ -1100,25 +1098,13 @@ export default function SearchOverlay() {
                 let metaLabel = `${s.rounds} rounds`;
                 let metaTitle = `${s.message_count} messages total`;
 
-                if (item.kind === "message") {
-                  label = messageHitLabel(item.hit);
-                  contextLabel = [title, projectName].filter(Boolean).join(" · ");
-                  metaLabel = lineMetaLabel(item.hit);
-                  metaTitle = item.hit.line_number
-                    ? `${item.hit.role || "message"} at transcript line ${item.hit.line_number}`
-                    : `${item.hit.role || "message"} message`;
-                } else if (item.kind === "round") {
-                  label = roundHitLabel(item.hit);
-                  contextLabel = [title, projectName].filter(Boolean).join(" · ");
-                  metaLabel = lineMetaLabel(item.hit);
-                  metaTitle = item.hit.round_prompt || `${s.message_count} messages total`;
-                } else if (item.kind === "session") {
+                if (item.kind === "session") {
                   const matchedRounds = item.matchedRoundCount ?? 0;
                   metaLabel = matchedRounds > 0
                     ? `${matchedRounds} matching round${matchedRounds === 1 ? "" : "s"}`
                     : `${s.rounds} rounds`;
                   metaTitle = `${s.message_count} messages total`;
-                } else {
+                } else if (item.kind === "project") {
                   label = item.projectName;
                   contextLabel = [item.projectPath, title].filter(Boolean).join(" · ");
                   metaLabel = `${item.matchedSessionCount} session${item.matchedSessionCount === 1 ? "" : "s"}`;

@@ -28,7 +28,14 @@ import {
 import { ProjectPathPicker, type ProjectPathOption } from "@/components/shared/ProjectPathPicker";
 import { useI18n, type TranslationKey, type TranslationValues } from "@/i18n";
 import type { AgentLaunchMode, AgentProvider, AgentRuntimeStatus } from "@/types/agent";
-import type { ClaudeSettings, MaasModel, MaasProvider, MaasRealtimeStatus, ZenmuxRealtimeModel } from "@/types";
+import type {
+  ClaudeSettings,
+  MaasModel,
+  MaasProvider,
+  MaasRealtimeStatus,
+  MaasRuntimeConfigStatus,
+  ZenmuxRealtimeModel,
+} from "@/types";
 import { labelForProvider } from "@/lib/agent/commands";
 import { normalizeClaudeCodeModelName } from "@/lib/agent/models";
 import { patchSettings } from "@/lib/settingsApi";
@@ -59,6 +66,12 @@ const PICKER_TRIGGER_SIZE_CLASS = {
 const PICKER_ICON_CLASS =
   "agent-composer-picker-icon flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground ring-1 ring-border/70";
 const CLI_PROVIDERS = new Set<AgentProvider>(["claude", "codex"]);
+const CLAUDE_CODE_MAAS_ENV_KEYS = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "CLAUDE_CODE_USE_OAUTH",
+];
 
 async function fetchAgentRuntimeStatus(provider: AgentProvider): Promise<AgentRuntimeStatus | null> {
   try {
@@ -114,6 +127,7 @@ export function AgentComposer({
   const [maasRealtimeStatus, setMaasRealtimeStatus] = useState<MaasRealtimeStatus | null>(null);
   const [maasRealtimeLoaded, setMaasRealtimeLoaded] = useState(false);
   const [settingsRaw, setSettingsRaw] = useState<ClaudeSettings["raw"] | undefined>(undefined);
+  const [runtimeConfigStatus, setRuntimeConfigStatus] = useState<MaasRuntimeConfigStatus | null>(null);
   const [maasLoaded, setMaasLoaded] = useState(false);
   const [runtimeStatuses, setRuntimeStatuses] = useState<Partial<Record<AgentProvider, AgentRuntimeStatus>>>({});
   const [runtimeStatusLoaded, setRuntimeStatusLoaded] = useState(false);
@@ -219,11 +233,13 @@ export function AgentComposer({
     Promise.all([
       invoke<MaasProvider[]>("get_maas_registry"),
       invoke<ClaudeSettings>("get_settings"),
+      invoke<MaasRuntimeConfigStatus>("get_maas_runtime_config_status").catch(() => null),
     ])
-      .then(([registry, settings]) => {
+      .then(([registry, settings, runtimeConfigStatus]) => {
         if (cancelled) return;
         setMaasRegistry(registry);
         setSettingsRaw(settings.raw);
+        setRuntimeConfigStatus(runtimeConfigStatus);
       })
       .catch(() => {
         if (cancelled) return;
@@ -324,10 +340,12 @@ export function AgentComposer({
       agentProvider={provider}
       registry={maasRegistry}
       settingsRaw={settingsRaw}
+      runtimeConfigStatus={runtimeConfigStatus}
       loaded={maasLoaded}
       realtimeStatus={maasRealtimeStatus}
       realtimeStatusLoaded={maasRealtimeLoaded}
       onSettingsRawChange={setSettingsRaw}
+      onRuntimeConfigStatusChange={setRuntimeConfigStatus}
       className="w-full max-w-full"
     />
   );
@@ -925,19 +943,23 @@ function ModelPicker({
   agentProvider,
   registry,
   settingsRaw,
+  runtimeConfigStatus,
   loaded,
   realtimeStatus,
   realtimeStatusLoaded,
   onSettingsRawChange,
+  onRuntimeConfigStatusChange,
   className,
 }: {
   agentProvider: AgentProvider;
   registry: MaasProvider[];
   settingsRaw: ClaudeSettings["raw"] | undefined;
+  runtimeConfigStatus: MaasRuntimeConfigStatus | null;
   loaded: boolean;
   realtimeStatus: MaasRealtimeStatus | null;
   realtimeStatusLoaded: boolean;
   onSettingsRawChange?: (raw: ClaudeSettings["raw"]) => void;
+  onRuntimeConfigStatusChange?: (status: MaasRuntimeConfigStatus | null) => void;
   className?: string;
 }) {
   const { t, translate } = useI18n();
@@ -948,11 +970,14 @@ function ModelPicker({
   const [switchError, setSwitchError] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const runtimeId = getMaasRuntimeForAgent(agentProvider);
-  const enabledProviderKeys = getConfiguredActiveProviderKeysByRuntime(settingsRaw);
-  const activeProviderKeys = getActiveProviderKeysByRuntime(settingsRaw, registry);
+  const enabledProviderKeys = runtimeConfigStatus?.activeProviders ?? getConfiguredActiveProviderKeysByRuntime(settingsRaw);
+  const activeProviderKeys = runtimeConfigStatus?.activeProviders ?? getActiveProviderKeysByRuntime(settingsRaw, registry);
   const activeProviderKey = runtimeId ? activeProviderKeys[runtimeId] ?? null : null;
   const activeProvider = activeProviderKey ? registry.find((item) => item.key === activeProviderKey) ?? null : null;
-  const activeModelName = activeProvider && runtimeId ? getActiveModelNameForRuntime(settingsRaw, activeProvider, runtimeId) : null;
+  const activeModelName =
+    activeProvider && runtimeId
+      ? runtimeConfigStatus?.activeModels?.[runtimeId] ?? getActiveModelNameForRuntime(settingsRaw, activeProvider, runtimeId)
+      : null;
   const activeModel = activeProvider && activeModelName ? findModelByName(activeProvider.models, activeModelName) : null;
   const triggerLabel =
     agentProvider === "terminal"
@@ -1055,6 +1080,14 @@ function ModelPicker({
 
     try {
       if (runtimeId === "codex") {
+        if (activeProviderKey && activeProviderKey !== provider.key) {
+          await invoke("snapshot_codex_maas_provider", {
+            providerKey: activeProviderKey,
+          }).catch(() => {
+            /* best-effort */
+          });
+        }
+
         await invoke("update_codex_maas_provider", {
           provider,
           model: trimmedModelName,
@@ -1063,26 +1096,39 @@ function ModelPicker({
         if (activeProviderKey && activeProviderKey !== provider.key) {
           await invoke("snapshot_provider_context", {
             providerKey: activeProviderKey,
-            envKeys: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
+            envKeys: CLAUDE_CODE_MAAS_ENV_KEYS,
           }).catch(() => {
             /* best-effort */
           });
         }
 
-        if (isOAuthProvider(provider)) {
-          await patchSettings([
-            { type: "setEnv", envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" },
-            { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: trimmedModelName },
-            { type: "deleteEnv", envKey: "ANTHROPIC_AUTH_TOKEN" },
-            { type: "deleteEnv", envKey: "ANTHROPIC_BASE_URL" },
-          ]);
+        const restored = await invoke<boolean>("restore_provider_context", {
+          providerKey: provider.key,
+          envKeys: CLAUDE_CODE_MAAS_ENV_KEYS,
+        }).catch(() => false);
+
+        if (restored) {
+          await patchSettings({
+            type: "setEnv",
+            envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            envValue: trimmedModelName,
+          });
         } else {
-          await patchSettings([
-            { type: "setEnv", envKey: "ANTHROPIC_BASE_URL", envValue: provider.baseUrl.trim() },
-            { type: "setEnv", envKey: "ANTHROPIC_AUTH_TOKEN", envValue: provider.authToken.trim() },
-            { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: trimmedModelName },
-            { type: "deleteEnv", envKey: "CLAUDE_CODE_USE_OAUTH" },
-          ]);
+          if (isOAuthProvider(provider)) {
+            await patchSettings([
+              { type: "setEnv", envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" },
+              { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: trimmedModelName },
+              { type: "deleteEnv", envKey: "ANTHROPIC_AUTH_TOKEN" },
+              { type: "deleteEnv", envKey: "ANTHROPIC_BASE_URL" },
+            ]);
+          } else {
+            await patchSettings([
+              { type: "setEnv", envKey: "ANTHROPIC_BASE_URL", envValue: provider.baseUrl.trim() },
+              { type: "setEnv", envKey: "ANTHROPIC_AUTH_TOKEN", envValue: provider.authToken.trim() },
+              { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: trimmedModelName },
+              { type: "deleteEnv", envKey: "CLAUDE_CODE_USE_OAUTH" },
+            ]);
+          }
         }
       }
 
@@ -1111,6 +1157,14 @@ function ModelPicker({
 
       const nextRaw = withLovcodeSettings(latestRaw, nextLovcodeSettings);
       onSettingsRawChange?.(nextRaw);
+      invoke<MaasRuntimeConfigStatus>("get_maas_runtime_config_status")
+        .then((status) => onRuntimeConfigStatusChange?.(status))
+        .catch(() => {
+          onRuntimeConfigStatusChange?.({
+            activeProviders: nextActiveProviders,
+            activeModels: nextLovcodeSettings.activeModels as Partial<Record<MaasRuntimeId, string>>,
+          });
+        });
       setSelectedProviderKey(provider.key);
       setSelectedModelName(trimmedModelName);
     } catch (error) {
@@ -1133,8 +1187,14 @@ function ModelPicker({
       onOpenChange={(open) => {
         setMenuOpen(open);
         if (!open) return;
-        invoke<ClaudeSettings>("get_settings")
-          .then((settings) => onSettingsRawChange?.(settings.raw))
+        Promise.all([
+          invoke<ClaudeSettings>("get_settings"),
+          invoke<MaasRuntimeConfigStatus>("get_maas_runtime_config_status").catch(() => null),
+        ])
+          .then(([settings, runtimeConfigStatus]) => {
+            onSettingsRawChange?.(settings.raw);
+            onRuntimeConfigStatusChange?.(runtimeConfigStatus);
+          })
           .catch(() => {
             /* best-effort refresh */
           });

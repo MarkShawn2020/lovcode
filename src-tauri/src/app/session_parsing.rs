@@ -1,5 +1,92 @@
 use super::*;
 
+#[derive(Debug, Deserialize)]
+struct CodexSessionIndexEntry {
+    id: Option<String>,
+    thread_name: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct CodexSessionIndexCache {
+    size: u64,
+    mtime: u64,
+    titles: HashMap<String, String>,
+}
+
+static CODEX_SESSION_INDEX_CACHE: LazyLock<Mutex<Option<CodexSessionIndexCache>>> =
+    LazyLock::new(|| Mutex::new(None));
+
+fn refresh_codex_session_index_cache() {
+    use std::io::{BufRead, BufReader};
+
+    let index_path = get_codex_dir().join("session_index.jsonl");
+    let metadata = fs::metadata(&index_path).ok();
+    let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+    let mtime = metadata
+        .as_ref()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    {
+        let cache = CODEX_SESSION_INDEX_CACHE.lock().unwrap();
+        if let Some(cache) = cache.as_ref() {
+            if cache.size == size && cache.mtime == mtime {
+                return;
+            }
+        }
+    }
+
+    let mut titles = HashMap::new();
+    if let Ok(file) = fs::File::open(&index_path) {
+        let reader = BufReader::new(file);
+        for line in reader.lines().map_while(Result::ok) {
+            let Ok(entry) = serde_json::from_str::<CodexSessionIndexEntry>(&line) else {
+                continue;
+            };
+            let (Some(id), Some(title)) = (entry.id, entry.thread_name) else {
+                continue;
+            };
+            let title = title.trim();
+            if !id.is_empty() && !title.is_empty() {
+                titles.insert(id, title.to_string());
+            }
+        }
+    }
+
+    *CODEX_SESSION_INDEX_CACHE.lock().unwrap() = Some(CodexSessionIndexCache {
+        size,
+        mtime,
+        titles,
+    });
+}
+
+pub(crate) fn codex_session_index_title(session_id: &str) -> Option<String> {
+    refresh_codex_session_index_cache();
+    CODEX_SESSION_INDEX_CACHE
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|cache| cache.titles.get(session_id).cloned())
+}
+
+pub(crate) fn apply_codex_session_index_title(session: &mut Session) {
+    if session.source != "codex" {
+        return;
+    }
+    if let Some(title) = codex_session_index_title(&session.id) {
+        session.title = Some(title);
+        session.title_source = Some("ai".to_string());
+    }
+}
+
+fn apply_codex_session_index_title_to_head(head: &mut CodexSessionHead) {
+    if let Some(title) = codex_session_index_title(&head.id) {
+        head.title = Some(title);
+    }
+}
+
 pub(crate) fn read_codex_session_head(path: &Path) -> CodexSessionHead {
     use std::collections::HashSet;
     use std::io::{BufRead, BufReader};
@@ -135,6 +222,7 @@ pub(crate) fn read_codex_session_head(path: &Path) -> CodexSessionHead {
         }
     }
 
+    apply_codex_session_index_title_to_head(&mut head);
     head
 }
 
@@ -228,6 +316,7 @@ pub(crate) fn read_codex_session_meta_lightweight(path: &Path) -> CodexSessionHe
         }
     }
 
+    apply_codex_session_index_title_to_head(&mut head);
     head
 }
 

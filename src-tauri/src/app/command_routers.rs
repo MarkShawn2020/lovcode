@@ -167,7 +167,16 @@ pub(crate) async fn maas_command(action: String, payload: Value) -> Result<Value
             command_arg(&payload, "provider_key")?,
             command_arg(&payload, "env_keys")?,
         )?),
+        "restore_provider_context" => command_json(restore_provider_context(
+            command_arg(&payload, "provider_key")?,
+            command_arg(&payload, "env_keys")?,
+        )?),
+        "snapshot_codex_maas_provider" => command_json(snapshot_codex_maas_provider(command_arg(
+            &payload,
+            "provider_key",
+        )?)?),
         "get_maas_registry" => command_json(get_maas_registry()?),
+        "get_maas_runtime_config_status" => command_json(get_maas_runtime_config_status()?),
         "get_maas_realtime_status" => command_json(get_maas_realtime_status().await?),
         "upsert_maas_provider" => {
             command_json(upsert_maas_provider(command_arg(&payload, "provider")?)?)

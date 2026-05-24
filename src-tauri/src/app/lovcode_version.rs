@@ -82,6 +82,51 @@ pub(crate) fn github_token() -> Option<String> {
         .filter(|token| !token.is_empty())
 }
 
+const LOVCODE_UPDATER_PROXY_KEYS: [&str; 4] =
+    ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
+
+fn normalize_lovcode_updater_proxy(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        Some(trimmed.to_string())
+    } else {
+        None
+    }
+}
+
+fn lovcode_updater_proxy_from_env() -> Option<String> {
+    LOVCODE_UPDATER_PROXY_KEYS.iter().find_map(|key| {
+        std::env::var(key)
+            .ok()
+            .and_then(|value| normalize_lovcode_updater_proxy(&value))
+    })
+}
+
+fn lovcode_updater_proxy_from_settings() -> Option<String> {
+    let settings = load_json_object_file(&get_claude_settings_path()).ok()?;
+    let disabled_env = load_disabled_env().unwrap_or_default();
+    let env = settings.get("env").and_then(|value| value.as_object())?;
+
+    LOVCODE_UPDATER_PROXY_KEYS.iter().find_map(|key| {
+        if disabled_env.contains_key(*key) {
+            return None;
+        }
+        env.get(*key)
+            .and_then(|value| value.as_str())
+            .and_then(normalize_lovcode_updater_proxy)
+    })
+}
+
+#[tauri::command]
+pub(crate) fn get_lovcode_updater_proxy() -> Option<String> {
+    lovcode_updater_proxy_from_env().or_else(lovcode_updater_proxy_from_settings)
+}
+
 pub(crate) async fn github_cli_token() -> Option<String> {
     let mut candidates = vec!["gh".to_string()];
     candidates.extend(

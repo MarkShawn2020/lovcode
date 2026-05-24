@@ -10,6 +10,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/tooltip";
 import { useInvokeMutation, useInvokeQuery } from "../../hooks";
 import { useI18n } from "../../i18n";
 import { cn } from "../../lib/utils";
@@ -22,13 +23,15 @@ const MAX_RECENT_RUNTIME_PATHS = 6;
 interface AgentCliRuntimeCardProps {
   provider: CliProvider;
   managementTitle?: string;
-  settingsSections?: Array<{
-    value: string;
-    title: string;
-    description?: string;
-    children: ReactNode;
-  }>;
+  settingsSections?: AgentRuntimeSettingsSection[];
   children?: ReactNode;
+}
+
+export interface AgentRuntimeSettingsSection {
+  value: string;
+  title: string;
+  description?: string;
+  children: ReactNode;
 }
 
 export const agentRuntimeStatusKey = (provider: CliProvider) => ["agentRuntimeStatus", provider] as const;
@@ -262,10 +265,22 @@ function SectionHeader({
   description?: string;
   className?: string;
 }) {
+  const titleElement = (
+    <p className={cn("text-xs font-medium text-foreground", description && "cursor-help")}>{title}</p>
+  );
+
   return (
     <div className={className}>
-      <p className="text-xs font-medium text-foreground">{title}</p>
-      {description && <p className="mt-0.5 text-xs leading-4 text-muted-foreground">{description}</p>}
+      {description ? (
+        <Tooltip delayDuration={500}>
+          <TooltipTrigger asChild>{titleElement}</TooltipTrigger>
+          <TooltipContent sideOffset={6} className="max-w-xs whitespace-pre-line text-left">
+            {description}
+          </TooltipContent>
+        </Tooltip>
+      ) : (
+        titleElement
+      )}
     </div>
   );
 }

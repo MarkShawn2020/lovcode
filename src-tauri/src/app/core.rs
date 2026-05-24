@@ -32,6 +32,7 @@ impl Tokenizer for JiebaTokenizer {
     fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
         let words = JIEBA.cut_for_search(text, true);
         let mut tokens = Vec::new();
+        let mut seen = std::collections::HashSet::new();
         let base = text.as_ptr() as usize;
 
         for word in words {
@@ -39,17 +40,89 @@ impl Tokenizer for JiebaTokenizer {
             if !word_str.is_empty() {
                 let start = word.as_ptr() as usize - base;
                 let end = start + word.len();
-                tokens.push(Token {
-                    offset_from: start,
-                    offset_to: end,
-                    position: tokens.len(),
-                    text: word_str.to_string(),
-                    position_length: 1,
-                });
+                push_search_token(&mut tokens, &mut seen, start, end, word_str);
             }
         }
+        add_dotted_ascii_tokens(text, &mut tokens, &mut seen);
 
         JiebaTokenStream { tokens, index: 0 }
+    }
+}
+
+fn push_search_token(
+    tokens: &mut Vec<Token>,
+    seen: &mut std::collections::HashSet<(usize, usize, String)>,
+    offset_from: usize,
+    offset_to: usize,
+    text: &str,
+) {
+    let token_text = text.trim();
+    if token_text.is_empty() || offset_from >= offset_to {
+        return;
+    }
+
+    let key = (offset_from, offset_to, token_text.to_string());
+    if !seen.insert(key) {
+        return;
+    }
+
+    tokens.push(Token {
+        offset_from,
+        offset_to,
+        position: tokens.len(),
+        text: token_text.to_string(),
+        position_length: 1,
+    });
+}
+
+fn is_dotted_ascii_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_')
+}
+
+fn is_dotted_ascii_candidate(value: &str) -> bool {
+    let mut segments = value.split('.').filter(|segment| !segment.is_empty());
+    let has_first = segments.next().is_some();
+    let has_second = segments.next().is_some();
+    has_first && has_second && value.bytes().any(|byte| byte.is_ascii_alphabetic())
+}
+
+fn add_dotted_ascii_tokens(
+    text: &str,
+    tokens: &mut Vec<Token>,
+    seen: &mut std::collections::HashSet<(usize, usize, String)>,
+) {
+    let bytes = text.as_bytes();
+    let mut index = 0usize;
+
+    while index < bytes.len() {
+        while index < bytes.len() && !is_dotted_ascii_byte(bytes[index]) {
+            index += 1;
+        }
+        let run_start = index;
+        while index < bytes.len() && is_dotted_ascii_byte(bytes[index]) {
+            index += 1;
+        }
+        let run_end = index;
+        if run_start >= run_end {
+            continue;
+        }
+
+        let mut start = run_start;
+        let mut end = run_end;
+        while start < end && matches!(bytes[start], b'.' | b'-' | b'_') {
+            start += 1;
+        }
+        while start < end && matches!(bytes[end - 1], b'.' | b'-' | b'_') {
+            end -= 1;
+        }
+        if start >= end {
+            continue;
+        }
+
+        let candidate = &text[start..end];
+        if is_dotted_ascii_candidate(candidate) {
+            push_search_token(tokens, seen, start, end, candidate);
+        }
     }
 }
 
@@ -74,6 +147,30 @@ impl TokenStream for JiebaTokenStream {
 
     fn token_mut(&mut self) -> &mut Token {
         &mut self.tokens[self.index - 1]
+    }
+}
+
+#[cfg(test)]
+mod search_tokenizer_tests {
+    use super::*;
+
+    #[test]
+    fn dotted_ascii_tokens_preserve_domains_and_asset_names() {
+        let mut tokens = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        add_dotted_ascii_tokens(
+            "访问 https://voca.lovstudio.ai/ 和 index-BStkyt_B.js.",
+            &mut tokens,
+            &mut seen,
+        );
+
+        let texts = tokens
+            .into_iter()
+            .map(|token| token.text)
+            .collect::<Vec<_>>();
+        assert!(texts.contains(&"voca.lovstudio.ai".to_string()));
+        assert!(texts.contains(&"index-BStkyt_B.js".to_string()));
     }
 }
 

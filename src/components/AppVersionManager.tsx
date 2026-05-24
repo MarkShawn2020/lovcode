@@ -186,7 +186,10 @@ export function AppVersionManager({ open, onOpenChange }: AppVersionManagerProps
           </div>
 
           {error && (
-            <p className="rounded-lg border border-border bg-muted p-2 text-xs text-destructive">
+            <p
+              className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-muted p-2 text-xs text-destructive [overflow-wrap:anywhere]"
+              title={error}
+            >
               {error}
             </p>
           )}

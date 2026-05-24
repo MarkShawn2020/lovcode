@@ -14,7 +14,7 @@ import type { AgentRuntimeStatus } from "../../types/agent";
 import { queryKeys, useInvokeMutation, useInvokeQuery, useQueryClient } from "../../hooks";
 import { useI18n, type TranslationKey } from "../../i18n";
 import { cn } from "../../lib/utils";
-import { AgentCliRuntimeCard, agentRuntimeStatusKey } from "./AgentCliRuntimeCard";
+import { AgentCliRuntimeCard, agentRuntimeStatusKey, type AgentRuntimeSettingsSection } from "./AgentCliRuntimeCard";
 import { getInstallLogClassName, getInstallLogDisplayText } from "./installLogDisplay";
 import {
   getDefaultNpmInstallRegistry,
@@ -68,7 +68,11 @@ function VersionChoice({
   );
 }
 
-export function CodexCliVersionSection() {
+interface CodexCliVersionSectionProps {
+  settingsSections?: AgentRuntimeSettingsSection[];
+}
+
+export function CodexCliVersionSection({ settingsSections = [] }: CodexCliVersionSectionProps) {
   const { activeLanguage, t } = useI18n();
   const {
     data: versionInfo,
@@ -264,6 +268,21 @@ export function CodexCliVersionSection() {
     selectedVersion === "latest" || availableVersions.some((version) => version.version === selectedVersion);
   const canInstallSelectedVersion =
     hasInstallableSelection && !installing && !isInstalledSelection(selectedVersion, selectedInstallType);
+  const autoUpdateSection: AgentRuntimeSettingsSection[] = versionInfo && !isNotInstalled ? [
+    {
+      value: "auto-update",
+      title: t("agentRuntime.autoUpdate"),
+      children: (
+        <div className="flex h-8 items-center justify-end">
+          <Switch
+            checked={autoUpdateEnabled ?? !versionInfo.autoupdater_disabled}
+            onCheckedChange={handleSetAutoupdater}
+            disabled={installing || autoupdaterMutation.isPending}
+          />
+        </div>
+      ),
+    },
+  ] : [];
 
   const handleInstallSelectedVersion = () => {
     if (!canInstallSelectedVersion) return;
@@ -275,21 +294,7 @@ export function CodexCliVersionSection() {
     <AgentCliRuntimeCard
       provider="codex"
       managementTitle={t("agentRuntime.currentVersion")}
-      settingsSections={versionInfo && !isNotInstalled ? [
-        {
-          value: "auto-update",
-          title: t("agentRuntime.autoUpdate"),
-          children: (
-            <div className="flex h-8 items-center justify-end">
-              <Switch
-                checked={autoUpdateEnabled ?? !versionInfo.autoupdater_disabled}
-                onCheckedChange={handleSetAutoupdater}
-                disabled={installing || autoupdaterMutation.isPending}
-              />
-            </div>
-          ),
-        },
-      ] : undefined}
+      settingsSections={[...settingsSections, ...autoUpdateSection]}
     >
       <Popover className="block w-full" open={versionPopoverOpen} onOpenChange={setVersionPopoverOpen}>
         <PopoverTrigger

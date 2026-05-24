@@ -1,5 +1,7 @@
 use super::*;
 
+const ZENMUX_CODEX_BASE_URL: &str = "https://zenmux.ai/api/v1";
+
 // ============================================================================
 // MaaS Registry Commands
 // ============================================================================
@@ -62,6 +64,69 @@ pub(crate) fn delete_maas_provider(key: String) -> Result<Vec<MaasProvider>, Str
     registry.retain(|p| p.key != key);
     persist_maas_registry(&registry)?;
     Ok(registry)
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct MaasRuntimeConfigStatus {
+    pub(crate) active_providers: HashMap<String, String>,
+    pub(crate) active_models: HashMap<String, String>,
+}
+
+pub(crate) fn get_maas_runtime_config_status() -> Result<MaasRuntimeConfigStatus, String> {
+    let registry = load_maas_registry()?;
+    let mut active_providers = HashMap::new();
+    let mut active_models = HashMap::new();
+
+    let settings = load_json_object_file(&get_claude_settings_path()).unwrap_or(Value::Null);
+    if settings_env_truthy(&settings, "CLAUDE_CODE_USE_OAUTH")
+        && registry
+            .iter()
+            .any(|provider| provider.key == "anthropic-subscription")
+    {
+        active_providers.insert(
+            "claude-code".to_string(),
+            "anthropic-subscription".to_string(),
+        );
+    } else if let Some(base_url) = settings_env_string(&settings, "ANTHROPIC_BASE_URL") {
+        if let Some(provider) = find_provider_by_base_url(&registry, &base_url) {
+            active_providers.insert("claude-code".to_string(), provider.key.clone());
+        }
+    }
+
+    if let Some(model) = settings_env_string(&settings, "ANTHROPIC_DEFAULT_SONNET_MODEL") {
+        active_models.insert("claude-code".to_string(), model);
+    }
+
+    if let Ok((_, doc)) = read_codex_maas_config_doc() {
+        if let Some(provider_id) = codex_maas_config_root_str(&doc, "model_provider") {
+            let provider_key = registry
+                .iter()
+                .find(|provider| codex_maas_provider_matches(provider, provider_id))
+                .map(|provider| provider.key.clone())
+                .or_else(|| {
+                    codex_maas_config_provider_str(&doc, provider_id, "base_url").and_then(
+                        |base_url| {
+                            find_provider_by_base_url(&registry, base_url)
+                                .map(|provider| provider.key.clone())
+                        },
+                    )
+                });
+
+            if let Some(provider_key) = provider_key {
+                active_providers.insert("codex".to_string(), provider_key);
+            }
+        }
+
+        if let Some(model) = codex_maas_config_root_str(&doc, "model") {
+            active_models.insert("codex".to_string(), model.to_string());
+        }
+    }
+
+    Ok(MaasRuntimeConfigStatus {
+        active_providers,
+        active_models,
+    })
 }
 
 pub(crate) async fn fetch_claude_realtime_status(
@@ -448,6 +513,252 @@ pub(crate) fn codex_maas_provider_id(provider_key: &str) -> String {
     format!("lovcode-{}", suffix)
 }
 
+fn normalize_maas_base_url(value: &str) -> String {
+    value.trim().trim_end_matches('/').to_ascii_lowercase()
+}
+
+fn is_zenmux_base_url(value: &str) -> bool {
+    normalize_maas_base_url(value).contains("zenmux.ai")
+}
+
+fn is_zenmux_maas_provider(provider: &MaasProvider) -> bool {
+    provider.key.eq_ignore_ascii_case("zenmux") || is_zenmux_base_url(&provider.base_url)
+}
+
+fn codex_maas_base_url(provider: &MaasProvider) -> String {
+    if is_zenmux_maas_provider(provider) {
+        ZENMUX_CODEX_BASE_URL.to_string()
+    } else {
+        provider.base_url.trim().trim_end_matches('/').to_string()
+    }
+}
+
+fn codex_maas_wire_api(provider: &MaasProvider) -> &'static str {
+    if is_zenmux_maas_provider(provider) {
+        "responses"
+    } else {
+        "chat"
+    }
+}
+
+fn codex_maas_provider_matches(provider: &MaasProvider, provider_id: &str) -> bool {
+    codex_maas_provider_id(&provider.key) == provider_id || provider.key == provider_id
+}
+
+fn find_provider_by_base_url<'a>(
+    registry: &'a [MaasProvider],
+    base_url: &str,
+) -> Option<&'a MaasProvider> {
+    let normalized = normalize_maas_base_url(base_url);
+    if normalized.is_empty() {
+        return None;
+    }
+    registry.iter().find(|provider| {
+        normalize_maas_base_url(&provider.base_url) == normalized
+            || (is_zenmux_base_url(&provider.base_url) && is_zenmux_base_url(base_url))
+    })
+}
+
+fn settings_env_string(settings: &Value, key: &str) -> Option<String> {
+    settings
+        .get("env")
+        .and_then(|env| env.get(key))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
+}
+
+fn settings_env_truthy(settings: &Value, key: &str) -> bool {
+    let Some(value) = settings_env_string(settings, key) else {
+        return false;
+    };
+    !matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "0" | "false" | "off" | "no"
+    )
+}
+
+fn read_codex_maas_config_doc() -> Result<(PathBuf, toml_edit::DocumentMut), String> {
+    let config_path = get_codex_config_path();
+    let content = if config_path.exists() {
+        fs::read_to_string(&config_path).map_err(|e| e.to_string())?
+    } else {
+        String::new()
+    };
+    let doc = if content.trim().is_empty() {
+        toml_edit::DocumentMut::new()
+    } else {
+        content
+            .parse::<toml_edit::DocumentMut>()
+            .map_err(|e| format!("parse Codex config.toml: {}", e))?
+    };
+    Ok((config_path, doc))
+}
+
+fn codex_maas_config_root_str<'a>(doc: &'a toml_edit::DocumentMut, key: &str) -> Option<&'a str> {
+    doc.as_table().get(key).and_then(|item| item.as_str())
+}
+
+fn codex_maas_config_provider_item<'a>(
+    doc: &'a toml_edit::DocumentMut,
+    provider_id: &str,
+) -> Option<&'a toml_edit::Item> {
+    doc.as_table()
+        .get("model_providers")?
+        .as_table()?
+        .get(provider_id)
+}
+
+fn codex_maas_config_provider_str<'a>(
+    doc: &'a toml_edit::DocumentMut,
+    provider_id: &str,
+    key: &str,
+) -> Option<&'a str> {
+    codex_maas_config_provider_item(doc, provider_id)?
+        .as_table()?
+        .get(key)?
+        .as_str()
+}
+
+fn codex_maas_active_provider_id(
+    doc: &toml_edit::DocumentMut,
+    provider_key: &str,
+) -> Option<String> {
+    let active_provider_id = codex_maas_config_root_str(doc, "model_provider")?;
+    let canonical_provider_id = codex_maas_provider_id(provider_key);
+    if active_provider_id == canonical_provider_id.as_str() || active_provider_id == provider_key {
+        Some(active_provider_id.to_string())
+    } else {
+        None
+    }
+}
+
+fn codex_maas_provider_name(provider: &MaasProvider) -> String {
+    if provider.label.trim().is_empty() {
+        provider.key.clone()
+    } else {
+        provider.label.trim().to_string()
+    }
+}
+
+fn upsert_codex_maas_provider_table(
+    doc: &mut toml_edit::DocumentMut,
+    provider_id: &str,
+    provider: &MaasProvider,
+    base_url: &str,
+    auth_token: &str,
+) {
+    if !doc.as_table().contains_key("model_providers") || !doc["model_providers"].is_table() {
+        doc["model_providers"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    if !doc["model_providers"][provider_id].is_table() {
+        doc["model_providers"][provider_id] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    if let Some(provider_table) = doc["model_providers"][provider_id].as_table_mut() {
+        provider_table["name"] = toml_edit::value(codex_maas_provider_name(provider));
+        provider_table["base_url"] = toml_edit::value(base_url.to_string());
+        provider_table["wire_api"] = toml_edit::value(codex_maas_wire_api(provider));
+        provider_table["experimental_bearer_token"] = toml_edit::value(auth_token.to_string());
+        provider_table["requires_openai_auth"] = toml_edit::value(false);
+        provider_table.remove("env_key");
+    }
+}
+
+pub(crate) fn snapshot_codex_maas_provider(provider_key: String) -> Result<(), String> {
+    let (_, doc) = read_codex_maas_config_doc()?;
+    let mut snapshot = serde_json::Map::new();
+    let Some(provider_id) = codex_maas_active_provider_id(&doc, &provider_key) else {
+        return Ok(());
+    };
+
+    snapshot.insert(
+        "modelProvider".to_string(),
+        Value::String(provider_id.clone()),
+    );
+
+    if let Some(model) = codex_maas_config_root_str(&doc, "model") {
+        snapshot.insert("model".to_string(), Value::String(model.to_string()));
+    }
+
+    if let Some(provider_item) = codex_maas_config_provider_item(&doc, provider_id.as_str()) {
+        let mut provider_doc = toml_edit::DocumentMut::new();
+        provider_doc["model_providers"][provider_id.as_str()] = provider_item.clone();
+        snapshot.insert(
+            "providerToml".to_string(),
+            Value::String(provider_doc.to_string()),
+        );
+    }
+
+    if snapshot.is_empty() {
+        return Ok(());
+    }
+
+    let mut contexts = load_provider_contexts()?;
+    let entry = contexts
+        .entry(provider_key)
+        .or_insert_with(|| serde_json::json!({}));
+    let entry = entry.as_object_mut().ok_or("provider context not object")?;
+    entry.insert("codex".to_string(), Value::Object(snapshot));
+    save_provider_contexts(&contexts)?;
+    Ok(())
+}
+
+fn restore_codex_maas_provider(provider_key: &str) -> Result<bool, String> {
+    let contexts = load_provider_contexts()?;
+    let Some(snapshot) = contexts
+        .get(provider_key)
+        .and_then(|value| value.get("codex"))
+        .and_then(|value| value.as_object())
+    else {
+        return Ok(false);
+    };
+
+    let Some(provider_toml) = snapshot
+        .get("providerToml")
+        .and_then(|value| value.as_str())
+    else {
+        return Ok(false);
+    };
+
+    let fallback_provider_id = codex_maas_provider_id(provider_key);
+    let provider_id = snapshot
+        .get("modelProvider")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(fallback_provider_id.as_str())
+        .to_string();
+    let provider_doc = provider_toml
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|e| format!("parse saved Codex provider context: {}", e))?;
+    let Some(provider_item) =
+        codex_maas_config_provider_item(&provider_doc, provider_id.as_str()).cloned()
+    else {
+        return Ok(false);
+    };
+
+    let (config_path, mut doc) = read_codex_maas_config_doc()?;
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    if !doc.as_table().contains_key("model_providers") || !doc["model_providers"].is_table() {
+        doc["model_providers"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+
+    doc["model_provider"] = toml_edit::value(provider_id.clone());
+    doc["model_providers"][provider_id.as_str()] = provider_item;
+
+    if let Some(model) = snapshot.get("model").and_then(|value| value.as_str()) {
+        doc["model"] = toml_edit::value(model.to_string());
+    } else {
+        doc.as_table_mut().remove("model");
+    }
+
+    fs::write(&config_path, doc.to_string()).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
 pub(crate) fn update_codex_maas_provider(
     provider: MaasProvider,
     model: String,
@@ -456,7 +767,7 @@ pub(crate) fn update_codex_maas_provider(
         return Err("Anthropic Subscription OAuth is only available for Claude Code".to_string());
     }
 
-    let base_url = provider.base_url.trim().trim_end_matches('/').to_string();
+    let base_url = codex_maas_base_url(&provider);
     if base_url.is_empty() {
         return Err("Codex requires a provider Base URL".to_string());
     }
@@ -466,47 +777,48 @@ pub(crate) fn update_codex_maas_provider(
         return Err("Codex requires a provider token".to_string());
     }
 
-    let config_path = get_codex_config_path();
+    let model = model.trim().to_string();
+    if restore_codex_maas_provider(&provider.key)? {
+        let (config_path, mut doc) = read_codex_maas_config_doc()?;
+        if let Some(parent) = config_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let provider_id = codex_maas_config_root_str(&doc, "model_provider")
+            .map(str::to_string)
+            .unwrap_or_else(|| codex_maas_provider_id(&provider.key));
+        if !model.is_empty() {
+            doc["model"] = toml_edit::value(model);
+        }
+        upsert_codex_maas_provider_table(
+            &mut doc,
+            provider_id.as_str(),
+            &provider,
+            &base_url,
+            &auth_token,
+        );
+        fs::write(&config_path, doc.to_string()).map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    let (config_path, mut doc) = read_codex_maas_config_doc()?;
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
 
-    let content = if config_path.exists() {
-        fs::read_to_string(&config_path).map_err(|e| e.to_string())?
-    } else {
-        String::new()
-    };
-    let mut doc = if content.trim().is_empty() {
-        toml_edit::DocumentMut::new()
-    } else {
-        content
-            .parse::<toml_edit::DocumentMut>()
-            .map_err(|e| format!("parse Codex config.toml: {}", e))?
-    };
-
     let provider_id = codex_maas_provider_id(&provider.key);
     doc["model_provider"] = toml_edit::value(provider_id.clone());
 
-    let model = model.trim();
     if !model.is_empty() {
-        doc["model"] = toml_edit::value(model.to_string());
+        doc["model"] = toml_edit::value(model);
     }
 
-    if !doc.as_table().contains_key("model_providers") || !doc["model_providers"].is_table() {
-        doc["model_providers"] = toml_edit::Item::Table(toml_edit::Table::new());
-    }
-
-    let mut provider_table = toml_edit::Table::new();
-    provider_table["name"] = toml_edit::value(if provider.label.trim().is_empty() {
-        provider.key.clone()
-    } else {
-        provider.label.trim().to_string()
-    });
-    provider_table["base_url"] = toml_edit::value(base_url);
-    provider_table["wire_api"] = toml_edit::value("chat");
-    provider_table["experimental_bearer_token"] = toml_edit::value(auth_token);
-    provider_table["requires_openai_auth"] = toml_edit::value(false);
-    doc["model_providers"][provider_id.as_str()] = toml_edit::Item::Table(provider_table);
+    upsert_codex_maas_provider_table(
+        &mut doc,
+        provider_id.as_str(),
+        &provider,
+        &base_url,
+        &auth_token,
+    );
 
     fs::write(&config_path, doc.to_string()).map_err(|e| e.to_string())?;
     Ok(())

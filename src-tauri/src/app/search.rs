@@ -153,7 +153,7 @@ static SEARCH_INDEX_BUILD_STATUS: LazyLock<Mutex<SearchIndexBuildStatus>> =
 static SEARCH_INDEX_BUILD_RUNNING: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-const SEARCH_INDEX_MANIFEST_VERSION: u32 = 4;
+const SEARCH_INDEX_MANIFEST_VERSION: u32 = 5;
 const SEARCH_INDEX_EVENT: &str = "search-index:build";
 const REQUIRED_SEARCH_INDEX_FIELDS: &[&str] = &[
     "title",

@@ -99,7 +99,8 @@ fn build_npm_global_install_command(
     // This avoids EACCES on systems without nvm/volta where npm prefix is /usr/local.
     Ok(format!(
         r#"npm_prefix="$(npm config get prefix 2>/dev/null || echo /usr/local)"; if [ -w "$npm_prefix/lib" ] 2>/dev/null; then npm install -g --force{registry} {pkg}; else echo "npm prefix $npm_prefix not writable, installing to ~/.local"; mkdir -p "$HOME/.local"; npm install -g --force --prefix "$HOME/.local"{registry} {pkg}; fi"#,
-        registry = registry_arg, pkg = package
+        registry = registry_arg,
+        pkg = package
     ))
 }
 

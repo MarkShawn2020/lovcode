@@ -56,7 +56,7 @@ pub(crate) struct SessionsCache {
     pub(crate) entries: Vec<SessionCacheEntry>,
 }
 
-pub(crate) const SESSIONS_CACHE_VERSION: u32 = 5;
+pub(crate) const SESSIONS_CACHE_VERSION: u32 = 6;
 
 pub(crate) fn sessions_cache_path() -> PathBuf {
     get_lovstudio_dir().join("sessions-cache.json")
@@ -97,7 +97,8 @@ pub(crate) fn save_sessions_cache(entries: Vec<SessionCacheEntry>) {
 fn load_cached_sessions_snapshot() -> Vec<Session> {
     let mut by_id: std::collections::HashMap<String, Session> = std::collections::HashMap::new();
     for entry in load_sessions_cache().into_values() {
-        let session = entry.session;
+        let mut session = entry.session;
+        apply_codex_session_index_title(&mut session);
         let key = if session.source == "codex" {
             format!("codex:{}", session.id)
         } else {
@@ -199,6 +200,11 @@ fn collect_lightweight_sessions_snapshot() -> Vec<Session> {
             .map(|d| d.as_secs())
             .or(head.created_at)
             .unwrap_or(last_modified);
+        let title_source = if head.title.is_some() {
+            Some("ai".to_string())
+        } else {
+            None
+        };
         sessions.push(Session {
             id: head.id,
             project_id: encode_project_path(&cwd),
@@ -206,7 +212,7 @@ fn collect_lightweight_sessions_snapshot() -> Vec<Session> {
             title: head.title,
             summary: None,
             last_prompt: None,
-            title_source: None,
+            title_source,
             rounds: 0,
             message_count: 0,
             created_at,
@@ -610,7 +616,8 @@ pub(crate) fn compute_all_sessions() -> Vec<Session> {
             let path_key = path.to_string_lossy().into_owned();
             if let Some(entry) = cache.get(&path_key) {
                 if entry.size == size && entry.mtime == mtime {
-                    let s = entry.session.clone();
+                    let mut s = entry.session.clone();
+                    apply_codex_session_index_title(&mut s);
                     new_cache_entries.lock().unwrap().push(SessionCacheEntry {
                         path: path_key,
                         size,

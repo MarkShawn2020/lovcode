@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { atom, useAtom } from "jotai";
-import { check, type Update } from "@tauri-apps/plugin-updater";
+import { check, type CheckOptions, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { Button } from "./ui/button";
 import { Progress } from "./ui/progress";
@@ -40,6 +40,10 @@ export function UpdateChecker() {
     queryKeys.lovcodeAutoupdaterEnabled,
     "get_lovcode_autoupdater_enabled",
   );
+  const { data: updaterProxy = null, isLoading: loadingUpdaterProxy } = useInvokeQuery<string | null>(
+    queryKeys.lovcodeUpdaterProxy,
+    "get_lovcode_updater_proxy",
+  );
 
   const checkId = useRef(0);
   const initialCheckStartedRef = useRef(false);
@@ -70,7 +74,11 @@ export function UpdateChecker() {
       });
     }, CHECK_TIMEOUT_MS);
 
-    check({ timeout: CHECK_TIMEOUT_MS })
+    const checkOptions: CheckOptions = updaterProxy
+      ? { timeout: CHECK_TIMEOUT_MS, proxy: updaterProxy }
+      : { timeout: CHECK_TIMEOUT_MS };
+
+    check(checkOptions)
       .then((u) => {
         window.clearTimeout(timeout);
         if (checkId.current !== currentCheckId) return;
@@ -87,16 +95,16 @@ export function UpdateChecker() {
         console.error("[UpdateChecker]", e);
         setState({ stage: "error", update: null, error: msg });
       });
-  }, [autoUpdateEnabled, setState]);
+  }, [autoUpdateEnabled, setState, updaterProxy]);
 
   const { stage, update, error } = state;
 
   useEffect(() => {
-    if (!loadingAutoUpdate && !initialCheckStartedRef.current) {
+    if (!loadingAutoUpdate && !loadingUpdaterProxy && !initialCheckStartedRef.current) {
       initialCheckStartedRef.current = true;
       runCheck(false);
     }
-  }, [loadingAutoUpdate, runCheck]);
+  }, [loadingAutoUpdate, loadingUpdaterProxy, runCheck]);
 
   const handleUpdate = useCallback(async () => {
     if (!update) return;
@@ -167,10 +175,10 @@ export function UpdateChecker() {
       : t("updates.notificationAvailable");
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-80 bg-card border border-border rounded-xl shadow-lg p-4 space-y-3">
+    <div className="fixed bottom-4 right-4 z-50 w-80 max-w-[calc(100vw-2rem)] overflow-hidden bg-card border border-border rounded-xl shadow-lg p-4 space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-foreground">
+          <p className="font-serif text-sm font-semibold text-foreground">
             {title}
           </p>
           {update && (
@@ -179,10 +187,11 @@ export function UpdateChecker() {
             </p>
           )}
         </div>
-        {stage === "available" && (
+        {stage !== "downloading" && (
           <button
+            type="button"
             onClick={() => setDismissed(true)}
-            className="text-muted-foreground hover:text-foreground shrink-0"
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground"
             aria-label={t("updates.dismissNotification")}
           >
             <X className="w-4 h-4" />
@@ -200,7 +209,12 @@ export function UpdateChecker() {
       )}
 
       {stage === "error" && (
-        <p className="text-xs text-destructive">{error}</p>
+        <p
+          className="max-h-24 overflow-y-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-muted px-2 py-1.5 text-xs text-destructive [overflow-wrap:anywhere]"
+          title={error}
+        >
+          {error}
+        </p>
       )}
 
       <div className="flex justify-end gap-2">

@@ -36,6 +36,11 @@ export interface MaasProvider {
 
 export type MaasRegistry = MaasProvider[];
 
+export interface MaasRuntimeConfigStatus {
+  activeProviders: Partial<Record<"claude-code" | "codex", string>>;
+  activeModels: Partial<Record<"claude-code" | "codex", string>>;
+}
+
 export interface ClaudeStatusComponent {
   id: string;
   name: string;

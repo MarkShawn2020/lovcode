@@ -12,7 +12,7 @@ import type { AgentRuntimeStatus } from "../../types/agent";
 import { queryKeys, useInvokeMutation, useInvokeQuery, useQueryClient } from "../../hooks";
 import { useI18n, type TranslationKey } from "../../i18n";
 import { cn } from "../../lib/utils";
-import { AgentCliRuntimeCard, agentRuntimeStatusKey } from "./AgentCliRuntimeCard";
+import { AgentCliRuntimeCard, agentRuntimeStatusKey, type AgentRuntimeSettingsSection } from "./AgentCliRuntimeCard";
 import {
   getDefaultNpmInstallRegistry,
   NpmInstallSourceControl,
@@ -65,7 +65,11 @@ function VersionChoice({
   );
 }
 
-export function ClaudeCodeVersionSection() {
+interface ClaudeCodeVersionSectionProps {
+  settingsSections?: AgentRuntimeSettingsSection[];
+}
+
+export function ClaudeCodeVersionSection({ settingsSections = [] }: ClaudeCodeVersionSectionProps) {
   const { activeLanguage, t } = useI18n();
   const {
     data: versionInfo,
@@ -218,6 +222,21 @@ export function ClaudeCodeVersionSection() {
     selectedVersion === "latest" || availableVersions.some((version) => version.version === selectedVersion);
   const canInstallSelectedVersion =
     hasInstallableSelection && !installing && !isInstalledSelection(selectedVersion, selectedInstallType);
+  const autoUpdateSection: AgentRuntimeSettingsSection[] = versionInfo && !isNotInstalled ? [
+    {
+      value: "auto-update",
+      title: t("agentRuntime.autoUpdate"),
+      children: (
+        <div className="flex h-8 items-center justify-end">
+          <Switch
+            checked={autoUpdateEnabled ?? !versionInfo.autoupdater_disabled}
+            onCheckedChange={handleSetAutoupdater}
+            disabled={installing || autoupdaterMutation.isPending}
+          />
+        </div>
+      ),
+    },
+  ] : [];
 
   const handleInstallSelectedVersion = () => {
     if (!canInstallSelectedVersion) return;
@@ -233,21 +252,7 @@ export function ClaudeCodeVersionSection() {
     <AgentCliRuntimeCard
       provider="claude"
       managementTitle={t("agentRuntime.currentVersion")}
-      settingsSections={versionInfo && !isNotInstalled ? [
-        {
-          value: "auto-update",
-          title: t("agentRuntime.autoUpdate"),
-          children: (
-            <div className="flex h-8 items-center justify-end">
-              <Switch
-                checked={autoUpdateEnabled ?? !versionInfo.autoupdater_disabled}
-                onCheckedChange={handleSetAutoupdater}
-                disabled={installing || autoupdaterMutation.isPending}
-              />
-            </div>
-          ),
-        },
-      ] : undefined}
+      settingsSections={[...settingsSections, ...autoUpdateSection]}
     >
       <Popover className="block w-full" open={versionPopoverOpen} onOpenChange={handleVersionPopoverOpenChange}>
         <PopoverTrigger

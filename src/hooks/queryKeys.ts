@@ -5,6 +5,7 @@ export const queryKeys = {
   distillDocuments: ["distillDocuments"] as const,
   distillWatchEnabled: ["distillWatchEnabled"] as const,
   lovcodeAutoupdaterEnabled: ["lovcodeAutoupdaterEnabled"] as const,
+  lovcodeUpdaterProxy: ["lovcodeUpdaterProxy"] as const,
   lovcodeVersionInfo: ["lovcodeVersionInfo"] as const,
   skills: ["skills"] as const,
   templatesCatalog: ["templatesCatalog"] as const,

@@ -32,7 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../../components/ui/too
 import { LoadingState, PageHeader, ConfigPage } from "../../components/config";
 import { normalizeClaudeCodeModelName } from "../../lib/agent/models";
 import { patchSettings } from "../../lib/settingsApi";
-import type { MaasProvider, MaasModel, Vendor, ClaudeSettings } from "../../types";
+import type { MaasProvider, MaasModel, Vendor, ClaudeSettings, MaasRuntimeConfigStatus } from "../../types";
 
 interface FetchParseResult {
   models: MaasModel[];
@@ -49,6 +49,12 @@ const MAAS_RUNTIME_OPTIONS: { id: MaasRuntimeId; label: string }[] = [
 ];
 
 const DEFAULT_MAAS_RUNTIME_IDS = MAAS_RUNTIME_OPTIONS.map((option) => option.id);
+const CLAUDE_CODE_MAAS_ENV_KEYS = [
+  "ANTHROPIC_BASE_URL",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_DEFAULT_SONNET_MODEL",
+  "CLAUDE_CODE_USE_OAUTH",
+];
 
 function getLovcodeSettings(raw: ClaudeSettings["raw"] | undefined): Record<string, unknown> {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
@@ -316,8 +322,13 @@ export function MaasRegistryView() {
     "get_maas_registry",
   );
   const { data: settings } = useInvokeQuery<ClaudeSettings>(["settings"], "get_settings");
+  const { data: runtimeConfigStatus } = useInvokeQuery<MaasRuntimeConfigStatus>(
+    ["maas_runtime_config_status"],
+    "get_maas_runtime_config_status",
+  );
 
-  const activeProviderKeys = getActiveProviderKeysByRuntime(settings?.raw);
+  const activeProviderKeys: Partial<Record<MaasRuntimeId, string>> =
+    runtimeConfigStatus?.activeProviders ?? getActiveProviderKeysByRuntime(settings?.raw);
 
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<MaasProvider | null>(null);
@@ -372,7 +383,12 @@ export function MaasRegistryView() {
 
   if (isLoading) return <LoadingState message="Loading MaaS registry..." />;
 
-  const refresh = () => queryClient.invalidateQueries({ queryKey: ["maas_registry"] });
+  const refreshRuntimeConfigStatus = () =>
+    queryClient.invalidateQueries({ queryKey: ["maas_runtime_config_status"] });
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["maas_registry"] });
+    refreshRuntimeConfigStatus();
+  };
   const refreshSettings = () => queryClient.invalidateQueries({ queryKey: ["settings"] });
 
   const persistLovcodeSettings = async (patch: Record<string, unknown>) => {
@@ -678,8 +694,24 @@ export function MaasRegistryView() {
       const selectedRuntimeSet = new Set(effectiveRuntimeIds);
       const shouldApplyClaudeCode = selectedRuntimeSet.has("claude-code");
       const shouldApplyCodex = selectedRuntimeSet.has("codex");
+      const latestRuntimeConfigStatus = await invoke<MaasRuntimeConfigStatus>(
+        "get_maas_runtime_config_status",
+      ).catch(() => runtimeConfigStatus);
+      const latestActiveProviderKeys: Partial<Record<MaasRuntimeId, string>> = {
+        ...activeProviderKeys,
+        ...(latestRuntimeConfigStatus?.activeProviders ?? {}),
+      };
 
       if (shouldApplyCodex) {
+        const prevActive = latestActiveProviderKeys.codex;
+        if (prevActive && prevActive !== draft.key) {
+          await invoke("snapshot_codex_maas_provider", {
+            providerKey: prevActive,
+          }).catch(() => {
+            /* best-effort */
+          });
+        }
+
         await invoke("update_codex_maas_provider", {
           provider: draft,
           model: pickCodexModel(draft),
@@ -687,62 +719,50 @@ export function MaasRegistryView() {
       }
 
       // Snapshot the current active Claude Code provider's env so a future re-enable can restore it.
-      const prevActive = activeProviderKeys["claude-code"];
+      const prevActive = latestActiveProviderKeys["claude-code"];
       if (shouldApplyClaudeCode && prevActive && prevActive !== draft.key) {
         await invoke("snapshot_provider_context", {
           providerKey: prevActive,
-          envKeys: ["ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_DEFAULT_SONNET_MODEL"],
+          envKeys: CLAUDE_CODE_MAAS_ENV_KEYS,
         }).catch(() => {
           /* best-effort */
         });
       }
 
       if (shouldApplyClaudeCode) {
-        if (isOAuthProvider(draft)) {
-          // OAuth flow: only switch local Claude Code settings. Login remains
-          // an independent Claude Code interaction via `/login` in the session.
-          await patchSettings([
-            { type: "setEnv", envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" },
-            { type: "deleteEnv", envKey: "ANTHROPIC_AUTH_TOKEN" },
-            { type: "deleteEnv", envKey: "ANTHROPIC_BASE_URL" },
-            { type: "deleteEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL" },
-          ]);
-        } else {
-          await patchSettings([
-            { type: "setEnv", envKey: "ANTHROPIC_BASE_URL", envValue: draft.baseUrl.trim() },
-            { type: "setEnv", envKey: "ANTHROPIC_AUTH_TOKEN", envValue: draft.authToken.trim() },
-            { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: pickVerifyModel(draft) },
-            { type: "deleteEnv", envKey: "CLAUDE_CODE_USE_OAUTH" },
-          ]);
+        const restored = await invoke<boolean>("restore_provider_context", {
+          providerKey: draft.key,
+          envKeys: CLAUDE_CODE_MAAS_ENV_KEYS,
+        }).catch(() => false);
+
+        if (!restored) {
+          if (isOAuthProvider(draft)) {
+            // OAuth flow: only switch local Claude Code settings. Login remains
+            // an independent Claude Code interaction via `/login` in the session.
+            await patchSettings([
+              { type: "setEnv", envKey: "CLAUDE_CODE_USE_OAUTH", envValue: "1" },
+              { type: "deleteEnv", envKey: "ANTHROPIC_AUTH_TOKEN" },
+              { type: "deleteEnv", envKey: "ANTHROPIC_BASE_URL" },
+              { type: "deleteEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL" },
+            ]);
+          } else {
+            await patchSettings([
+              { type: "setEnv", envKey: "ANTHROPIC_BASE_URL", envValue: draft.baseUrl.trim() },
+              { type: "setEnv", envKey: "ANTHROPIC_AUTH_TOKEN", envValue: draft.authToken.trim() },
+              { type: "setEnv", envKey: "ANTHROPIC_DEFAULT_SONNET_MODEL", envValue: pickVerifyModel(draft) },
+              { type: "deleteEnv", envKey: "CLAUDE_CODE_USE_OAUTH" },
+            ]);
+          }
         }
       }
 
-      const nextActiveProviders: Partial<Record<MaasRuntimeId, string>> = {
-        ...activeProviderKeys,
-      };
-      for (const runtimeId of effectiveRuntimeIds) {
-        nextActiveProviders[runtimeId] = draft.key;
-      }
       const runtimeIdsToPersist = getRuntimeIdsToPersist(draft, selectedRuntimeIds);
-      const currentLovcodeSettings = getLovcodeSettings(settings?.raw);
-      const currentActiveModels =
-        currentLovcodeSettings.activeModels &&
-        typeof currentLovcodeSettings.activeModels === "object" &&
-        !Array.isArray(currentLovcodeSettings.activeModels)
-          ? (currentLovcodeSettings.activeModels as Record<string, unknown>)
-          : {};
       await persistLovcodeSettings({
-        activeProvider: nextActiveProviders["claude-code"] ?? getLegacyActiveProvider(settings?.raw),
-        activeProviders: nextActiveProviders,
-        activeModels: shouldApplyClaudeCode
-          ? {
-              ...currentActiveModels,
-              "claude-code": pickVerifyModel(draft),
-            }
-          : currentActiveModels,
         maasEnableRuntimes: runtimeIdsToPersist,
       });
       setSelectedRuntimeIds(runtimeIdsToPersist);
+      refreshRuntimeConfigStatus();
+      refreshSettings();
       setError(null);
     } catch (e) {
       setError(`Failed to enable: ${e}`);
@@ -1247,31 +1267,31 @@ export function MaasRegistryView() {
                   </span>
                 </header>
 
-              {(draft.vendors?.length ?? 0) > 0 && (
-                <div className="flex flex-col gap-2">
-                  <Label className="text-xs text-muted-foreground">Vendors</Label>
-                  <div className="flex flex-wrap gap-1.5">
-                    {draft.vendors!.map((v) => (
-                      <HoverHint key={v.id} content={v.description ?? v.name}>
-                        <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-card-alt text-xs">
-                          {v.iconUrl && (
-                            <img
-                              src={v.iconUrl}
-                              alt=""
-                              className="w-3.5 h-3.5 rounded-sm flex-shrink-0"
-                              onError={(e) => {
-                                (e.currentTarget as HTMLImageElement).style.display = "none";
-                              }}
-                            />
-                          )}
-                          <span className="font-mono">{v.id}</span>
-                          {v.name !== v.id && <span className="text-muted-foreground">— {v.name}</span>}
-                        </span>
-                      </HoverHint>
-                    ))}
+                {(draft.vendors?.length ?? 0) > 0 && (
+                  <div className="flex flex-col gap-2">
+                    <Label className="text-xs text-muted-foreground">Vendors</Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {draft.vendors!.map((v) => (
+                        <HoverHint key={v.id} content={v.description ?? v.name}>
+                          <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-border bg-card-alt text-xs">
+                            {v.iconUrl && (
+                              <img
+                                src={v.iconUrl}
+                                alt=""
+                                className="w-3.5 h-3.5 rounded-sm flex-shrink-0"
+                                onError={(e) => {
+                                  (e.currentTarget as HTMLImageElement).style.display = "none";
+                                }}
+                              />
+                            )}
+                            <span className="font-mono">{v.id}</span>
+                            {v.name !== v.id && <span className="text-muted-foreground">— {v.name}</span>}
+                          </span>
+                        </HoverHint>
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
               {(() => {
                 const openAdd = () => {

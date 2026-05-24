@@ -32,6 +32,7 @@ pub(crate) fn command_handler() -> Box<tauri::ipc::InvokeHandler<tauri::Wry>> {
         get_disabled_hooks,
         get_distill_watch_enabled,
         get_lovcode_autoupdater_enabled,
+        get_lovcode_updater_proxy,
         get_lovcode_version_info,
         get_lovstudio_auth_state,
         get_network_info,

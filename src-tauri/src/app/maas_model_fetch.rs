@@ -38,7 +38,6 @@ pub(crate) async fn fetch_and_parse_maas_models(
     };
 
     let raw_preview: String = raw_stdout.chars().take(1000).collect();
-
     // Step 2: parse JSON. Try known provider schemas first (zenmux), fall back
     // to a generic heuristic walker for unknown shapes.
     let json: serde_json::Value = serde_json::from_str(&raw_stdout).map_err(|e| {

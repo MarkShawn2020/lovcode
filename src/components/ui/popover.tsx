@@ -6,6 +6,8 @@ import {
   useLayoutEffect,
   createContext,
   useContext,
+  useId,
+  type ButtonHTMLAttributes,
   type CSSProperties,
   type ReactNode,
 } from "react";
@@ -16,6 +18,8 @@ interface PopoverContextValue {
   open: boolean;
   setOpen: (open: boolean) => void;
   triggerRef: React.RefObject<HTMLButtonElement | null>;
+  contentId: string;
+  ancestorContentIds: string[];
 }
 
 const PopoverContext = createContext<PopoverContextValue | null>(null);
@@ -28,8 +32,13 @@ interface PopoverProps {
 }
 
 export function Popover({ children, open: controlledOpen, onOpenChange, className = "" }: PopoverProps) {
+  const parentContext = useContext(PopoverContext);
   const [internalOpen, setInternalOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const contentId = useId();
+  const ancestorContentIds = parentContext
+    ? [parentContext.contentId, ...parentContext.ancestorContentIds]
+    : [];
 
   const open = controlledOpen ?? internalOpen;
   const setOpen = (value: boolean) => {
@@ -38,7 +47,7 @@ export function Popover({ children, open: controlledOpen, onOpenChange, classNam
   };
 
   return (
-    <PopoverContext.Provider value={{ open, setOpen, triggerRef }}>
+    <PopoverContext.Provider value={{ open, setOpen, triggerRef, contentId, ancestorContentIds }}>
       <div className={`relative inline-block ${className}`}>
         {children}
       </div>
@@ -46,22 +55,32 @@ export function Popover({ children, open: controlledOpen, onOpenChange, classNam
   );
 }
 
-interface PopoverTriggerProps {
+interface PopoverTriggerProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   children: ReactNode;
   asChild?: boolean;
   className?: string;
 }
 
-export function PopoverTrigger({ children, className = "" }: PopoverTriggerProps) {
+export function PopoverTrigger({
+  children,
+  className = "",
+  onClick,
+  type = "button",
+  ...props
+}: PopoverTriggerProps) {
   const context = useContext(PopoverContext);
   if (!context) throw new Error("PopoverTrigger must be used within Popover");
 
   return (
     <button
       ref={context.triggerRef}
-      onClick={() => context.setOpen(!context.open)}
+      onClick={(event) => {
+        onClick?.(event);
+        if (!event.defaultPrevented) context.setOpen(!context.open);
+      }}
       className={className}
-      type="button"
+      type={type}
+      {...props}
     >
       {children}
     </button>
@@ -97,11 +116,26 @@ export function PopoverContent({
     if (!context.open) return;
 
     const handleClickOutside = (e: MouseEvent) => {
+      const targetNode = e.target instanceof Node ? e.target : null;
+      const targetElement = e.target instanceof Element ? e.target : targetNode?.parentElement;
+      if (targetElement?.closest("[data-slot='select-content']")) {
+        return;
+      }
+      const closestContent = targetElement?.closest<HTMLElement>("[data-popover-content-id]");
+      if (closestContent) {
+        const closestContentId = closestContent.dataset.popoverContentId;
+        const closestAncestorIds = closestContent.dataset.popoverAncestorContentIds?.split(" ") ?? [];
+        if (closestContentId === context.contentId || closestAncestorIds.includes(context.contentId)) {
+          return;
+        }
+      }
+
       if (
+        targetNode &&
         contentRef.current &&
-        !contentRef.current.contains(e.target as Node) &&
+        !contentRef.current.contains(targetNode) &&
         context.triggerRef.current &&
-        !context.triggerRef.current.contains(e.target as Node)
+        !context.triggerRef.current.contains(targetNode)
       ) {
         context.setOpen(false);
       }
@@ -178,6 +212,8 @@ export function PopoverContent({
     <div
       ref={contentRef}
       style={alignmentStyle}
+      data-popover-content-id={context.contentId}
+      data-popover-ancestor-content-ids={context.ancestorContentIds.join(" ")}
       className={`
         fixed z-50
         min-w-[8rem] rounded-md border border-border bg-popover p-4
