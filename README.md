@@ -26,6 +26,7 @@
   <a href="https://code.lovstudio.ai/">Website</a> •
   <a href="#overview">Overview</a> •
   <a href="#features">Features</a> •
+  <a href="#documentation">Docs</a> •
   <a href="#installation">Installation</a> •
   <a href="#usage">Usage</a> •
   <a href="#development">Development</a> •
@@ -89,6 +90,15 @@ The goal is simple: arrive at the right project, see the full context, and resum
 - Localized interface for English, Chinese, and system language.
 - In-app update checks, release history, auto-update controls, and direct release links.
 - Authenticated Lovstudio feedback tickets with tags, ticket IDs, and admin review tooling.
+
+## Documentation
+
+Project documentation that does not need to live in the repository root is kept under `docs/`.
+
+- [Proxy configuration](docs/proxy-configuration.md)
+- [Product requirements](docs/prd-parallel-vibe-coding.md)
+- [Warm Academic design guide](docs/design-guide.md)
+- [OpenCode research index](docs/research/RESEARCH_INDEX.md)
 
 ## oh-my-lovcode
 

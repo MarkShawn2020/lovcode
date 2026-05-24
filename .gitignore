@@ -27,4 +27,5 @@ src-tauri/target/
 
 # Local workspace artifacts
 .claude/
+.codex/
 output/

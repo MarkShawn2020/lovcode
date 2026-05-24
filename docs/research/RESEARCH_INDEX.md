@@ -10,16 +10,18 @@ Due to web access limitations, research focused on **deep analysis of Lovcode's 
 
 ## Document Structure
 
-All research and specifications are organized in the repository root as Markdown files:
+All research and specifications are organized in `docs/research/`:
 
 ```
 lovcode/
-├── RESEARCH_INDEX.md                  ← YOU ARE HERE (navigation guide)
-├── OPENCODE_RESEARCH.md               ← Deep architecture analysis
-├── SKILLS_INSTALLATION_SPEC.md        ← Implementation spec for skills fix
-├── SESSION_TAGGING_SPEC.md            ← Complete tagging feature spec
-├── RESEARCH_SUMMARY.md                ← Executive summary & timeline
-└── QUICK_START_GUIDE.md               ← 5-minute quick reference
+└── docs/
+    └── research/
+        ├── RESEARCH_INDEX.md           ← YOU ARE HERE (navigation guide)
+        ├── OPENCODE_RESEARCH.md        ← Deep architecture analysis
+        ├── SKILLS_INSTALLATION_SPEC.md ← Implementation spec for skills fix
+        ├── SESSION_TAGGING_SPEC.md     ← Complete tagging feature spec
+        ├── RESEARCH_SUMMARY.md         ← Executive summary & timeline
+        └── QUICK_START_GUIDE.md        ← 5-minute quick reference
 ```
 
 ## Document Guide
