@@ -6,7 +6,7 @@ import { Window, getCurrentWindow } from "@tauri-apps/api/window";
 import { emit, listen } from "@tauri-apps/api/event";
 import { MagnifyingGlassIcon } from "@radix-ui/react-icons";
 import { useSearchIndexBuildStatus, useSessionsCache } from "../hooks";
-import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/searchScopes";
+import { matchesScopedSessionMetadata, parseScopedSearchQuery, shouldUseSemanticSessionSearch } from "../lib/searchScopes";
 import type { Session } from "../types";
 import { useReadableText, formatDate } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
@@ -165,9 +165,15 @@ export function GlobalChatSearch() {
         );
 
         if (indexReady) {
-          const contentResults = await invoke<{ session_id: string }[]>(
-            "search_chats", { query, limit: 100 }
-          );
+          const useSemanticSearch = shouldUseSemanticSessionSearch(query, parsedQuery);
+          const contentResults = useSemanticSearch
+            ? await invoke<{ session_id: string }[]>(
+                "semantic_search_chats",
+                { query, limit: 100 }
+              ).catch(() =>
+                invoke<{ session_id: string }[]>("search_chats", { query, limit: 100 })
+              )
+            : await invoke<{ session_id: string }[]>("search_chats", { query, limit: 100 });
           const localIds = new Set(localMatches.map((m) => m.id));
           const contentSessionIds = new Set(
             contentResults.map((r) => r.session_id).filter((id) => !localIds.has(id))

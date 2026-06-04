@@ -178,9 +178,13 @@ export interface SearchResult {
   project_path: string;
   session_id: string;
   session_summary: string | null;
+  line_number?: number;
   title?: string | null;
   summary?: string | null;
   last_prompt?: string | null;
+  round_index?: number;
+  round_prompt?: string | null;
+  round_timestamp?: string | null;
   timestamp: string;
   score: number;
 }

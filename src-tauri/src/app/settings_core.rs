@@ -134,10 +134,19 @@ pub(crate) fn is_codex_session_path(path: &Path) -> bool {
 }
 
 #[tauri::command]
-pub(crate) fn open_session_in_editor(project_id: String, session_id: String) -> Result<(), String> {
+pub(crate) fn open_session_in_editor(
+    project_id: String,
+    session_id: String,
+    editor: Option<String>,
+) -> Result<(), String> {
     let path = resolve_session_path(&project_id, &session_id)
         .ok_or_else(|| "Session file not found".to_string())?;
-    open_in_editor(path.to_string_lossy().to_string())
+
+    if editor.as_deref().map(str::trim) == Some("yoda") {
+        return open_session_in_yoda(&session_id, &path);
+    }
+
+    open_in_editor_with_target(path.to_string_lossy().to_string(), editor)
 }
 
 #[tauri::command]

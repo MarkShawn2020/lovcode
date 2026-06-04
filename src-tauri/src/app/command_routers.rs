@@ -75,7 +75,10 @@ pub(crate) async fn file_command(action: String, payload: Value) -> Result<Value
             command_arg(&payload, "path")?,
             command_optional_arg(&payload, "cwd")?,
         )?),
-        "open_in_editor" => command_json(open_in_editor(command_arg(&payload, "path")?)?),
+        "open_in_editor" => command_json(open_in_editor_with_target(
+            command_arg(&payload, "path")?,
+            command_optional_arg(&payload, "editor")?,
+        )?),
         "get_settings_path" => command_json(get_settings_path()),
         "get_mcp_config_path" => command_json(get_mcp_config_path()),
         "get_home_dir" => command_json(get_home_dir()),

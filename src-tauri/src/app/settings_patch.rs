@@ -1,10 +1,112 @@
 use super::*;
 
+struct EditorTarget {
+    id: &'static str,
+    label: &'static str,
+    commands: &'static [&'static str],
+    macos_apps: &'static [&'static str],
+    macos_app_paths: &'static [&'static str],
+}
+
+struct CodexThreadForYoda {
+    cwd: String,
+    title: String,
+    created_at_ms: i64,
+    updated_at_ms: i64,
+}
+
+struct YodaProjectTarget {
+    project_id: String,
+}
+
+const DEFAULT_EDITOR_TARGET: EditorTarget = EditorTarget {
+    id: "default",
+    label: "a supported editor",
+    commands: &["cursor", "code", "zed"],
+    macos_apps: &["Cursor", "Visual Studio Code", "Zed"],
+    macos_app_paths: &[],
+};
+
+const EDITOR_TARGETS: &[EditorTarget] = &[
+    EditorTarget {
+        id: "yoda",
+        label: "Yoda",
+        commands: &["yoda"],
+        macos_apps: &["Yoda"],
+        macos_app_paths: &[
+            "/Applications/Yoda.app",
+            "~/lovstudio/coding/yoda/release/mac-arm64/Yoda.app",
+            "~/lovstudio/coding/yoda/release/mac/Yoda.app",
+        ],
+    },
+    EditorTarget {
+        id: "vscode",
+        label: "VS Code",
+        commands: &["code"],
+        macos_apps: &["Visual Studio Code"],
+        macos_app_paths: &["/Applications/Visual Studio Code.app"],
+    },
+    EditorTarget {
+        id: "cursor",
+        label: "Cursor",
+        commands: &["cursor"],
+        macos_apps: &["Cursor"],
+        macos_app_paths: &["/Applications/Cursor.app"],
+    },
+    EditorTarget {
+        id: "zed",
+        label: "Zed",
+        commands: &["zed"],
+        macos_apps: &["Zed"],
+        macos_app_paths: &["/Applications/Zed.app"],
+    },
+];
+
+fn editor_target_by_id(editor_id: &str) -> Option<&'static EditorTarget> {
+    EDITOR_TARGETS.iter().find(|target| target.id == editor_id)
+}
+
 pub(crate) fn open_in_editor(path: String) -> Result<(), String> {
-    let editor_commands = ["cursor", "code", "zed"];
-    for editor in editor_commands {
-        if std::process::Command::new(editor)
-            .arg(&path)
+    open_in_editor_with_target(path, None)
+}
+
+pub(crate) fn open_in_editor_with_target(
+    path: String,
+    editor: Option<String>,
+) -> Result<(), String> {
+    let target = match editor
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        None | Some("default") => &DEFAULT_EDITOR_TARGET,
+        Some(editor_id) => editor_target_by_id(editor_id)
+            .ok_or_else(|| format!("Unsupported editor target: {}", editor_id))?,
+    };
+
+    open_with_editor_target(&path, target)
+        .map_err(|message| format!("Could not open {} with {}. {}", path, target.label, message))
+}
+
+fn open_with_editor_target(path: &str, target: &EditorTarget) -> Result<(), String> {
+    if target.id == "yoda" {
+        return open_yoda_project_path(path).or_else(|project_error| {
+            open_path_with_editor_target(path, target).map_err(|path_error| {
+                format!(
+                    "{} Also could not open the path with Yoda. {}",
+                    project_error, path_error
+                )
+            })
+        });
+    }
+
+    open_path_with_editor_target(path, target)
+}
+
+fn open_path_with_editor_target(path: &str, target: &EditorTarget) -> Result<(), String> {
+    for command in target.commands {
+        if std::process::Command::new(command)
+            .arg(path)
             .spawn()
             .is_ok()
         {
@@ -12,27 +114,637 @@ pub(crate) fn open_in_editor(path: String) -> Result<(), String> {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        let editor_apps = ["Cursor", "Visual Studio Code", "Zed"];
-        for app in editor_apps {
-            if let Ok(status) = std::process::Command::new("open")
-                .arg("-a")
-                .arg(app)
-                .arg(&path)
-                .status()
-            {
-                if status.success() {
-                    return Ok(());
-                }
+    if open_with_macos_editor(path, target)? {
+        return Ok(());
+    }
+
+    let supported = target
+        .commands
+        .iter()
+        .chain(target.macos_apps.iter())
+        .chain(target.macos_app_paths.iter())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!("Install or expose one of: {}", supported))
+}
+
+#[cfg(target_os = "macos")]
+fn open_with_macos_editor(path: &str, target: &EditorTarget) -> Result<bool, String> {
+    for app in target.macos_apps {
+        if let Ok(status) = std::process::Command::new("open")
+            .arg("-a")
+            .arg(app)
+            .arg(path)
+            .status()
+        {
+            if status.success() {
+                return Ok(true);
             }
         }
     }
 
-    Err(
-        "No supported editor found. Install the Cursor, VS Code, or Zed command-line launcher."
-            .to_string(),
+    for app_path in target.macos_app_paths {
+        let expanded_app_path = expand_home_path(app_path);
+        if !expanded_app_path.exists() {
+            continue;
+        }
+        if let Ok(status) = std::process::Command::new("open")
+            .arg("-a")
+            .arg(&expanded_app_path)
+            .arg(path)
+            .status()
+        {
+            if status.success() {
+                return Ok(true);
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn open_with_macos_editor(_path: &str, _target: &EditorTarget) -> Result<bool, String> {
+    Ok(false)
+}
+
+fn expand_home_path(path: &str) -> PathBuf {
+    if path == "~" {
+        return dirs::home_dir().unwrap_or_else(|| PathBuf::from(path));
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+pub(crate) fn open_session_in_yoda(session_id: &str, transcript_path: &Path) -> Result<(), String> {
+    let conversation_id = session_id.trim();
+    if conversation_id.is_empty() {
+        return Err("Session ID is empty.".to_string());
+    }
+
+    if let Some(thread) = read_codex_thread_for_yoda(conversation_id, transcript_path)? {
+        let yoda_conversation_id =
+            ensure_yoda_conversation_for_codex_thread(conversation_id, &thread)?;
+        return open_yoda_conversation(&yoda_conversation_id);
+    }
+
+    if yoda_conversation_exists(conversation_id)? {
+        return open_yoda_conversation(conversation_id);
+    }
+
+    Err(format!(
+        "Yoda has no conversation mapped to Lovcode session {} and Codex session metadata was not found for transcript {}.",
+        conversation_id,
+        transcript_path.to_string_lossy()
+    ))
+}
+
+fn open_yoda_project_path(path: &str) -> Result<(), String> {
+    let project_path = path.trim();
+    if project_path.is_empty() {
+        return Err("Project path is empty.".to_string());
+    }
+
+    let conn = open_yoda_db()?;
+    let conversation_id = match conn.query_row(
+        "select c.id
+         from conversations c
+         join projects p on p.id = c.project_id
+         where p.path = ?1
+         order by coalesce(c.last_interacted_at, c.updated_at, c.created_at) desc
+         limit 1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(value) => value,
+        Err(rusqlite::Error::QueryReturnedNoRows) => {
+            return Err(format!(
+                "Yoda has no project conversation for path {}. Open or import this project in Yoda first.",
+                project_path
+            ));
+        }
+        Err(error) => return Err(format!("Failed to look up Yoda project: {}", error)),
+    };
+
+    open_yoda_conversation(&conversation_id)
+}
+
+fn yoda_conversation_exists(conversation_id: &str) -> Result<bool, String> {
+    let conn = open_yoda_db()?;
+    let exists = conn
+        .query_row(
+            "select exists(select 1 from conversations where id = ?1)",
+            rusqlite::params![conversation_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("Failed to look up Yoda conversation: {}", error))?;
+    Ok(exists != 0)
+}
+
+fn ensure_yoda_conversation_for_codex_thread(
+    session_id: &str,
+    thread: &CodexThreadForYoda,
+) -> Result<String, String> {
+    let mut conn = open_yoda_db_read_write()?;
+    conn.busy_timeout(Duration::from_secs(5))
+        .map_err(|error| format!("Failed to configure Yoda database timeout: {}", error))?;
+
+    let tx = conn
+        .transaction()
+        .map_err(|error| format!("Failed to start Yoda registration transaction: {}", error))?;
+    let project = ensure_yoda_project_for_codex_thread(&tx, thread)?;
+    let task_id = ensure_yoda_task_for_codex_session(&tx, session_id, thread, &project)?;
+    ensure_yoda_conversation_for_codex_session_in_tx(
+        &tx,
+        session_id,
+        thread,
+        &project.project_id,
+        &task_id,
+    )?;
+    tx.commit()
+        .map_err(|error| format!("Failed to save Yoda conversation mapping: {}", error))?;
+
+    Ok(session_id.to_string())
+}
+
+fn ensure_yoda_project_for_codex_thread(
+    tx: &rusqlite::Transaction<'_>,
+    thread: &CodexThreadForYoda,
+) -> Result<YodaProjectTarget, String> {
+    let project_path = project_path_for_yoda_registration(&thread.cwd);
+    if let Some(project_id) = find_yoda_project_id_by_path(tx, &project_path)? {
+        tx.execute(
+            "update projects
+             set archived_at = null,
+                 updated_at = CURRENT_TIMESTAMP
+             where id = ?1",
+            rusqlite::params![project_id.as_str()],
+        )
+        .map_err(|error| format!("Failed to unarchive Yoda project: {}", error))?;
+        return Ok(YodaProjectTarget { project_id });
+    }
+
+    let project_id = stable_prefixed_id("lovcode-codex-project-", &project_path);
+    let project_name = project_name_for_path(&project_path);
+    let base_ref = detect_git_base_ref(&project_path).unwrap_or_else(|| "main".to_string());
+
+    tx.execute(
+        "insert into projects (
+             id,
+             name,
+             path,
+             workspace_provider,
+             base_ref,
+             created_at,
+             updated_at
+         ) values (?1, ?2, ?3, 'local', ?4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
+        rusqlite::params![
+            project_id.as_str(),
+            project_name.as_str(),
+            project_path.as_str(),
+            base_ref.as_str(),
+        ],
     )
+    .map_err(|error| format!("Failed to create Yoda project mapping: {}", error))?;
+
+    Ok(YodaProjectTarget { project_id })
+}
+
+fn find_yoda_project_id_by_path(
+    tx: &rusqlite::Transaction<'_>,
+    project_path: &str,
+) -> Result<Option<String>, String> {
+    match tx.query_row(
+        "select id from projects where path = ?1 limit 1",
+        rusqlite::params![project_path],
+        |row| row.get::<_, String>(0),
+    ) {
+        Ok(project_id) => Ok(Some(project_id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(format!("Failed to look up Yoda project path: {}", error)),
+    }
+}
+
+fn ensure_yoda_task_for_codex_session(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    thread: &CodexThreadForYoda,
+    project: &YodaProjectTarget,
+) -> Result<String, String> {
+    let task_id = yoda_task_id_for_session(session_id);
+    let title = nonempty_title_or(&thread.title, session_id);
+    let created_at = yoda_sqlite_timestamp_from_ms(thread.created_at_ms);
+    let updated_at = yoda_sqlite_timestamp_from_ms(thread.updated_at_ms);
+    let last_interacted_at = yoda_rfc3339_timestamp_from_ms(thread.updated_at_ms);
+
+    tx.execute(
+        "insert into tasks (
+             id,
+             project_id,
+             name,
+             status,
+             source_branch,
+             task_branch,
+             created_at,
+             updated_at,
+             last_interacted_at,
+             status_changed_at,
+             workspace_provider,
+             workspace_id,
+             workspace_provider_data,
+             is_user_named,
+             needs_review
+         ) values (?1, ?2, ?3, 'in_progress', null, null, ?4, ?5, ?6, ?4, null, null, null, 0, 0)
+         on conflict(id) do update set
+             project_id = excluded.project_id,
+             name = excluded.name,
+             archived_at = null,
+             updated_at = excluded.updated_at,
+             last_interacted_at = excluded.last_interacted_at",
+        rusqlite::params![
+            task_id.as_str(),
+            project.project_id.as_str(),
+            title.as_str(),
+            created_at.as_str(),
+            updated_at.as_str(),
+            last_interacted_at.as_str(),
+        ],
+    )
+    .map_err(|error| format!("Failed to create Yoda task mapping: {}", error))?;
+
+    Ok(task_id)
+}
+
+fn ensure_yoda_conversation_for_codex_session_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    session_id: &str,
+    thread: &CodexThreadForYoda,
+    project_id: &str,
+    task_id: &str,
+) -> Result<(), String> {
+    let title = nonempty_title_or(&thread.title, session_id);
+    let created_at = yoda_sqlite_timestamp_from_ms(thread.created_at_ms);
+    let updated_at = yoda_sqlite_timestamp_from_ms(thread.updated_at_ms);
+    let last_interacted_at = yoda_rfc3339_timestamp_from_ms(thread.updated_at_ms);
+
+    tx.execute(
+        "insert into conversations (
+             id,
+             project_id,
+             task_id,
+             title,
+             provider,
+             config,
+             created_at,
+             updated_at,
+             last_interacted_at,
+             is_initial_conversation
+         ) values (?1, ?2, ?3, ?4, 'codex', '{\"autoApprove\":false}', ?5, ?6, ?7, 1)
+         on conflict(id) do update set
+             project_id = excluded.project_id,
+             task_id = excluded.task_id,
+             title = excluded.title,
+             provider = 'codex',
+             config = excluded.config,
+             updated_at = excluded.updated_at,
+             last_interacted_at = excluded.last_interacted_at,
+             is_initial_conversation = 1",
+        rusqlite::params![
+            session_id,
+            project_id,
+            task_id,
+            title.as_str(),
+            created_at.as_str(),
+            updated_at.as_str(),
+            last_interacted_at.as_str(),
+        ],
+    )
+    .map_err(|error| format!("Failed to create Yoda conversation mapping: {}", error))?;
+
+    Ok(())
+}
+
+fn yoda_task_id_for_session(session_id: &str) -> String {
+    format!("lovcode-codex-task-{}", session_id)
+}
+
+fn nonempty_title_or(title: &str, fallback: &str) -> String {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return format!("Codex session {}", fallback);
+    }
+    trimmed.to_string()
+}
+
+fn project_path_for_yoda_registration(cwd: &str) -> String {
+    cwd.trim_end_matches('/').to_string()
+}
+
+fn project_name_for_path(path: &str) -> String {
+    let trimmed = path.trim_end_matches('/');
+    Path::new(trimmed)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(trimmed)
+        .to_string()
+}
+
+fn detect_git_base_ref(project_path: &str) -> Option<String> {
+    let head_path = Path::new(project_path).join(".git").join("HEAD");
+    let head = fs::read_to_string(head_path).ok()?;
+    let trimmed = head.trim();
+    trimmed
+        .strip_prefix("ref: refs/heads/")
+        .filter(|branch| !branch.trim().is_empty())
+        .map(|branch| branch.to_string())
+}
+
+fn stable_prefixed_id(prefix: &str, value: &str) -> String {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in value.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    format!("{}{:016x}", prefix, hash)
+}
+
+fn yoda_sqlite_timestamp_from_ms(timestamp_ms: i64) -> String {
+    datetime_from_ms(timestamp_ms)
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string()
+}
+
+fn yoda_rfc3339_timestamp_from_ms(timestamp_ms: i64) -> String {
+    datetime_from_ms(timestamp_ms).to_rfc3339()
+}
+
+fn datetime_from_ms(timestamp_ms: i64) -> chrono::DateTime<chrono::Utc> {
+    let seconds = timestamp_ms.div_euclid(1000);
+    let nanoseconds = (timestamp_ms.rem_euclid(1000) * 1_000_000) as u32;
+    chrono::DateTime::<chrono::Utc>::from_timestamp(seconds, nanoseconds)
+        .unwrap_or_else(chrono::Utc::now)
+}
+
+fn read_codex_thread_for_yoda(
+    session_id: &str,
+    transcript_path: &Path,
+) -> Result<Option<CodexThreadForYoda>, String> {
+    let state_thread = read_codex_state_thread_for_yoda(session_id)?;
+    let transcript_thread = read_codex_transcript_thread_for_yoda(session_id, transcript_path);
+
+    Ok(match (state_thread, transcript_thread) {
+        (Some(state), Some(transcript)) => Some(CodexThreadForYoda {
+            cwd: transcript.cwd,
+            title: if state.title.trim().is_empty() {
+                transcript.title
+            } else {
+                state.title
+            },
+            created_at_ms: state.created_at_ms,
+            updated_at_ms: state.updated_at_ms,
+        }),
+        (Some(state), None) => Some(state),
+        (None, Some(transcript)) => Some(transcript),
+        (None, None) => None,
+    })
+}
+
+fn read_codex_state_thread_for_yoda(
+    session_id: &str,
+) -> Result<Option<CodexThreadForYoda>, String> {
+    let Some(path) = codex_state_db_path() else {
+        return Ok(None);
+    };
+
+    let conn =
+        rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|error| format!("Failed to open Codex state database: {}", error))?;
+
+    match conn.query_row(
+        "select
+             cwd,
+             coalesce(nullif(title, ''), nullif(first_user_message, ''), id),
+             coalesce(created_at_ms, created_at * 1000),
+             coalesce(updated_at_ms, updated_at * 1000)
+         from threads
+         where id = ?1
+            or rollout_path like '%' || ?1 || '%'
+         order by archived asc, coalesce(updated_at_ms, updated_at * 1000) desc
+         limit 1",
+        rusqlite::params![session_id],
+        |row| {
+            Ok(CodexThreadForYoda {
+                cwd: row.get(0)?,
+                title: row.get(1)?,
+                created_at_ms: row.get(2)?,
+                updated_at_ms: row.get(3)?,
+            })
+        },
+    ) {
+        Ok(thread) => Ok(Some(thread)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(format!("Failed to look up Codex session: {}", error)),
+    }
+}
+
+fn read_codex_transcript_thread_for_yoda(
+    session_id: &str,
+    transcript_path: &Path,
+) -> Option<CodexThreadForYoda> {
+    if !is_codex_session_path(transcript_path) {
+        return None;
+    }
+
+    let head = read_codex_session_meta_lightweight(transcript_path);
+    let cwd = head.cwd?.trim().trim_end_matches('/').to_string();
+    if cwd.is_empty() {
+        return None;
+    }
+
+    let metadata = fs::metadata(transcript_path).ok();
+    let modified_at_ms = metadata
+        .as_ref()
+        .and_then(|metadata| metadata.modified().ok())
+        .and_then(system_time_to_ms)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    let created_at_ms = head
+        .created_at
+        .and_then(|timestamp| i64::try_from(timestamp).ok())
+        .and_then(|timestamp| timestamp.checked_mul(1000))
+        .or_else(|| {
+            metadata
+                .as_ref()
+                .and_then(|metadata| metadata.created().ok())
+                .and_then(system_time_to_ms)
+        })
+        .unwrap_or(modified_at_ms);
+    let title = head
+        .title
+        .or(head.last_prompt)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| session_id.to_string());
+
+    Some(CodexThreadForYoda {
+        cwd,
+        title,
+        created_at_ms,
+        updated_at_ms: modified_at_ms,
+    })
+}
+
+fn system_time_to_ms(time: SystemTime) -> Option<i64> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+}
+
+fn codex_state_db_path() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Ok(codex_home) = std::env::var("CODEX_HOME") {
+        let trimmed = codex_home.trim();
+        if !trimmed.is_empty() {
+            candidates.push(PathBuf::from(trimmed).join("state_5.sqlite"));
+        }
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".codex/state_5.sqlite"));
+    }
+
+    candidates.into_iter().find(|candidate| candidate.exists())
+}
+
+fn open_yoda_db() -> Result<rusqlite::Connection, String> {
+    open_yoda_db_with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+}
+
+fn open_yoda_db_read_write() -> Result<rusqlite::Connection, String> {
+    open_yoda_db_with_flags(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+}
+
+fn open_yoda_db_with_flags(flags: rusqlite::OpenFlags) -> Result<rusqlite::Connection, String> {
+    let Some(path) = yoda_db_path_candidates()
+        .into_iter()
+        .find(|candidate| candidate.exists())
+    else {
+        return Err(
+            "Yoda database was not found. Launch Yoda once before opening from Lovcode."
+                .to_string(),
+        );
+    };
+
+    rusqlite::Connection::open_with_flags(path, flags)
+        .map_err(|error| format!("Failed to open Yoda database: {}", error))
+}
+
+fn yoda_db_path_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(data_dir) = dirs::data_dir() {
+        candidates.push(data_dir.join("yoda").join("yoda4.db"));
+    }
+    if let Some(config_dir) = dirs::config_dir() {
+        candidates.push(config_dir.join("yoda").join("yoda4.db"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join("Library/Application Support/yoda/yoda4.db"));
+        candidates.push(home.join(".config/yoda/yoda4.db"));
+    }
+
+    let mut unique = Vec::new();
+    for candidate in candidates {
+        if !unique.iter().any(|existing| existing == &candidate) {
+            unique.push(candidate);
+        }
+    }
+    unique
+}
+
+fn open_yoda_conversation(conversation_id: &str) -> Result<(), String> {
+    let target =
+        editor_target_by_id("yoda").ok_or_else(|| "Yoda target is not configured.".to_string())?;
+    let url = format!(
+        "yoda://session/{}",
+        percent_encode_url_component(conversation_id)
+    );
+    open_yoda_url(&url, target)
+}
+
+fn open_yoda_url(url: &str, target: &EditorTarget) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        if run_open_command(std::process::Command::new("open").arg(url)) {
+            return Ok(());
+        }
+
+        for app in target.macos_apps {
+            if run_open_command(
+                std::process::Command::new("open")
+                    .arg("-a")
+                    .arg(app)
+                    .arg(url),
+            ) {
+                return Ok(());
+            }
+        }
+
+        for app_path in target.macos_app_paths {
+            let expanded_app_path = expand_home_path(app_path);
+            if !expanded_app_path.exists() {
+                continue;
+            }
+            if run_open_command(
+                std::process::Command::new("open")
+                    .arg("-a")
+                    .arg(&expanded_app_path)
+                    .arg(url),
+            ) {
+                return Ok(());
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        if run_open_command(std::process::Command::new("cmd").args(["/C", "start", "", url])) {
+            return Ok(());
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        if run_open_command(std::process::Command::new("xdg-open").arg(url)) {
+            return Ok(());
+        }
+    }
+
+    Err("Could not open Yoda deep link.".to_string())
+}
+
+fn run_open_command(command: &mut std::process::Command) -> bool {
+    command
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
+fn percent_encode_url_component(value: &str) -> String {
+    let mut output = String::new();
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            output.push(byte as char);
+        } else {
+            output.push_str(&format!("%{:02X}", byte));
+        }
+    }
+    output
 }
 
 pub(crate) fn open_file_at_line(path: String, line: usize) -> Result<(), String> {

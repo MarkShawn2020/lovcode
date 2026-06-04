@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { createPortal } from "react-dom";
 import { useAtom } from "jotai";
 import { invoke } from "@/lib/tauri";
+import type { EditorTargetId } from "@/lib/editorTargets";
 import {
   AlertCircle,
   ArrowRightLeft,
@@ -21,7 +22,7 @@ import {
   Settings2,
   Terminal,
 } from "lucide-react";
-import { ExternalLinkIcon, ChatBubbleIcon, Cross2Icon } from "@radix-ui/react-icons";
+import { ChatBubbleIcon, Cross2Icon } from "@radix-ui/react-icons";
 import {
   DropdownMenuItem,
   DropdownMenuCheckboxItem,
@@ -64,6 +65,7 @@ import {
   type PathHit,
 } from "@/views/Chat/pathDetection";
 import { PathLink } from "@/views/Chat/PathLink";
+import { OpenInEditorMenu } from "./OpenInEditorMenu";
 
 type HandoffTarget = "claude" | "codex";
 type TranslateFn = ReturnType<typeof useI18n>["t"];
@@ -354,9 +356,12 @@ function sessionInfoRows(info: SessionInfo, t?: TranslateFn): Array<{ label: str
   if (info.projectPath) rows.push({ label: t ? t("session.projectPath") : "Project path", value: info.projectPath, mono: true });
   if (info.transcriptPath) rows.push({ label: t ? t("session.transcript") : "Transcript", value: info.transcriptPath, mono: true });
   if (info.messageCount !== undefined) {
+    const userMessageCount = info.userMessageCount ?? 0;
     rows.push({
       label: t ? t("session.messages") : "Messages",
-      value: `${info.userMessageCount ?? 0} user / ${info.messageCount} total`,
+      value: t
+        ? t("session.messagesUserTotal", { user: userMessageCount, total: info.messageCount })
+        : `${userMessageCount} user / ${info.messageCount} total`,
     });
   }
 
@@ -373,35 +378,43 @@ function formatRelatedFile(file: RelatedSessionFile): string {
 }
 
 function buildSessionInfoText(info: SessionInfo, t?: TranslateFn): string {
-  const lines = ["# Session Basic Info", ""];
+  const lines = [`# ${t ? t("session.information") : "Session Information"}`, ""];
   for (const row of sessionInfoRows(info, t)) {
     lines.push(`- ${row.label}: ${row.value}`);
   }
 
-  lines.push("", "## Related File Paths");
+  return lines.join("\n");
+}
+
+function buildRelatedFilesSection(info: SessionInfo, t?: TranslateFn): string {
+  const lines = [`## ${t ? t("session.relatedFilePaths") : "Related File Paths"}`];
   if (info.relatedFiles.length === 0) {
-    lines.push("- No related file paths detected.");
+    lines.push(`- ${t ? t("session.noFilePathsDetected") : "No related file paths detected."}`);
   } else {
     info.relatedFiles.forEach((file) => lines.push(`- ${formatRelatedFile(file)}`));
     if (info.relatedFilesTruncated) {
-      lines.push(`- Additional file paths were omitted after the first ${MAX_RELATED_FILES}.`);
+      lines.push(`- ${t ? t("session.additionalPathsOmitted", { count: MAX_RELATED_FILES }) : `Additional file paths were omitted after the first ${MAX_RELATED_FILES}.`}`);
     }
   }
 
   return lines.join("\n");
 }
 
-function buildRelatedFilesText(info: SessionInfo): string {
-  if (info.relatedFiles.length === 0) return "No related file paths detected.";
+function buildRelatedFilesText(info: SessionInfo, t?: TranslateFn): string {
+  if (info.relatedFiles.length === 0) return t ? t("session.noFilePathsDetected") : "No related file paths detected.";
   const lines = info.relatedFiles.map(formatRelatedFile);
-  if (info.relatedFilesTruncated) lines.push(`Additional file paths were omitted after the first ${MAX_RELATED_FILES}.`);
+  if (info.relatedFilesTruncated) {
+    lines.push(t ? t("session.additionalPathsOmitted", { count: MAX_RELATED_FILES }) : `Additional file paths were omitted after the first ${MAX_RELATED_FILES}.`);
+  }
   return lines.join("\n");
 }
 
-function buildTraceContextText(info: SessionInfo): string {
-  return `${buildSessionInfoText(info)}
+function buildTraceContextText(info: SessionInfo, t?: TranslateFn): string {
+  return `${buildSessionInfoText(info, t)}
 
-## Trace Context
+${buildRelatedFilesSection(info, t)}
+
+## ${t ? t("session.traceContext") : "Trace Context"}
 - Use the transcript path to inspect the original conversation record when needed.
 - Treat related file paths as starting points for analysis; verify current file state before drawing conclusions.
 - Use the session ID and project path when asking another AI or teammate to continue, debug, or audit this session.`;
@@ -439,7 +452,7 @@ function useSessionInfoActions(
 
   const handleCopyRelatedFiles = useCallback(() => {
     const label = t("session.relatedPathsLabel");
-    return copyTextWithToast(buildRelatedFilesText(sessionInfoState.info), {
+    return copyTextWithToast(buildRelatedFilesText(sessionInfoState.info, t), {
       copied: t("session.infoCopied", { label }),
       failed: (message) => t("session.copyFailed", { label, message }),
     });
@@ -447,7 +460,7 @@ function useSessionInfoActions(
 
   const handleCopyTraceContext = useCallback(() => {
     const label = t("session.traceContextLabel");
-    return copyTextWithToast(buildTraceContextText(sessionInfoState.info), {
+    return copyTextWithToast(buildTraceContextText(sessionInfoState.info, t), {
       copied: t("session.infoCopied", { label }),
       failed: (message) => t("session.copyFailed", { label, message }),
     });
@@ -471,7 +484,13 @@ export function useSessionMenuHandlers(projectId: string, sessionId: string, sou
   const { t } = useI18n();
   const sessionTitle = title?.trim();
   const handleReveal = () => invoke("reveal_session_file", { projectId, sessionId });
-  const handleOpenInEditor = () => invoke("open_session_in_editor", { projectId, sessionId });
+  const handleOpenInEditor = async (editor?: EditorTargetId) => {
+    try {
+      await invoke<void>("open_session_in_editor", { projectId, sessionId, editor });
+    } catch (error) {
+      toast.error(t("session.openInEditorFailed", { message: errorMessage(error) }));
+    }
+  };
   const handleCopyPath = async () => {
     const path = await invoke<string>("get_session_file_path", { projectId, sessionId });
     await invoke("copy_to_clipboard", { text: path });
@@ -1060,10 +1079,7 @@ export function SessionDetailDropdownMenuItems({
             <FolderOpen size={14} />
             {t("fileViewer.revealInFinder")}
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleOpenInEditor} className="gap-2">
-            <ExternalLinkIcon width={14} />
-            {t("common.openInEditor")}
-          </DropdownMenuItem>
+          <OpenInEditorMenu variant="dropdown" onSelect={handleOpenInEditor} />
         </DropdownMenuSubContent>
       </DropdownMenuSub>
       {onClose && (
@@ -1288,10 +1304,7 @@ export function SessionDetailContextMenuItems({
             <FolderOpen size={14} />
             {t("fileViewer.revealInFinder")}
           </ContextMenuItem>
-          <ContextMenuItem onClick={handleOpenInEditor} className="gap-2">
-            <ExternalLinkIcon width={14} />
-            {t("common.openInEditor")}
-          </ContextMenuItem>
+          <OpenInEditorMenu variant="context" onSelect={handleOpenInEditor} />
         </ContextMenuSubContent>
       </ContextMenuSub>
       {onClose && (
@@ -1435,10 +1448,7 @@ export function SessionDropdownMenuItems({
             <FolderOpen size={14} />
             {t("fileViewer.revealInFinder")}
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={handleOpenInEditor} className="gap-2">
-            <ExternalLinkIcon width={14} />
-            {t("common.openInEditor")}
-          </DropdownMenuItem>
+          <OpenInEditorMenu variant="dropdown" onSelect={handleOpenInEditor} />
         </DropdownMenuSubContent>
       </DropdownMenuSub>
       {(setOriginalChat || setMarkdownPreview) && (
@@ -1597,10 +1607,7 @@ export function SessionContextMenuItems({
             <FolderOpen size={14} />
             {t("fileViewer.revealInFinder")}
           </ContextMenuItem>
-          <ContextMenuItem onClick={handleOpenInEditor} className="gap-2">
-            <ExternalLinkIcon width={14} />
-            {t("common.openInEditor")}
-          </ContextMenuItem>
+          <OpenInEditorMenu variant="context" onSelect={handleOpenInEditor} />
         </ContextMenuSubContent>
       </ContextMenuSub>
       {(setOriginalChat || setMarkdownPreview) && (

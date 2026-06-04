@@ -6,7 +6,7 @@ use std::io::{Read, Seek, SeekFrom};
 // Search Feature
 // ============================================================================
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct SearchResult {
     pub uuid: String,
     pub content: String,
@@ -1570,15 +1570,8 @@ fn normalize_scoped_search_query(query: &str, schema: &Schema) -> String {
     }
 }
 
-#[tauri::command]
-pub(crate) fn search_chats(
-    query: String,
-    limit: Option<usize>,
-    project_id: Option<String>,
-) -> Result<Vec<SearchResult>, String> {
-    let max_results = limit.unwrap_or(50);
-
-    // Try to get index from global state or load from disk
+fn loaded_search_index_guard() -> Result<std::sync::MutexGuard<'static, Option<SearchIndex>>, String>
+{
     let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
 
     if guard.is_none() {
@@ -1589,7 +1582,6 @@ pub(crate) fn search_chats(
 
         let index = Index::open_in_dir(&index_dir).map_err(|e| e.to_string())?;
         let schema = index.schema();
-        // Register jieba tokenizer for Chinese support
         register_jieba_tokenizer(&index);
         *guard = Some(SearchIndex { index, schema });
     }
@@ -1603,7 +1595,45 @@ pub(crate) fn search_chats(
         return Err("Search index schema is outdated. Rebuild required.".to_string());
     }
 
-    let search_index = guard.as_ref().unwrap();
+    Ok(guard)
+}
+
+fn configure_search_query_parser(
+    search_index: &SearchIndex,
+    default_field_names: &[&str],
+) -> QueryParser {
+    let default_fields = default_field_names
+        .iter()
+        .filter_map(|name| search_index.schema.get_field(name).ok())
+        .collect::<Vec<_>>();
+
+    let mut query_parser = QueryParser::for_index(&search_index.index, default_fields);
+    query_parser.set_conjunction_by_default();
+
+    for (field_name, boost) in [
+        ("title", 3.0),
+        ("summary", 2.4),
+        ("last_prompt", 2.2),
+        ("prompt", 1.8),
+        ("round_prompt", 1.6),
+        ("project", 1.3),
+        ("assistant", 0.9),
+    ] {
+        if let Ok(field) = search_index.schema.get_field(field_name) {
+            query_parser.set_field_boost(field, boost);
+        }
+    }
+
+    query_parser
+}
+
+fn search_index_documents(
+    search_index: &SearchIndex,
+    query_text: &str,
+    default_field_names: &[&str],
+    max_results: usize,
+    project_id: Option<&str>,
+) -> Result<Vec<SearchResult>, String> {
     let reader = search_index
         .index
         .reader_builder()
@@ -1612,26 +1642,9 @@ pub(crate) fn search_chats(
         .map_err(|e: tantivy::TantivyError| e.to_string())?;
 
     let searcher = reader.searcher();
-
-    let default_fields = ["content"]
-        .iter()
-        .filter_map(|name| search_index.schema.get_field(name).ok())
-        .collect::<Vec<_>>();
-
-    let normalized_query = normalize_scoped_search_query(&query, &search_index.schema);
-    let mut query_parser = QueryParser::for_index(&search_index.index, default_fields);
-    query_parser.set_conjunction_by_default();
-    if let Ok(title_field) = search_index.schema.get_field("title") {
-        query_parser.set_field_boost(title_field, 2.0);
-    }
-    if let Ok(prompt_field) = search_index.schema.get_field("prompt") {
-        query_parser.set_field_boost(prompt_field, 1.4);
-    }
-    if let Ok(round_prompt_field) = search_index.schema.get_field("round_prompt") {
-        query_parser.set_field_boost(round_prompt_field, 1.2);
-    }
+    let query_parser = configure_search_query_parser(search_index, default_field_names);
     let parsed_query = query_parser
-        .parse_query(&normalized_query)
+        .parse_query(query_text)
         .map_err(|e| e.to_string())?;
 
     let top_docs = searcher
@@ -1665,10 +1678,8 @@ pub(crate) fn search_chats(
         };
 
         let doc_project_id = get_text("project_id");
-
-        // Filter by project_id if specified
-        if let Some(ref filter_id) = project_id {
-            if &doc_project_id != filter_id {
+        if let Some(filter_id) = project_id {
+            if doc_project_id != filter_id {
                 continue;
             }
         }
@@ -1721,6 +1732,1820 @@ pub(crate) fn search_chats(
     }
 
     Ok(results)
+}
+
+#[tauri::command]
+pub(crate) fn search_chats(
+    query: String,
+    limit: Option<usize>,
+    project_id: Option<String>,
+) -> Result<Vec<SearchResult>, String> {
+    let max_results = limit.unwrap_or(50);
+    let guard = loaded_search_index_guard()?;
+    let search_index = guard.as_ref().unwrap();
+    let normalized_query = normalize_scoped_search_query(&query, &search_index.schema);
+    search_index_documents(
+        search_index,
+        &normalized_query,
+        &["content"],
+        max_results,
+        project_id.as_deref(),
+    )
+}
+
+#[derive(Clone, Debug)]
+struct EmbeddingSearchConfig {
+    base_url: String,
+    api_key: String,
+    model: String,
+    store: SemanticSearchStoreKind,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SemanticSearchStoreKind {
+    Sqlite,
+    LanceDb,
+}
+
+impl SemanticSearchStoreKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Sqlite => "sqlite",
+            Self::LanceDb => "lancedb",
+        }
+    }
+}
+
+#[derive(Clone)]
+struct EmbeddingSearchCandidate {
+    source_path: String,
+    source_kind: String,
+    source_size: u64,
+    source_mtime: u64,
+    text: String,
+    result: SearchResult,
+}
+
+#[derive(Clone, Serialize, Deserialize, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingSearchSourceManifestEntry {
+    path: String,
+    source_kind: String,
+    session_id: String,
+    size: u64,
+    mtime: u64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EmbeddingSearchEntry {
+    source_path: String,
+    source_kind: String,
+    source_size: u64,
+    source_mtime: u64,
+    text: String,
+    result: SearchResult,
+    vector: Vec<f32>,
+}
+
+#[derive(Clone)]
+struct EmbeddingSearchIndex {
+    entries: Vec<EmbeddingSearchEntry>,
+}
+
+#[derive(Deserialize)]
+struct EmbeddingApiResponse {
+    data: Vec<EmbeddingApiDatum>,
+}
+
+#[derive(Deserialize)]
+struct EmbeddingApiDatum {
+    embedding: Vec<f32>,
+    index: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SemanticSearchStatus {
+    pub(crate) configured: bool,
+    pub(crate) ready: bool,
+    pub(crate) model: Option<String>,
+    pub(crate) base_url: Option<String>,
+    pub(crate) store: String,
+    pub(crate) entries: usize,
+    pub(crate) error: Option<String>,
+}
+
+const EMBEDDING_SEARCH_INDEX_VERSION: u32 = 2;
+const DEFAULT_EMBEDDING_SEARCH_STORE_KIND: SemanticSearchStoreKind =
+    SemanticSearchStoreKind::LanceDb;
+const LANCEDB_SEMANTIC_ENTRIES_TABLE: &str = "semantic_entries";
+const LANCEDB_SEMANTIC_SOURCES_TABLE: &str = "semantic_sources";
+const LANCEDB_SEMANTIC_METADATA_TABLE: &str = "semantic_metadata";
+const EMBEDDING_SEARCH_BATCH_SIZE: usize = 32;
+const EMBEDDING_SEARCH_MAX_TEXT_CHARS: usize = 2400;
+const EMBEDDING_SEARCH_MAX_CHUNKS_PER_SESSION: usize = 160;
+
+fn embedding_search_store_path() -> PathBuf {
+    get_index_dir()
+        .parent()
+        .map(|parent| parent.join("semantic-search.sqlite"))
+        .unwrap_or_else(|| PathBuf::from("semantic-search.sqlite"))
+}
+
+fn lancedb_embedding_search_store_path() -> PathBuf {
+    get_index_dir()
+        .parent()
+        .map(|parent| parent.join("semantic-search.lancedb"))
+        .unwrap_or_else(|| PathBuf::from("semantic-search.lancedb"))
+}
+
+fn settings_env_value(settings: &Value, key: &str) -> Option<String> {
+    settings
+        .get("env")
+        .and_then(|env| env.get(key))
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn embedding_setting_value(key: &str) -> Option<String> {
+    std::env::var(key)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let settings = load_json_object_file(&get_claude_settings_path()).ok()?;
+            settings_env_value(&settings, key)
+        })
+}
+
+fn load_embedding_search_config() -> Result<EmbeddingSearchConfig, String> {
+    let base_url = embedding_setting_value("LOVCODE_EMBEDDING_BASE_URL")
+        .or_else(|| embedding_setting_value("OPENAI_BASE_URL"))
+        .or_else(|| {
+            embedding_setting_value("OPENAI_API_KEY")
+                .map(|_| "https://api.openai.com/v1".to_string())
+        });
+    let model = embedding_setting_value("LOVCODE_EMBEDDING_MODEL")
+        .unwrap_or_else(|| "text-embedding-3-small".to_string());
+    let api_key = embedding_setting_value("LOVCODE_EMBEDDING_API_KEY")
+        .or_else(|| embedding_setting_value("OPENAI_API_KEY"))
+        .unwrap_or_default();
+    let store = embedding_setting_value("LOVCODE_SEMANTIC_STORE")
+        .or_else(|| embedding_setting_value("LOVCODE_RAG_STORE"))
+        .map(|value| match value.to_ascii_lowercase().as_str() {
+            "sqlite" => Ok(SemanticSearchStoreKind::Sqlite),
+            "lance" | "lancedb" => Ok(SemanticSearchStoreKind::LanceDb),
+            other => Err(format!(
+                "Unsupported semantic search store '{}'. Use 'lancedb' or 'sqlite'.",
+                other
+            )),
+        })
+        .transpose()?
+        .unwrap_or(DEFAULT_EMBEDDING_SEARCH_STORE_KIND);
+
+    let Some(base_url) = base_url else {
+        return Err(
+            "Embedding search is not configured. Set LOVCODE_EMBEDDING_BASE_URL, LOVCODE_EMBEDDING_MODEL, and optionally LOVCODE_EMBEDDING_API_KEY (or use OPENAI_API_KEY)."
+                .to_string(),
+        );
+    };
+
+    Ok(EmbeddingSearchConfig {
+        base_url,
+        api_key,
+        model,
+        store,
+    })
+}
+
+fn embedding_api_url(base_url: &str) -> String {
+    let trimmed = base_url.trim_end_matches('/');
+    if trimmed.ends_with("/embeddings") {
+        trimmed.to_string()
+    } else {
+        format!("{}/embeddings", trimmed)
+    }
+}
+
+struct SemanticRagStoreStatus {
+    ready: bool,
+    entries: usize,
+    error: Option<String>,
+}
+
+enum SemanticRagStoreAdapter {
+    Sqlite(SqliteSemanticRagStore),
+    LanceDb(LanceDbSemanticRagStore),
+}
+
+struct SqliteSemanticRagStore {
+    path: PathBuf,
+}
+
+impl SqliteSemanticRagStore {
+    fn new() -> Self {
+        Self {
+            path: embedding_search_store_path(),
+        }
+    }
+
+    fn connect(&self) -> Result<rusqlite::Connection, String> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let conn = rusqlite::Connection::open(&self.path)
+            .map_err(|e| format!("open semantic search store: {}", e))?;
+        conn.execute_batch(
+            r#"
+            PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = NORMAL;
+
+            CREATE TABLE IF NOT EXISTS metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS sources (
+                path TEXT PRIMARY KEY,
+                source_kind TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                size INTEGER NOT NULL,
+                mtime INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_path TEXT NOT NULL,
+                source_kind TEXT NOT NULL,
+                source_size INTEGER NOT NULL,
+                source_mtime INTEGER NOT NULL,
+                session_id TEXT NOT NULL,
+                project_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                text TEXT NOT NULL,
+                result_json TEXT NOT NULL,
+                vector BLOB NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS entries_session_idx ON entries(session_id);
+            CREATE INDEX IF NOT EXISTS entries_project_idx ON entries(project_id);
+            "#,
+        )
+        .map_err(|e| format!("initialize semantic search store: {}", e))?;
+        Ok(conn)
+    }
+}
+
+struct LanceDbSemanticRagStore {
+    path: PathBuf,
+}
+
+impl LanceDbSemanticRagStore {
+    fn new() -> Self {
+        Self {
+            path: lancedb_embedding_search_store_path(),
+        }
+    }
+
+    fn uri(&self) -> String {
+        self.path.to_string_lossy().into_owned()
+    }
+
+    async fn connect(&self) -> Result<lancedb::Connection, String> {
+        if let Some(parent) = self.path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        lancedb::connect(&self.uri())
+            .execute()
+            .await
+            .map_err(|e| format!("open LanceDB semantic search store: {}", e))
+    }
+
+    async fn load_current(
+        &self,
+        config: &EmbeddingSearchConfig,
+        sources: &[EmbeddingSearchSourceManifestEntry],
+    ) -> Result<Option<EmbeddingSearchIndex>, String> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+        let db = self.connect().await?;
+        let metadata = match load_lancedb_metadata(&db).await {
+            Ok(metadata) => metadata,
+            Err(_) => return Ok(None),
+        };
+        if !semantic_store_metadata_matches(&metadata, config) {
+            return Ok(None);
+        }
+
+        let stored_sources = match load_lancedb_sources(&db).await {
+            Ok(sources) => sources,
+            Err(_) => return Ok(None),
+        };
+        if stored_sources != sources {
+            return Ok(None);
+        }
+
+        let entries = lancedb_entry_count(&db).await.unwrap_or(0);
+        if entries == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(EmbeddingSearchIndex {
+            entries: Vec::new(),
+        }))
+    }
+
+    async fn replace(
+        &self,
+        config: &EmbeddingSearchConfig,
+        dimensions: usize,
+        sources: Vec<EmbeddingSearchSourceManifestEntry>,
+        entries: Vec<EmbeddingSearchEntry>,
+    ) -> Result<EmbeddingSearchIndex, String> {
+        let db = self.connect().await?;
+        let indexed_at = now_secs();
+        let metadata = vec![
+            (
+                "version".to_string(),
+                EMBEDDING_SEARCH_INDEX_VERSION.to_string(),
+            ),
+            (
+                "store_kind".to_string(),
+                SemanticSearchStoreKind::LanceDb.as_str().to_string(),
+            ),
+            ("base_url".to_string(), config.base_url.clone()),
+            ("model".to_string(), config.model.clone()),
+            ("dimensions".to_string(), dimensions.to_string()),
+            ("indexed_at".to_string(), indexed_at.to_string()),
+        ];
+
+        db.create_table(
+            LANCEDB_SEMANTIC_METADATA_TABLE,
+            lancedb_metadata_batch(&metadata)?,
+        )
+        .mode(lancedb::database::CreateTableMode::Overwrite)
+        .execute()
+        .await
+        .map_err(|e| format!("write LanceDB semantic metadata: {}", e))?;
+
+        db.create_table(
+            LANCEDB_SEMANTIC_SOURCES_TABLE,
+            lancedb_sources_batch(&sources)?,
+        )
+        .mode(lancedb::database::CreateTableMode::Overwrite)
+        .execute()
+        .await
+        .map_err(|e| format!("write LanceDB semantic sources: {}", e))?;
+
+        db.create_table(
+            LANCEDB_SEMANTIC_ENTRIES_TABLE,
+            lancedb_entries_batch(&entries, dimensions)?,
+        )
+        .mode(lancedb::database::CreateTableMode::Overwrite)
+        .execute()
+        .await
+        .map_err(|e| format!("write LanceDB semantic entries: {}", e))?;
+
+        Ok(EmbeddingSearchIndex {
+            entries: Vec::new(),
+        })
+    }
+
+    async fn status(&self, config: &EmbeddingSearchConfig) -> SemanticRagStoreStatus {
+        if !self.path.exists() {
+            return SemanticRagStoreStatus {
+                ready: false,
+                entries: 0,
+                error: None,
+            };
+        }
+
+        let db = match self.connect().await {
+            Ok(db) => db,
+            Err(error) => {
+                return SemanticRagStoreStatus {
+                    ready: false,
+                    entries: 0,
+                    error: Some(error),
+                };
+            }
+        };
+        let metadata = match load_lancedb_metadata(&db).await {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                return SemanticRagStoreStatus {
+                    ready: false,
+                    entries: 0,
+                    error: None,
+                };
+            }
+        };
+        let entries = lancedb_entry_count(&db).await.unwrap_or(0);
+        SemanticRagStoreStatus {
+            ready: entries > 0 && semantic_store_metadata_matches(&metadata, config),
+            entries,
+            error: None,
+        }
+    }
+
+    async fn search(
+        &self,
+        query_vector: &[f32],
+        limit: usize,
+        project_id: Option<&str>,
+    ) -> Result<Vec<SearchResult>, String> {
+        use futures::TryStreamExt;
+        use lancedb::query::{ExecutableQuery, QueryBase};
+
+        let db = self.connect().await?;
+        let table = db
+            .open_table(LANCEDB_SEMANTIC_ENTRIES_TABLE)
+            .execute()
+            .await
+            .map_err(|e| format!("open LanceDB semantic entries: {}", e))?;
+        let mut query = table
+            .query()
+            .nearest_to(query_vector)
+            .map_err(|e| format!("prepare LanceDB vector search: {}", e))?
+            .distance_type(lancedb::DistanceType::Cosine)
+            .limit(limit);
+        if let Some(project_id) = project_id {
+            query = query.only_if(format!(
+                "project_id = {}",
+                lancedb_sql_string_literal(project_id)
+            ));
+        }
+        let batches = query
+            .execute()
+            .await
+            .map_err(|e| format!("execute LanceDB vector search: {}", e))?
+            .try_collect::<Vec<_>>()
+            .await
+            .map_err(|e| format!("collect LanceDB vector search: {}", e))?;
+        parse_lancedb_search_results(&batches)
+    }
+}
+
+impl SemanticRagStoreAdapter {
+    fn new(config: &EmbeddingSearchConfig) -> Self {
+        match config.store {
+            SemanticSearchStoreKind::Sqlite => Self::Sqlite(SqliteSemanticRagStore::new()),
+            SemanticSearchStoreKind::LanceDb => Self::LanceDb(LanceDbSemanticRagStore::new()),
+        }
+    }
+
+    fn kind(&self) -> SemanticSearchStoreKind {
+        match self {
+            Self::Sqlite(_) => SemanticSearchStoreKind::Sqlite,
+            Self::LanceDb(_) => SemanticSearchStoreKind::LanceDb,
+        }
+    }
+
+    async fn load_current(
+        &self,
+        config: &EmbeddingSearchConfig,
+        sources: &[EmbeddingSearchSourceManifestEntry],
+    ) -> Result<Option<EmbeddingSearchIndex>, String> {
+        match self {
+            Self::Sqlite(store) => store.load_current(config, sources),
+            Self::LanceDb(store) => store.load_current(config, sources).await,
+        }
+    }
+
+    async fn replace(
+        &self,
+        config: &EmbeddingSearchConfig,
+        dimensions: usize,
+        sources: Vec<EmbeddingSearchSourceManifestEntry>,
+        entries: Vec<EmbeddingSearchEntry>,
+    ) -> Result<EmbeddingSearchIndex, String> {
+        match self {
+            Self::Sqlite(store) => store.replace(config, dimensions, sources, entries),
+            Self::LanceDb(store) => store.replace(config, dimensions, sources, entries).await,
+        }
+    }
+
+    async fn status(&self, config: &EmbeddingSearchConfig) -> SemanticRagStoreStatus {
+        match self {
+            Self::Sqlite(store) => store.status(config),
+            Self::LanceDb(store) => store.status(config).await,
+        }
+    }
+
+    async fn search(
+        &self,
+        index: &EmbeddingSearchIndex,
+        query_vector: &[f32],
+        limit: usize,
+        project_id: Option<&str>,
+    ) -> Result<Vec<SearchResult>, String> {
+        match self {
+            Self::Sqlite(_) => Ok(rank_embedding_sessions(
+                &index.entries,
+                query_vector,
+                limit,
+                project_id,
+            )),
+            Self::LanceDb(store) => store.search(query_vector, limit, project_id).await,
+        }
+    }
+}
+
+impl SqliteSemanticRagStore {
+    fn load_current(
+        &self,
+        config: &EmbeddingSearchConfig,
+        sources: &[EmbeddingSearchSourceManifestEntry],
+    ) -> Result<Option<EmbeddingSearchIndex>, String> {
+        let conn = self.connect()?;
+        let metadata = load_semantic_store_metadata(&conn)?;
+        if !semantic_store_metadata_matches(&metadata, config) {
+            return Ok(None);
+        }
+
+        let stored_sources = load_semantic_store_sources(&conn)?;
+        if stored_sources != sources {
+            return Ok(None);
+        }
+
+        let dimensions = metadata_usize(&metadata, "dimensions").unwrap_or(0);
+        let entries = load_semantic_store_entries(&conn, dimensions)?;
+        if entries.is_empty() || dimensions == 0 {
+            return Ok(None);
+        }
+
+        Ok(Some(EmbeddingSearchIndex { entries }))
+    }
+
+    fn replace(
+        &self,
+        config: &EmbeddingSearchConfig,
+        dimensions: usize,
+        sources: Vec<EmbeddingSearchSourceManifestEntry>,
+        entries: Vec<EmbeddingSearchEntry>,
+    ) -> Result<EmbeddingSearchIndex, String> {
+        let mut conn = self.connect()?;
+        let indexed_at = now_secs();
+        let tx = conn
+            .transaction()
+            .map_err(|e| format!("begin semantic store transaction: {}", e))?;
+
+        tx.execute_batch(
+            r#"
+            DELETE FROM metadata;
+            DELETE FROM sources;
+            DELETE FROM entries;
+            "#,
+        )
+        .map_err(|e| format!("clear semantic search store: {}", e))?;
+
+        {
+            let mut stmt = tx
+                .prepare("INSERT INTO metadata (key, value) VALUES (?1, ?2)")
+                .map_err(|e| format!("prepare semantic metadata insert: {}", e))?;
+            for (key, value) in [
+                ("version", EMBEDDING_SEARCH_INDEX_VERSION.to_string()),
+                (
+                    "store_kind",
+                    SemanticSearchStoreKind::Sqlite.as_str().to_string(),
+                ),
+                ("base_url", config.base_url.clone()),
+                ("model", config.model.clone()),
+                ("dimensions", dimensions.to_string()),
+                ("indexed_at", indexed_at.to_string()),
+            ] {
+                stmt.execute(rusqlite::params![key, value])
+                    .map_err(|e| format!("write semantic metadata: {}", e))?;
+            }
+        }
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+                    INSERT INTO sources (path, source_kind, session_id, size, mtime)
+                    VALUES (?1, ?2, ?3, ?4, ?5)
+                    "#,
+                )
+                .map_err(|e| format!("prepare semantic source insert: {}", e))?;
+            for source in &sources {
+                stmt.execute(rusqlite::params![
+                    source.path.as_str(),
+                    source.source_kind.as_str(),
+                    source.session_id.as_str(),
+                    u64_to_sql_i64(source.size),
+                    u64_to_sql_i64(source.mtime),
+                ])
+                .map_err(|e| format!("write semantic source: {}", e))?;
+            }
+        }
+
+        {
+            let mut stmt = tx
+                .prepare(
+                    r#"
+                    INSERT INTO entries (
+                        source_path,
+                        source_kind,
+                        source_size,
+                        source_mtime,
+                        session_id,
+                        project_id,
+                        timestamp,
+                        text,
+                        result_json,
+                        vector
+                    )
+                    VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                    "#,
+                )
+                .map_err(|e| format!("prepare semantic entry insert: {}", e))?;
+            for entry in &entries {
+                let result_json = serde_json::to_string(&entry.result)
+                    .map_err(|e| format!("serialize semantic entry result: {}", e))?;
+                stmt.execute(rusqlite::params![
+                    entry.source_path.as_str(),
+                    entry.source_kind.as_str(),
+                    u64_to_sql_i64(entry.source_size),
+                    u64_to_sql_i64(entry.source_mtime),
+                    entry.result.session_id.as_str(),
+                    entry.result.project_id.as_str(),
+                    entry.result.timestamp.as_str(),
+                    entry.text.as_str(),
+                    result_json,
+                    encode_embedding_vector(&entry.vector),
+                ])
+                .map_err(|e| format!("write semantic entry: {}", e))?;
+            }
+        }
+
+        tx.commit()
+            .map_err(|e| format!("commit semantic search store: {}", e))?;
+
+        Ok(EmbeddingSearchIndex { entries })
+    }
+
+    fn status(&self, config: &EmbeddingSearchConfig) -> SemanticRagStoreStatus {
+        if !self.path.exists() {
+            return SemanticRagStoreStatus {
+                ready: false,
+                entries: 0,
+                error: None,
+            };
+        }
+
+        let conn = match self.connect() {
+            Ok(conn) => conn,
+            Err(error) => {
+                return SemanticRagStoreStatus {
+                    ready: false,
+                    entries: 0,
+                    error: Some(error),
+                };
+            }
+        };
+        let metadata = match load_semantic_store_metadata(&conn) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                return SemanticRagStoreStatus {
+                    ready: false,
+                    entries: 0,
+                    error: Some(error),
+                };
+            }
+        };
+        let entries = semantic_store_entry_count(&conn).unwrap_or(0);
+        SemanticRagStoreStatus {
+            ready: entries > 0 && semantic_store_metadata_matches(&metadata, config),
+            entries,
+            error: None,
+        }
+    }
+}
+
+fn u64_to_sql_i64(value: u64) -> i64 {
+    value.min(i64::MAX as u64) as i64
+}
+
+fn metadata_usize(metadata: &HashMap<String, String>, key: &str) -> Option<usize> {
+    metadata.get(key)?.parse::<usize>().ok()
+}
+
+fn load_semantic_store_metadata(
+    conn: &rusqlite::Connection,
+) -> Result<HashMap<String, String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT key, value FROM metadata")
+        .map_err(|e| format!("prepare semantic metadata query: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|e| format!("query semantic metadata: {}", e))?;
+    let mut metadata = HashMap::new();
+    for row in rows {
+        let (key, value) = row.map_err(|e| format!("read semantic metadata: {}", e))?;
+        metadata.insert(key, value);
+    }
+    Ok(metadata)
+}
+
+fn semantic_store_metadata_matches(
+    metadata: &HashMap<String, String>,
+    config: &EmbeddingSearchConfig,
+) -> bool {
+    metadata
+        .get("version")
+        .and_then(|value| value.parse::<u32>().ok())
+        == Some(EMBEDDING_SEARCH_INDEX_VERSION)
+        && metadata.get("store_kind").map(String::as_str) == Some(config.store.as_str())
+        && metadata.get("base_url").map(String::as_str) == Some(config.base_url.as_str())
+        && metadata.get("model").map(String::as_str) == Some(config.model.as_str())
+        && metadata_usize(metadata, "dimensions").unwrap_or(0) > 0
+}
+
+fn load_semantic_store_sources(
+    conn: &rusqlite::Connection,
+) -> Result<Vec<EmbeddingSearchSourceManifestEntry>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT path, source_kind, session_id, size, mtime
+            FROM sources
+            ORDER BY path, source_kind, session_id, size, mtime
+            "#,
+        )
+        .map_err(|e| format!("prepare semantic source query: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok(EmbeddingSearchSourceManifestEntry {
+                path: row.get(0)?,
+                source_kind: row.get(1)?,
+                session_id: row.get(2)?,
+                size: row.get::<_, i64>(3)?.max(0) as u64,
+                mtime: row.get::<_, i64>(4)?.max(0) as u64,
+            })
+        })
+        .map_err(|e| format!("query semantic sources: {}", e))?;
+    let mut sources = Vec::new();
+    for row in rows {
+        sources.push(row.map_err(|e| format!("read semantic source: {}", e))?);
+    }
+    Ok(sources)
+}
+
+fn semantic_store_entry_count(conn: &rusqlite::Connection) -> Result<usize, String> {
+    conn.query_row("SELECT COUNT(*) FROM entries", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .map(|count| count.max(0) as usize)
+    .map_err(|e| format!("count semantic entries: {}", e))
+}
+
+fn encode_embedding_vector(vector: &[f32]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(vector.len() * std::mem::size_of::<f32>());
+    for value in vector {
+        bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    bytes
+}
+
+fn decode_embedding_vector(bytes: &[u8]) -> Option<Vec<f32>> {
+    if bytes.len() % std::mem::size_of::<f32>() != 0 {
+        return None;
+    }
+    Some(
+        bytes
+            .chunks_exact(std::mem::size_of::<f32>())
+            .map(|chunk| {
+                let bytes: [u8; 4] = chunk.try_into().ok()?;
+                Some(f32::from_le_bytes(bytes))
+            })
+            .collect::<Option<Vec<_>>>()?,
+    )
+}
+
+fn load_semantic_store_entries(
+    conn: &rusqlite::Connection,
+    dimensions: usize,
+) -> Result<Vec<EmbeddingSearchEntry>, String> {
+    let mut stmt = conn
+        .prepare(
+            r#"
+            SELECT
+                source_path,
+                source_kind,
+                source_size,
+                source_mtime,
+                text,
+                result_json,
+                vector
+            FROM entries
+            "#,
+        )
+        .map_err(|e| format!("prepare semantic entry query: {}", e))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, Vec<u8>>(6)?,
+            ))
+        })
+        .map_err(|e| format!("query semantic entries: {}", e))?;
+
+    let mut entries = Vec::new();
+    for row in rows {
+        let (source_path, source_kind, source_size, source_mtime, text, result_json, vector_bytes) =
+            row.map_err(|e| format!("read semantic entry: {}", e))?;
+        let Some(vector) = decode_embedding_vector(&vector_bytes) else {
+            return Ok(Vec::new());
+        };
+        if vector.len() != dimensions {
+            return Ok(Vec::new());
+        }
+        let Ok(result) = serde_json::from_str::<SearchResult>(&result_json) else {
+            return Ok(Vec::new());
+        };
+        entries.push(EmbeddingSearchEntry {
+            source_path,
+            source_kind,
+            source_size: source_size.max(0) as u64,
+            source_mtime: source_mtime.max(0) as u64,
+            text,
+            result,
+            vector,
+        });
+    }
+    Ok(entries)
+}
+
+fn lancedb_metadata_batch(
+    metadata: &[(String, String)],
+) -> Result<arrow_array::RecordBatch, String> {
+    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("key", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("value", arrow_schema::DataType::Utf8, false),
+    ]));
+    let keys = metadata
+        .iter()
+        .map(|(key, _)| key.clone())
+        .collect::<Vec<_>>();
+    let values = metadata
+        .iter()
+        .map(|(_, value)| value.clone())
+        .collect::<Vec<_>>();
+    arrow_array::RecordBatch::try_new(
+        schema,
+        vec![
+            std::sync::Arc::new(arrow_array::StringArray::from(keys)),
+            std::sync::Arc::new(arrow_array::StringArray::from(values)),
+        ],
+    )
+    .map_err(|e| format!("build LanceDB semantic metadata batch: {}", e))
+}
+
+fn lancedb_sources_batch(
+    sources: &[EmbeddingSearchSourceManifestEntry],
+) -> Result<arrow_array::RecordBatch, String> {
+    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("path", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("source_kind", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("session_id", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("size", arrow_schema::DataType::Int64, false),
+        arrow_schema::Field::new("mtime", arrow_schema::DataType::Int64, false),
+    ]));
+    arrow_array::RecordBatch::try_new(
+        schema,
+        vec![
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                sources
+                    .iter()
+                    .map(|source| source.path.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                sources
+                    .iter()
+                    .map(|source| source.source_kind.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                sources
+                    .iter()
+                    .map(|source| source.session_id.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::Int64Array::from(
+                sources
+                    .iter()
+                    .map(|source| u64_to_sql_i64(source.size))
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::Int64Array::from(
+                sources
+                    .iter()
+                    .map(|source| u64_to_sql_i64(source.mtime))
+                    .collect::<Vec<_>>(),
+            )),
+        ],
+    )
+    .map_err(|e| format!("build LanceDB semantic sources batch: {}", e))
+}
+
+fn lancedb_entries_batch(
+    entries: &[EmbeddingSearchEntry],
+    dimensions: usize,
+) -> Result<arrow_array::RecordBatch, String> {
+    let dimensions_i32 = i32::try_from(dimensions)
+        .map_err(|_| "Embedding dimensions are too large for LanceDB.".to_string())?;
+    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
+        arrow_schema::Field::new("source_path", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("source_kind", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("source_size", arrow_schema::DataType::Int64, false),
+        arrow_schema::Field::new("source_mtime", arrow_schema::DataType::Int64, false),
+        arrow_schema::Field::new("session_id", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("project_id", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("timestamp", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new("result_json", arrow_schema::DataType::Utf8, false),
+        arrow_schema::Field::new(
+            "vector",
+            arrow_schema::DataType::FixedSizeList(
+                std::sync::Arc::new(arrow_schema::Field::new(
+                    "item",
+                    arrow_schema::DataType::Float32,
+                    true,
+                )),
+                dimensions_i32,
+            ),
+            false,
+        ),
+    ]));
+    let vectors = arrow_array::FixedSizeListArray::from_iter_primitive::<
+        arrow_array::types::Float32Type,
+        _,
+        _,
+    >(
+        entries
+            .iter()
+            .map(|entry| Some(entry.vector.iter().copied().map(Some).collect::<Vec<_>>())),
+        dimensions_i32,
+    );
+    let result_json = entries
+        .iter()
+        .map(|entry| serde_json::to_string(&entry.result))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("serialize LanceDB semantic entry result: {}", e))?;
+
+    arrow_array::RecordBatch::try_new(
+        schema,
+        vec![
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                entries
+                    .iter()
+                    .map(|entry| entry.source_path.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                entries
+                    .iter()
+                    .map(|entry| entry.source_kind.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::Int64Array::from(
+                entries
+                    .iter()
+                    .map(|entry| u64_to_sql_i64(entry.source_size))
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::Int64Array::from(
+                entries
+                    .iter()
+                    .map(|entry| u64_to_sql_i64(entry.source_mtime))
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                entries
+                    .iter()
+                    .map(|entry| entry.result.session_id.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                entries
+                    .iter()
+                    .map(|entry| entry.result.project_id.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                entries
+                    .iter()
+                    .map(|entry| entry.result.timestamp.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::StringArray::from(
+                entries
+                    .iter()
+                    .map(|entry| entry.text.clone())
+                    .collect::<Vec<_>>(),
+            )),
+            std::sync::Arc::new(arrow_array::StringArray::from(result_json)),
+            std::sync::Arc::new(vectors),
+        ],
+    )
+    .map_err(|e| format!("build LanceDB semantic entries batch: {}", e))
+}
+
+async fn lancedb_scan_table(
+    db: &lancedb::Connection,
+    table_name: &str,
+) -> Result<Vec<arrow_array::RecordBatch>, String> {
+    use futures::TryStreamExt;
+    use lancedb::query::ExecutableQuery;
+
+    let table = db
+        .open_table(table_name)
+        .execute()
+        .await
+        .map_err(|e| format!("open LanceDB table '{}': {}", table_name, e))?;
+    table
+        .query()
+        .execute()
+        .await
+        .map_err(|e| format!("scan LanceDB table '{}': {}", table_name, e))?
+        .try_collect::<Vec<_>>()
+        .await
+        .map_err(|e| format!("collect LanceDB table '{}': {}", table_name, e))
+}
+
+fn lancedb_string_column<'a>(
+    batch: &'a arrow_array::RecordBatch,
+    name: &str,
+) -> Result<&'a arrow_array::StringArray, String> {
+    let index = batch
+        .schema()
+        .index_of(name)
+        .map_err(|e| format!("missing LanceDB column '{}': {}", name, e))?;
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<arrow_array::StringArray>()
+        .ok_or_else(|| format!("LanceDB column '{}' is not a string", name))
+}
+
+fn lancedb_i64_column<'a>(
+    batch: &'a arrow_array::RecordBatch,
+    name: &str,
+) -> Result<&'a arrow_array::Int64Array, String> {
+    let index = batch
+        .schema()
+        .index_of(name)
+        .map_err(|e| format!("missing LanceDB column '{}': {}", name, e))?;
+    batch
+        .column(index)
+        .as_any()
+        .downcast_ref::<arrow_array::Int64Array>()
+        .ok_or_else(|| format!("LanceDB column '{}' is not an int64", name))
+}
+
+async fn load_lancedb_metadata(
+    db: &lancedb::Connection,
+) -> Result<HashMap<String, String>, String> {
+    use arrow_array::Array;
+
+    let batches = lancedb_scan_table(db, LANCEDB_SEMANTIC_METADATA_TABLE).await?;
+    let mut metadata = HashMap::new();
+    for batch in batches {
+        let keys = lancedb_string_column(&batch, "key")?;
+        let values = lancedb_string_column(&batch, "value")?;
+        for row in 0..batch.num_rows() {
+            if keys.is_null(row) || values.is_null(row) {
+                continue;
+            }
+            metadata.insert(keys.value(row).to_string(), values.value(row).to_string());
+        }
+    }
+    Ok(metadata)
+}
+
+async fn load_lancedb_sources(
+    db: &lancedb::Connection,
+) -> Result<Vec<EmbeddingSearchSourceManifestEntry>, String> {
+    use arrow_array::Array;
+
+    let batches = lancedb_scan_table(db, LANCEDB_SEMANTIC_SOURCES_TABLE).await?;
+    let mut sources = Vec::new();
+    for batch in batches {
+        let paths = lancedb_string_column(&batch, "path")?;
+        let source_kinds = lancedb_string_column(&batch, "source_kind")?;
+        let session_ids = lancedb_string_column(&batch, "session_id")?;
+        let sizes = lancedb_i64_column(&batch, "size")?;
+        let mtimes = lancedb_i64_column(&batch, "mtime")?;
+        for row in 0..batch.num_rows() {
+            if paths.is_null(row) || source_kinds.is_null(row) || session_ids.is_null(row) {
+                continue;
+            }
+            sources.push(EmbeddingSearchSourceManifestEntry {
+                path: paths.value(row).to_string(),
+                source_kind: source_kinds.value(row).to_string(),
+                session_id: session_ids.value(row).to_string(),
+                size: sizes.value(row).max(0) as u64,
+                mtime: mtimes.value(row).max(0) as u64,
+            });
+        }
+    }
+    sources.sort();
+    Ok(sources)
+}
+
+async fn lancedb_entry_count(db: &lancedb::Connection) -> Result<usize, String> {
+    let batches = lancedb_scan_table(db, LANCEDB_SEMANTIC_ENTRIES_TABLE).await?;
+    Ok(batches.iter().map(|batch| batch.num_rows()).sum())
+}
+
+fn lancedb_sql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn lancedb_distance_score(batch: &arrow_array::RecordBatch, row: usize) -> Option<f32> {
+    use arrow_array::Array;
+
+    let index = batch
+        .schema()
+        .index_of("_distance")
+        .or_else(|_| batch.schema().index_of("_score"))
+        .ok()?;
+    let column = batch.column(index);
+    if column.is_null(row) {
+        return None;
+    }
+    if let Some(values) = column.as_any().downcast_ref::<arrow_array::Float32Array>() {
+        return Some(1.0 - values.value(row));
+    }
+    if let Some(values) = column.as_any().downcast_ref::<arrow_array::Float64Array>() {
+        return Some((1.0 - values.value(row)) as f32);
+    }
+    None
+}
+
+fn parse_lancedb_search_results(
+    batches: &[arrow_array::RecordBatch],
+) -> Result<Vec<SearchResult>, String> {
+    use arrow_array::Array;
+
+    let mut results = Vec::new();
+    for batch in batches {
+        let result_json = lancedb_string_column(batch, "result_json")?;
+        for row in 0..batch.num_rows() {
+            if result_json.is_null(row) {
+                continue;
+            }
+            let mut result = serde_json::from_str::<SearchResult>(result_json.value(row))
+                .map_err(|e| format!("parse LanceDB semantic result: {}", e))?;
+            if let Some(score) = lancedb_distance_score(batch, row) {
+                result.score = score;
+            }
+            results.push(result);
+        }
+    }
+    Ok(results)
+}
+
+fn collect_embedding_search_sources() -> Result<
+    (
+        Vec<ClaudeSearchSource>,
+        Vec<CodexSearchSource>,
+        Vec<EmbeddingSearchSourceManifestEntry>,
+    ),
+    String,
+> {
+    let claude_sources = collect_claude_search_sources(&get_claude_dir().join("projects"))?;
+    let codex_sources = collect_codex_search_sources();
+    let mut sources = Vec::with_capacity(claude_sources.len() + codex_sources.len());
+
+    for source in &claude_sources {
+        sources.push(EmbeddingSearchSourceManifestEntry {
+            path: source_path_key(&source.path),
+            source_kind: SearchIndexSourceKind::Claude.as_str().to_string(),
+            session_id: source.session_id.clone(),
+            size: source.size,
+            mtime: source.mtime,
+        });
+    }
+
+    for source in &codex_sources {
+        sources.push(EmbeddingSearchSourceManifestEntry {
+            path: source_path_key(&source.path),
+            source_kind: SearchIndexSourceKind::Codex.as_str().to_string(),
+            session_id: source.session_id.clone(),
+            size: source.size,
+            mtime: source.mtime,
+        });
+    }
+
+    sources.sort();
+    Ok((claude_sources, codex_sources, sources))
+}
+
+fn truncate_embedding_text(value: &str) -> String {
+    let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= EMBEDDING_SEARCH_MAX_TEXT_CHARS {
+        return normalized;
+    }
+    normalized
+        .chars()
+        .take(EMBEDDING_SEARCH_MAX_TEXT_CHARS)
+        .collect()
+}
+
+fn join_embedding_fields(fields: &[(&str, String)]) -> String {
+    truncate_embedding_text(
+        &fields
+            .iter()
+            .filter(|(_, value)| !value.trim().is_empty())
+            .map(|(label, value)| format!("{}: {}", label, value.trim()))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+fn push_embedding_candidate(
+    candidates: &mut Vec<EmbeddingSearchCandidate>,
+    seen_texts: &mut HashSet<String>,
+    candidate: EmbeddingSearchCandidate,
+) {
+    let key = format!(
+        "{}:{}:{}",
+        candidate.result.session_id,
+        candidate.result.round_index,
+        compact_embedding_text_key(&candidate.text)
+    );
+    if candidate.text.trim().is_empty() || !seen_texts.insert(key) {
+        return;
+    }
+    candidates.push(candidate);
+}
+
+fn compact_embedding_text_key(value: &str) -> String {
+    let normalized = value.to_lowercase();
+    let mut hash = 0u64;
+    for byte in normalized.bytes() {
+        hash = hash.wrapping_mul(31).wrapping_add(byte as u64);
+    }
+    format!("{}:{:x}", normalized.len(), hash)
+}
+
+fn collect_claude_embedding_candidates(
+    source: &ClaudeSearchSource,
+) -> Vec<EmbeddingSearchCandidate> {
+    let source_path = source_path_key(&source.path);
+    let session_head = read_session_head(&source.path, 20);
+    let session_title = session_head.title.unwrap_or_default();
+    let session_last_prompt = session_head.last_prompt.unwrap_or_default();
+    let file_content = fs::read_to_string(&source.path).unwrap_or_default();
+    let mut session_summary = session_head.summary;
+    let mut round_index = 0usize;
+    let mut round_prompt = String::new();
+    let mut round_timestamp = String::new();
+    let mut candidates = Vec::new();
+    let mut seen_texts = HashSet::new();
+
+    if session_summary.is_none() {
+        for line in file_content.lines() {
+            if let Ok(parsed) = serde_json::from_str::<RawLine>(line) {
+                if parsed.line_type.as_deref() == Some("summary") {
+                    session_summary = parsed.summary;
+                    break;
+                }
+            }
+        }
+    }
+
+    let summary_text = session_summary.clone().unwrap_or_default();
+    let session_text = join_embedding_fields(&[
+        ("title", session_title.clone()),
+        ("summary", summary_text.clone()),
+        ("last prompt", session_last_prompt.clone()),
+        ("project", source.display_path.clone()),
+    ]);
+    if !session_text.is_empty() {
+        push_embedding_candidate(
+            &mut candidates,
+            &mut seen_texts,
+            EmbeddingSearchCandidate {
+                source_path: source_path.clone(),
+                source_kind: SearchIndexSourceKind::Claude.as_str().to_string(),
+                source_size: source.size,
+                source_mtime: source.mtime,
+                text: session_text.clone(),
+                result: SearchResult {
+                    uuid: format!("semantic:{}:session", source.session_id),
+                    content: session_text,
+                    role: "session".to_string(),
+                    line_number: 0,
+                    project_id: source.project_id.clone(),
+                    project_path: source.display_path.clone(),
+                    session_id: source.session_id.clone(),
+                    session_summary: session_summary.clone(),
+                    title: if session_title.is_empty() {
+                        None
+                    } else {
+                        Some(session_title.clone())
+                    },
+                    summary: session_summary.clone(),
+                    last_prompt: if session_last_prompt.is_empty() {
+                        None
+                    } else {
+                        Some(session_last_prompt.clone())
+                    },
+                    round_index: 0,
+                    round_prompt: None,
+                    round_timestamp: None,
+                    timestamp: String::new(),
+                    score: 0.0,
+                },
+            },
+        );
+    }
+
+    for (line_idx, line) in file_content.lines().enumerate() {
+        if candidates.len() >= EMBEDDING_SEARCH_MAX_CHUNKS_PER_SESSION {
+            break;
+        }
+        let Ok(parsed) = serde_json::from_str::<RawLine>(line) else {
+            continue;
+        };
+        let line_type = parsed.line_type.as_deref();
+        let is_msg_line = matches!(
+            line_type,
+            Some("user") | Some("assistant") | Some("message")
+        );
+        if !is_msg_line {
+            continue;
+        }
+
+        let Some(msg) = &parsed.message else {
+            continue;
+        };
+        let role = msg.role.clone().unwrap_or_default();
+        if role != "user" && role != "assistant" {
+            continue;
+        }
+
+        let (text_content, is_tool) = extract_content_with_meta(&msg.content);
+        let is_meta = parsed.is_meta.unwrap_or(false);
+        let is_user_prompt = is_user_prompt_content(&role, is_tool, &text_content);
+        let display_role = if is_ai_authored_user_content(&role, is_tool, &text_content) {
+            "assistant".to_string()
+        } else {
+            role.clone()
+        };
+
+        if !is_meta && is_user_prompt && !text_content.is_empty() {
+            round_index += 1;
+            round_prompt = text_content.clone();
+            round_timestamp = parsed.timestamp.clone().unwrap_or_default();
+        }
+
+        if is_meta
+            || text_content.trim().is_empty()
+            || (role == "assistant" && is_no_response_placeholder(&text_content))
+        {
+            continue;
+        }
+
+        let chunk_text = join_embedding_fields(&[
+            ("title", session_title.clone()),
+            ("summary", summary_text.clone()),
+            ("last prompt", session_last_prompt.clone()),
+            ("project", source.display_path.clone()),
+            ("round prompt", round_prompt.clone()),
+            (display_role.as_str(), text_content.clone()),
+        ]);
+        let timestamp = parsed.timestamp.clone().unwrap_or_default();
+        push_embedding_candidate(
+            &mut candidates,
+            &mut seen_texts,
+            EmbeddingSearchCandidate {
+                source_path: source_path.clone(),
+                source_kind: SearchIndexSourceKind::Claude.as_str().to_string(),
+                source_size: source.size,
+                source_mtime: source.mtime,
+                text: chunk_text,
+                result: SearchResult {
+                    uuid: parsed.uuid.clone().unwrap_or_default(),
+                    content: text_content,
+                    role: display_role,
+                    line_number: line_idx + 1,
+                    project_id: source.project_id.clone(),
+                    project_path: source.display_path.clone(),
+                    session_id: source.session_id.clone(),
+                    session_summary: session_summary.clone(),
+                    title: if session_title.is_empty() {
+                        None
+                    } else {
+                        Some(session_title.clone())
+                    },
+                    summary: session_summary.clone(),
+                    last_prompt: if session_last_prompt.is_empty() {
+                        None
+                    } else {
+                        Some(session_last_prompt.clone())
+                    },
+                    round_index,
+                    round_prompt: if round_prompt.is_empty() {
+                        None
+                    } else {
+                        Some(round_prompt.clone())
+                    },
+                    round_timestamp: if round_timestamp.is_empty() {
+                        None
+                    } else {
+                        Some(round_timestamp.clone())
+                    },
+                    timestamp,
+                    score: 0.0,
+                },
+            },
+        );
+    }
+
+    candidates
+}
+
+fn collect_codex_embedding_candidates(source: &CodexSearchSource) -> Vec<EmbeddingSearchCandidate> {
+    let source_path = source_path_key(&source.path);
+    let Some(session) = build_codex_session(&source.path) else {
+        return Vec::new();
+    };
+    let messages = parse_codex_rollout_messages(&source.path).unwrap_or_default();
+    let project_path = session.project_path.clone().unwrap_or_default();
+    let session_title = session.title.clone().unwrap_or_default();
+    let session_summary = session
+        .title
+        .clone()
+        .or_else(|| session.last_prompt.clone())
+        .unwrap_or_default();
+    let session_last_prompt = session.last_prompt.clone().unwrap_or_default();
+    let mut candidates = Vec::new();
+    let mut seen_texts = HashSet::new();
+    let mut round_index = 0usize;
+    let mut round_prompt = String::new();
+    let mut round_timestamp = String::new();
+
+    let session_text = join_embedding_fields(&[
+        ("title", session_title.clone()),
+        ("summary", session_summary.clone()),
+        ("last prompt", session_last_prompt.clone()),
+        ("project", project_path.clone()),
+    ]);
+    if !session_text.is_empty() {
+        push_embedding_candidate(
+            &mut candidates,
+            &mut seen_texts,
+            EmbeddingSearchCandidate {
+                source_path: source_path.clone(),
+                source_kind: SearchIndexSourceKind::Codex.as_str().to_string(),
+                source_size: source.size,
+                source_mtime: source.mtime,
+                text: session_text.clone(),
+                result: SearchResult {
+                    uuid: format!("semantic:{}:session", session.id),
+                    content: session_text,
+                    role: "session".to_string(),
+                    line_number: 0,
+                    project_id: session.project_id.clone(),
+                    project_path: project_path.clone(),
+                    session_id: session.id.clone(),
+                    session_summary: Some(session_summary.clone()).filter(|s| !s.is_empty()),
+                    title: session.title.clone(),
+                    summary: Some(session_summary.clone()).filter(|s| !s.is_empty()),
+                    last_prompt: session.last_prompt.clone(),
+                    round_index: 0,
+                    round_prompt: None,
+                    round_timestamp: None,
+                    timestamp: String::new(),
+                    score: 0.0,
+                },
+            },
+        );
+    }
+
+    for message in messages {
+        if candidates.len() >= EMBEDDING_SEARCH_MAX_CHUNKS_PER_SESSION {
+            break;
+        }
+        if message.is_meta || message.content.trim().is_empty() {
+            continue;
+        }
+        let is_user_prompt =
+            is_user_prompt_content(&message.role, message.is_tool, &message.content);
+        let display_role =
+            if is_ai_authored_user_content(&message.role, message.is_tool, &message.content) {
+                "assistant".to_string()
+            } else {
+                message.role.clone()
+            };
+        if is_user_prompt {
+            round_index += 1;
+            round_prompt = message.content.clone();
+            round_timestamp = message.timestamp.clone();
+        }
+
+        let chunk_text = join_embedding_fields(&[
+            ("title", session_title.clone()),
+            ("summary", session_summary.clone()),
+            ("last prompt", session_last_prompt.clone()),
+            ("project", project_path.clone()),
+            ("round prompt", round_prompt.clone()),
+            (display_role.as_str(), message.content.clone()),
+        ]);
+        push_embedding_candidate(
+            &mut candidates,
+            &mut seen_texts,
+            EmbeddingSearchCandidate {
+                source_path: source_path.clone(),
+                source_kind: SearchIndexSourceKind::Codex.as_str().to_string(),
+                source_size: source.size,
+                source_mtime: source.mtime,
+                text: chunk_text,
+                result: SearchResult {
+                    uuid: message.uuid,
+                    content: message.content,
+                    role: display_role,
+                    line_number: message.line_number,
+                    project_id: session.project_id.clone(),
+                    project_path: project_path.clone(),
+                    session_id: session.id.clone(),
+                    session_summary: Some(session_summary.clone()).filter(|s| !s.is_empty()),
+                    title: session.title.clone(),
+                    summary: Some(session_summary.clone()).filter(|s| !s.is_empty()),
+                    last_prompt: session.last_prompt.clone(),
+                    round_index,
+                    round_prompt: Some(round_prompt.clone()).filter(|s| !s.is_empty()),
+                    round_timestamp: Some(round_timestamp.clone()).filter(|s| !s.is_empty()),
+                    timestamp: message.timestamp,
+                    score: 0.0,
+                },
+            },
+        );
+    }
+
+    candidates
+}
+
+fn normalize_embedding_vector(mut vector: Vec<f32>) -> Vec<f32> {
+    let norm = vector
+        .iter()
+        .map(|value| (*value as f64) * (*value as f64))
+        .sum::<f64>()
+        .sqrt() as f32;
+    if norm > 0.0 {
+        for value in vector.iter_mut() {
+            *value /= norm;
+        }
+    }
+    vector
+}
+
+async fn embed_text_batch(
+    client: &reqwest::Client,
+    config: &EmbeddingSearchConfig,
+    batch: &[String],
+) -> Result<Vec<Vec<f32>>, String> {
+    let mut request = client
+        .post(embedding_api_url(&config.base_url))
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&serde_json::json!({
+            "model": config.model,
+            "input": batch,
+        }));
+
+    if !config.api_key.is_empty() {
+        request = request.bearer_auth(&config.api_key);
+    }
+
+    let response = request
+        .send()
+        .await
+        .map_err(|e| format!("embedding request failed: {}", e))?;
+    let status = response.status();
+    let text = response
+        .text()
+        .await
+        .map_err(|e| format!("read embedding response failed: {}", e))?;
+    if !status.is_success() {
+        return Err(format!(
+            "embedding request returned HTTP {}: {}",
+            status, text
+        ));
+    }
+
+    let parsed: EmbeddingApiResponse =
+        serde_json::from_str(&text).map_err(|e| format!("parse embedding response: {}", e))?;
+    let mut ordered = vec![None; batch.len()];
+    for (fallback_index, datum) in parsed.data.into_iter().enumerate() {
+        let index = datum.index.unwrap_or(fallback_index);
+        if index < ordered.len() {
+            ordered[index] = Some(normalize_embedding_vector(datum.embedding));
+        }
+    }
+    ordered
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "embedding response count did not match request".to_string())
+}
+
+async fn embed_texts(
+    config: &EmbeddingSearchConfig,
+    texts: &[String],
+) -> Result<Vec<Vec<f32>>, String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(90))
+        .user_agent("Lovcode/semantic-search")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut vectors = Vec::with_capacity(texts.len());
+
+    for batch in texts.chunks(EMBEDDING_SEARCH_BATCH_SIZE) {
+        let embedded = embed_text_batch(&client, config, batch).await?;
+        vectors.extend(embedded);
+    }
+
+    Ok(vectors)
+}
+
+async fn build_embedding_search_index(
+    config: &EmbeddingSearchConfig,
+    claude_sources: &[ClaudeSearchSource],
+    codex_sources: &[CodexSearchSource],
+    sources: Vec<EmbeddingSearchSourceManifestEntry>,
+    store: &SemanticRagStoreAdapter,
+) -> Result<EmbeddingSearchIndex, String> {
+    let mut candidates = Vec::new();
+    for source in claude_sources {
+        candidates.extend(collect_claude_embedding_candidates(source));
+    }
+    for source in codex_sources {
+        candidates.extend(collect_codex_embedding_candidates(source));
+    }
+
+    if candidates.is_empty() {
+        return Err("No sessions available for embedding search.".to_string());
+    }
+
+    let texts = candidates
+        .iter()
+        .map(|candidate| candidate.text.clone())
+        .collect::<Vec<_>>();
+    let vectors = embed_texts(config, &texts).await?;
+    let dimensions = vectors.first().map(|vector| vector.len()).unwrap_or(0);
+    if dimensions == 0 {
+        return Err("Embedding provider returned empty vectors.".to_string());
+    }
+
+    let entries = candidates
+        .into_iter()
+        .zip(vectors)
+        .map(|(candidate, vector)| EmbeddingSearchEntry {
+            source_path: candidate.source_path,
+            source_kind: candidate.source_kind,
+            source_size: candidate.source_size,
+            source_mtime: candidate.source_mtime,
+            text: candidate.text,
+            result: candidate.result,
+            vector,
+        })
+        .collect::<Vec<_>>();
+
+    store.replace(config, dimensions, sources, entries).await
+}
+
+async fn ensure_embedding_search_index(
+    config: &EmbeddingSearchConfig,
+) -> Result<(SemanticRagStoreAdapter, EmbeddingSearchIndex), String> {
+    let (claude_sources, codex_sources, sources) = collect_embedding_search_sources()?;
+    let store = SemanticRagStoreAdapter::new(config);
+    if let Some(index) = store.load_current(config, &sources).await? {
+        return Ok((store, index));
+    }
+
+    let index =
+        build_embedding_search_index(config, &claude_sources, &codex_sources, sources, &store)
+            .await?;
+    Ok((store, index))
+}
+
+fn dot_product(a: &[f32], b: &[f32]) -> f32 {
+    a.iter()
+        .zip(b.iter())
+        .map(|(left, right)| left * right)
+        .sum()
+}
+
+fn rank_embedding_sessions(
+    entries: &[EmbeddingSearchEntry],
+    query_vector: &[f32],
+    limit: usize,
+    project_id: Option<&str>,
+) -> Vec<SearchResult> {
+    let mut by_session: HashMap<String, SearchResult> = HashMap::new();
+
+    for entry in entries {
+        if entry.vector.len() != query_vector.len() {
+            continue;
+        }
+        if let Some(project_id) = project_id {
+            if entry.result.project_id != project_id {
+                continue;
+            }
+        }
+
+        let score = dot_product(&entry.vector, query_vector);
+        let session_id = entry.result.session_id.clone();
+        let replace = by_session
+            .get(&session_id)
+            .map(|existing| score > existing.score)
+            .unwrap_or(true);
+        if replace {
+            let mut result = entry.result.clone();
+            result.score = score;
+            by_session.insert(session_id, result);
+        }
+    }
+
+    let mut results = by_session.into_values().collect::<Vec<_>>();
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.timestamp.cmp(&a.timestamp))
+            .then_with(|| a.session_id.cmp(&b.session_id))
+    });
+    results.truncate(limit);
+    results
+}
+
+#[tauri::command]
+pub(crate) async fn get_semantic_search_status() -> Result<SemanticSearchStatus, String> {
+    let config = match load_embedding_search_config() {
+        Ok(config) => config,
+        Err(error) => {
+            return Ok(SemanticSearchStatus {
+                configured: false,
+                ready: false,
+                model: None,
+                base_url: None,
+                store: DEFAULT_EMBEDDING_SEARCH_STORE_KIND.as_str().to_string(),
+                entries: 0,
+                error: Some(error),
+            });
+        }
+    };
+
+    let store = SemanticRagStoreAdapter::new(&config);
+    let store_status = store.status(&config).await;
+
+    Ok(SemanticSearchStatus {
+        configured: true,
+        ready: store_status.ready,
+        model: Some(config.model),
+        base_url: Some(config.base_url),
+        store: store.kind().as_str().to_string(),
+        entries: store_status.entries,
+        error: store_status.error,
+    })
+}
+
+#[tauri::command]
+pub(crate) async fn semantic_search_chats(
+    query: String,
+    limit: Option<usize>,
+    project_id: Option<String>,
+) -> Result<Vec<SearchResult>, String> {
+    let config = load_embedding_search_config()?;
+    let (store, index) = ensure_embedding_search_index(&config).await?;
+    let query_vectors = embed_texts(&config, &[query]).await?;
+    let Some(query_vector) = query_vectors.first() else {
+        return Err("Embedding provider returned no query vector.".to_string());
+    };
+    store
+        .search(
+            &index,
+            query_vector,
+            limit.unwrap_or(60).clamp(1, 200),
+            project_id.as_deref(),
+        )
+        .await
 }
 
 pub(crate) fn summarize_tool_input(name: &str, input: &serde_json::Value) -> String {

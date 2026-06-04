@@ -54,7 +54,11 @@ export function SessionDetailHeader({
         {badges}
         {meta}
       </div>
-      {actions ? <div className="flex shrink-0 items-center gap-3">{actions}</div> : null}
+      {actions ? (
+        <div className="inline-flex h-8 shrink-0 items-center gap-1 rounded-xl border border-border bg-card px-1 text-muted-foreground">
+          {actions}
+        </div>
+      ) : null}
     </header>
   );
 }

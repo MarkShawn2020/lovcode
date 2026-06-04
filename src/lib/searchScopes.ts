@@ -476,3 +476,85 @@ export function matchesScopedSessionMetadata(session: Session, parsed: ParsedSco
   if (!parsed.expression) return false;
   return evaluateMetadataExpression(session, parsed, parsed.expression) === "match";
 }
+
+const SEMANTIC_SEARCH_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "for",
+  "in",
+  "of",
+  "on",
+  "or",
+  "please",
+  "session",
+  "sessions",
+  "the",
+  "to",
+  "with",
+  "一下",
+  "一个",
+  "之前",
+  "会话",
+  "对应",
+  "帮",
+  "帮我",
+  "想",
+  "找",
+  "找出",
+  "把",
+  "提到",
+  "搜索",
+  "查",
+  "查找",
+  "筛选",
+  "给",
+  "聊过",
+  "讨论",
+  "讨论过",
+  "请",
+  "这个",
+  "这些",
+  "那个",
+  "那些",
+  "相关",
+  "能",
+  "能够",
+  "可以",
+  "的",
+  "了",
+  "和",
+  "与",
+  "是",
+  "在",
+  "有",
+]);
+
+function normalizeSemanticSearchTerm(term: string) {
+  return term
+    .replace(/^[\s"'`.,:;!?，。、“”‘’（）()[\]{}<>《》【】+-]+/, "")
+    .replace(/[\s"'`.,:;!?，。、“”‘’（）()[\]{}<>《》【】+-]+$/, "")
+    .toLowerCase();
+}
+
+function semanticSearchTerms(query: string) {
+  return (query.match(/"[^"]+"|'[^']+'|[A-Za-z0-9][A-Za-z0-9._-]*|[\p{Script=Han}]{2,}|\S+/gu) ?? [])
+    .map((term) => normalizeSemanticSearchTerm(term.replace(/^["']|["']$/g, "")))
+    .filter((term) => term.length > 0 && !SEMANTIC_SEARCH_STOPWORDS.has(term));
+}
+
+export function shouldUseSemanticSessionSearch(
+  query: string,
+  parsed: ParsedScopedSearchQuery = parseScopedSearchQuery(query)
+) {
+  const raw = query.trim();
+  if (!raw || parsed.hasScopes) return false;
+  if (/\b(?:AND|OR|NOT)\b|[()]/.test(raw)) return false;
+  if (/(^|\s)[+-]\S/.test(raw)) return false;
+
+  const terms = semanticSearchTerms(raw);
+  if (terms.length >= 2) return true;
+
+  const compact = raw.replace(/\s+/g, "");
+  return /[\p{Script=Han}]/u.test(compact) && compact.length >= 4;
+}

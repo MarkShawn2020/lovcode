@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.40.0
+
+### Minor Changes
+
+- Add semantic chat search with keyword fallback, improve the search overlay result flow, and add editor target choices for opening projects and sessions.
+
 ## 0.39.9
 
 ### Patch Changes

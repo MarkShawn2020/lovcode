@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@/lib/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emitTo, listen } from "@tauri-apps/api/event";
-import { Loader2, Search } from "lucide-react";
+import { Loader2, Search, X } from "lucide-react";
 import type { Session } from "../types";
-import { matchesScopedSessionMetadata, parseScopedSearchQuery } from "../lib/searchScopes";
+import { matchesScopedSessionMetadata, parseScopedSearchQuery, shouldUseSemanticSessionSearch } from "../lib/searchScopes";
 import { formatDate, formatRelativeTime, restoreSlashCommand } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
 import { useSearchIndexBuildStatus } from "../hooks";
@@ -206,6 +206,34 @@ function buildMetadataPreview(session: Session, query: string) {
 
   for (const field of metadataFields) {
     const preview = buildContentPreview(field, query, false);
+    if (preview) return preview;
+  }
+
+  return null;
+}
+
+function buildSearchHitPreview(result: SearchChatHit, session: Session, query: string) {
+  const fields = [
+    result.content,
+    result.round_prompt,
+    result.title,
+    result.summary,
+    result.last_prompt,
+    result.session_summary,
+    session.title,
+    session.summary,
+    session.last_prompt,
+    session.project_path,
+    getProjectName(session),
+  ];
+
+  for (const field of fields) {
+    const preview = buildContentPreview(field, query, false);
+    if (preview) return preview;
+  }
+
+  for (const field of fields) {
+    const preview = buildContentPreview(field, query, true);
     if (preview) return preview;
   }
 
@@ -591,6 +619,10 @@ function lineMetaLabel(hit: SearchChatHit) {
   return hit.line_number ? `line ${hit.line_number}` : "message";
 }
 
+function formatSearchError(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function getItemVariants(item: SearchResultItem): SearchResultVariant[] {
   if (item.kind === "message" || item.kind === "round") {
     return item.variants?.length ? item.variants : [variantFromItem(item)];
@@ -649,6 +681,7 @@ export default function SearchOverlay() {
   const [searching, setSearching] = useState(false);
   const [indexBuilding, setIndexBuilding] = useState(false);
   const [indexReady, setIndexReady] = useState(false);
+  const [semanticSearchError, setSemanticSearchError] = useState<string | null>(null);
   const [allSessions, setAllSessions] = useState<Session[]>([]);
   const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -656,6 +689,7 @@ export default function SearchOverlay() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const sessionStreamSeqRef = useRef(0);
   const resultsScrollRef = useRef<HTMLDivElement | null>(null);
+  const resultItemRefs = useRef<Array<HTMLDivElement | null>>([]);
   const expandedVariantsRef = useRef<HTMLDivElement | null>(null);
   const searchIndexStateRef = useRef<string | undefined>(undefined);
   const {
@@ -688,7 +722,12 @@ export default function SearchOverlay() {
   const searchIndexPresentation = getSearchIndexPresentation(searchIndexStatus, searchIndexProgress);
   const parsedQuery = useMemo(() => parseScopedSearchQuery(trimmedQuery), [trimmedQuery]);
   const highlightQuery = parsedQuery.highlightQuery;
+  const semanticSearch = useMemo(
+    () => shouldUseSemanticSessionSearch(trimmedQuery, parsedQuery),
+    [trimmedQuery, parsedQuery],
+  );
   const currentViewLabel = SEARCH_VIEW_MODES.find((mode) => mode.id === viewMode)?.label ?? "Result";
+  const activeResultKey = results[activeIdx]?.key;
 
   const rememberSearch = useCallback((value: string) => {
     const term = normalizeSnippetValue(value);
@@ -698,6 +737,16 @@ export default function SearchOverlay() {
         term,
         ...current.filter((item) => item.toLowerCase() !== term.toLowerCase()),
       ].slice(0, RECENT_SEARCH_LIMIT);
+      writeRecentSearches(next);
+      return next;
+    });
+  }, []);
+
+  const removeRecentSearch = useCallback((value: string) => {
+    const term = normalizeSnippetValue(value).toLowerCase();
+    if (!term) return;
+    setRecentSearches((current) => {
+      const next = current.filter((item) => item.toLowerCase() !== term);
       writeRecentSearches(next);
       return next;
     });
@@ -785,6 +834,7 @@ export default function SearchOverlay() {
     if (!trimmedQuery) {
       setSourceResults([]);
       setSearching(false);
+      setSemanticSearchError(null);
       return;
     }
 
@@ -796,10 +846,28 @@ export default function SearchOverlay() {
           matchesScopedSessionMetadata(session, parsedQuery)
         );
 
-        const contentResults = await invoke<SearchChatHit[]>(
-          "search_chats",
-          { query: trimmedQuery, limit: FULL_TEXT_SEARCH_LIMIT }
-        ).catch(() => []);
+        let nextSemanticSearchError: string | null = null;
+        let contentResults: SearchChatHit[] = [];
+
+        if (semanticSearch) {
+          try {
+            contentResults = await invoke<SearchChatHit[]>(
+              "semantic_search_chats",
+              { query: trimmedQuery, limit: 160 }
+            );
+          } catch (error) {
+            nextSemanticSearchError = formatSearchError(error);
+            contentResults = await invoke<SearchChatHit[]>(
+              "search_chats",
+              { query: trimmedQuery, limit: FULL_TEXT_SEARCH_LIMIT }
+            ).catch(() => []);
+          }
+        } else {
+          contentResults = await invoke<SearchChatHit[]>(
+            "search_chats",
+            { query: trimmedQuery, limit: FULL_TEXT_SEARCH_LIMIT }
+          ).catch(() => []);
+        }
 
         const contentSessionIds = new Set<string>();
         const messageItems: SearchResultItem[] = [];
@@ -808,8 +876,9 @@ export default function SearchOverlay() {
           const session = sessionsById.get(result.session_id);
           if (!session) return;
           const messageKey = `${result.session_id}:${result.uuid || "message"}:${result.line_number ?? resultIndex}`;
-          const messagePreview = buildMessageHitPreview(result, highlightQuery);
-          const roundPreview = buildRoundHitPreview(result, highlightQuery);
+          const semanticPreview = semanticSearch ? buildSearchHitPreview(result, session, highlightQuery) : null;
+          const messagePreview = buildMessageHitPreview(result, highlightQuery) ?? semanticPreview;
+          const roundPreview = buildRoundHitPreview(result, highlightQuery) ?? semanticPreview;
           if (!messagePreview && !roundPreview) return;
 
           contentSessionIds.add(result.session_id);
@@ -849,6 +918,7 @@ export default function SearchOverlay() {
 
         const nextResults = sortSearchItems([...messageItems, ...metadataItems]);
 
+        setSemanticSearchError(nextSemanticSearchError);
         setSourceResults(nextResults);
       } finally {
         if (!cancelled) setSearching(false);
@@ -859,7 +929,7 @@ export default function SearchOverlay() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [trimmedQuery, parsedQuery, highlightQuery, allSessions, sessionsById, indexReady]);
+  }, [trimmedQuery, parsedQuery, highlightQuery, semanticSearch, allSessions, sessionsById, indexReady]);
 
   useEffect(() => {
     if (!trimmedQuery) return;
@@ -896,6 +966,27 @@ export default function SearchOverlay() {
     });
     return () => cancelAnimationFrame(frame);
   }, [expandedVariantKey]);
+
+  useEffect(() => {
+    if (!activeResultKey) return;
+    const frame = requestAnimationFrame(() => {
+      const scroller = resultsScrollRef.current;
+      const activeItem = resultItemRefs.current[activeIdx];
+      if (!scroller || !activeItem) return;
+
+      const scrollerRect = scroller.getBoundingClientRect();
+      const itemRect = activeItem.getBoundingClientRect();
+      const bottomOverflow = itemRect.bottom - (scrollerRect.bottom - 12);
+      const topOverflow = (scrollerRect.top + 8) - itemRect.top;
+
+      if (bottomOverflow > 0) {
+        scroller.scrollBy({ top: bottomOverflow, behavior: "auto" });
+      } else if (topOverflow > 0) {
+        scroller.scrollBy({ top: -topOverflow, behavior: "auto" });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [activeIdx, activeResultKey]);
 
   const hide = () => {
     getCurrentWindow().hide().catch(() => {});
@@ -1011,20 +1102,39 @@ export default function SearchOverlay() {
               )}
             </div>
 
+            {trimmedQuery && semanticSearch && semanticSearchError ? (
+              <div className="mt-2 rounded-lg border border-border bg-card-alt px-3 py-2 text-[11px] text-muted-foreground">
+                Embedding search is unavailable. Showing keyword results.
+              </div>
+            ) : null}
+
             {!trimmedQuery && recentSearchBadges.length > 0 && (
               <div className="mt-2 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap" aria-label="Recent searches">
                 <span className="shrink-0 text-[11px] text-muted-foreground">Recent</span>
                 {recentSearchBadges.map((term) => (
-                  <button
+                  <span
                     key={term}
-                    type="button"
-                    onClick={() => onSelectRecentSearch(term)}
-                    className="max-w-[12rem] shrink-0 truncate rounded-lg border border-border bg-card-alt px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
-                    aria-label={`Search for ${term}`}
-                    title={term}
+                    className="group flex max-w-[12rem] shrink-0 items-center overflow-hidden rounded-lg border border-border bg-card-alt text-[11px] text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
                   >
-                    {term}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => onSelectRecentSearch(term)}
+                      className="min-w-0 flex-1 truncate px-2 py-1 text-left"
+                      aria-label={`Search for ${term}`}
+                      title={term}
+                    >
+                      {term}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeRecentSearch(term)}
+                      className="flex h-5 w-5 shrink-0 items-center justify-center border-l border-border/70 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive focus:outline-none focus:ring-1 focus:ring-primary"
+                      aria-label={`Delete recent search ${term}`}
+                      title="Delete recent search"
+                    >
+                      <X className="h-3 w-3" aria-hidden="true" />
+                    </button>
+                  </span>
                 ))}
               </div>
             )}
@@ -1122,6 +1232,9 @@ export default function SearchOverlay() {
                 return (
                   <div
                     key={item.key}
+                    ref={(node) => {
+                      resultItemRefs.current[i] = node;
+                    }}
                     onMouseEnter={() => onResultMouseEnter(i)}
                     className={`transition-colors ${
                       isActive ? "bg-primary/10 text-foreground" : "text-muted-foreground hover:bg-card-alt hover:text-foreground"

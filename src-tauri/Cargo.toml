@@ -1,6 +1,6 @@
 [package]
 name = "lovcode"
-version = "0.39.9"
+version = "0.40.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -52,6 +52,9 @@ cbc = { version = "0.1", features = ["std"] }
 pbkdf2 = "0.12"
 sha1 = "0.10"
 rayon = "1.12.0"
+lancedb = "0.30.0"
+arrow-array = "58.3.0"
+arrow-schema = "58.3.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 cocoa = "0.26"

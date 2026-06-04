@@ -1,6 +1,7 @@
 import { Fragment, type ReactNode } from "react";
 import { invoke } from "@/lib/tauri";
-import { Copy, ExternalLink, Eye, FolderOpen, Settings2 } from "lucide-react";
+import type { EditorTargetId } from "@/lib/editorTargets";
+import { Copy, Eye, FolderOpen, Settings2 } from "lucide-react";
 import {
   ContextMenuItem,
   ContextMenuLabel,
@@ -13,9 +14,10 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { toast } from "@/components/ui/toast";
 import { useI18n } from "@/i18n";
+import { OpenInEditorMenu } from "./OpenInEditorMenu";
 
 export type ProjectPathMenuVariant = "context" | "dropdown";
-type ProjectPathMenuAction = (path: string) => void | Promise<void>;
+type ProjectPathMenuAction = (path: string, editor?: EditorTargetId) => void | Promise<unknown>;
 
 export interface ProjectPathMenuBaseProps {
   path: string;
@@ -96,13 +98,6 @@ export function ProjectPathMenuItems({
         onSelect: () => runAction(onViewDetails),
       });
     }
-    if (onOpenInEditor) {
-      projectItems.push({
-        label: t("common.openInEditor"),
-        icon: <ExternalLink className="h-4 w-4" />,
-        onSelect: () => runAction(onOpenInEditor),
-      });
-    }
     projectItems.push(
       {
         label: t("workspace.openInFinder"),
@@ -150,6 +145,12 @@ export function ProjectPathMenuItems({
                 {item.label}
               </DropdownMenuItem>
             ))}
+            {index === 0 && onOpenInEditor ? (
+              <OpenInEditorMenu
+                variant="dropdown"
+                onSelect={(editor) => onOpenInEditor(path, editor)}
+              />
+            ) : null}
           </Fragment>
         ))}
       </>
@@ -170,6 +171,12 @@ export function ProjectPathMenuItems({
               {item.label}
             </ContextMenuItem>
           ))}
+          {index === 0 && onOpenInEditor ? (
+            <OpenInEditorMenu
+              variant="context"
+              onSelect={(editor) => onOpenInEditor(path, editor)}
+            />
+          ) : null}
         </Fragment>
       ))}
     </>

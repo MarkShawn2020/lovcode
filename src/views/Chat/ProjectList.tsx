@@ -2695,6 +2695,7 @@ export function SessionDetail({
   const contentRef = useRef<HTMLDivElement>(null);
   const [activeMatch, setActiveMatch] = useState(0);
   const [matchCount, setMatchCount] = useState(0);
+  const isSearchMatchMode = effectiveDisplayMode === "standard" && Boolean(highlight?.trim());
   const bottomScrolledSessionRef = useRef<string | null>(null);
   const targetMessageScrollKeyRef = useRef<string | null>(null);
   const matchNavigationRequestedRef = useRef(false);
@@ -2800,7 +2801,7 @@ export function SessionDetail({
   // Count matches from the actual rendered DOM (source of truth) after every render
   useEffect(() => {
     const root = contentRef.current;
-    if (!highlight?.trim() || !root || showBlockingLoading) {
+    if (!isSearchMatchMode || !root || showBlockingLoading) {
       setMatchCount(0);
       return;
     }
@@ -2811,12 +2812,12 @@ export function SessionDetail({
       setMatchCount(hits.length);
     });
     return () => cancelAnimationFrame(raf);
-  }, [highlight, renderedMessages, showBlockingLoading, originalChat]);
+  }, [isSearchMatchMode, highlight, renderedMessages, showBlockingLoading, originalChat]);
 
   useEffect(() => {
     setActiveMatch(0);
     matchNavigationRequestedRef.current = false;
-  }, [highlight, filteredMessages]);
+  }, [highlight, filteredMessages, isSearchMatchMode]);
 
   useEffect(() => {
     bottomScrolledSessionRef.current = null;
@@ -2827,7 +2828,7 @@ export function SessionDetail({
   }, [session.id, targetMessageId, targetLineNumber, targetRoundIndex]);
 
   useEffect(() => {
-    if (showBlockingLoading || highlight?.trim() || filteredMessages.length === 0) return;
+    if (showBlockingLoading || isSearchMatchMode || filteredMessages.length === 0) return;
     const shouldScroll = bottomScrolledSessionRef.current !== session.id || liveSyncScrollRef.current;
     if (!shouldScroll) return;
 
@@ -2839,7 +2840,7 @@ export function SessionDetail({
       liveSyncScrollRef.current = false;
     });
     return () => cancelAnimationFrame(raf);
-  }, [showBlockingLoading, highlight, filteredMessages.length, session.id]);
+  }, [showBlockingLoading, isSearchMatchMode, filteredMessages.length, session.id]);
 
   useEffect(() => {
     if (!contentRef.current || matchCount === 0 || showBlockingLoading) return;
@@ -2860,9 +2861,9 @@ export function SessionDetail({
       const idx = Math.min(activeMatch, hits.length - 1);
       hits.forEach((el, i) => {
         if (i === idx) {
-          el.style.backgroundColor = "#CC785C";
-          el.style.color = "#fff";
-          el.style.outline = "2px solid #CC785C";
+          el.style.backgroundColor = "var(--primary)";
+          el.style.color = "var(--primary-foreground)";
+          el.style.outline = "2px solid var(--primary)";
         } else {
           el.style.backgroundColor = "";
           el.style.color = "";
@@ -2989,32 +2990,39 @@ export function SessionDetail({
         meta={<span className="text-xs text-muted-foreground/70 shrink-0">· {roundCount} rounds</span>}
         actions={
           <>
-            {highlight?.trim() && (
-              <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                <span className="tabular-nums">
+            {isSearchMatchMode ? (
+              <div className="flex h-6 items-center gap-1 border-r border-border pl-1 pr-1.5 text-xs text-muted-foreground">
+                <MagnifyingGlassIcon className="h-3.5 w-3.5 text-muted-foreground/70" />
+                <span className="min-w-9 text-center font-medium tabular-nums text-foreground">
                   {matchCount === 0 ? "0/0" : `${activeMatch + 1}/${matchCount}`}
                 </span>
                 <button
                   onClick={() => gotoMatch(-1)}
                   disabled={matchCount === 0}
-                  className="p-1 rounded hover:bg-card-alt hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
                   title="Previous match"
+                  aria-label="Previous match"
                 >
                   <ChevronUp className="w-3.5 h-3.5" />
                 </button>
                 <button
                   onClick={() => gotoMatch(1)}
                   disabled={matchCount === 0}
-                  className="p-1 rounded hover:bg-card-alt hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
                   title="Next match"
+                  aria-label="Next match"
                 >
                   <ChevronDown className="w-3.5 h-3.5" />
                 </button>
               </div>
-            )}
+            ) : null}
             <DropdownMenu modal={false}>
               <DropdownMenuTrigger asChild>
-                <button className="p-1.5 rounded-lg text-muted-foreground hover:bg-card-alt">
+                <button
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  title="Conversation actions"
+                  aria-label="Conversation actions"
+                >
                   <DotsHorizontalIcon width={16} />
                 </button>
               </DropdownMenuTrigger>

@@ -78,6 +78,7 @@ import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildAgentCommand, labelForProvider, makeSessionTitle, prefixCommandEnv, runtimeForProvider } from "@/lib/agent/commands";
 import { readDevResumeState, writeWorkspaceDevResumeState } from "@/lib/appResume";
+import type { EditorTargetId } from "@/lib/editorTargets";
 import {
   buildEnvironmentCommand,
   getDefaultSessionEnvironmentKey,
@@ -4494,9 +4495,9 @@ export default function AgentWorkspacePage() {
     standardDetailRow
       ? getConversationProvider(standardDetailRow) ?? "claude"
       : providerForTranscript(standardDetailSession ?? undefined) ?? "claude";
-  const openProjectInEditor = async (path: string) => {
+  const openProjectInEditor = async (path: string, editor?: EditorTargetId) => {
     try {
-      await invoke("open_in_editor", { path });
+      await invoke("open_in_editor", { path, editor });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       toast.error(t("workspace.openProjectInEditorFailed", { message }));
