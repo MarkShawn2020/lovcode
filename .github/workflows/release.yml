@@ -48,16 +48,21 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
-          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
             echo "Tag $TAG already exists on remote"
             echo "tag=$TAG" >> $GITHUB_OUTPUT
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git tag -f "$TAG"
-            git push origin "$TAG"
+            if git push origin "$TAG"; then
+              echo "Pushed tag $TAG"
+            elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "Tag $TAG was created by another process"
+            else
+              exit 1
+            fi
             echo "tag=$TAG" >> $GITHUB_OUTPUT
-            echo "Pushed tag $TAG"
           fi
 
   build:
@@ -149,6 +154,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - uses: arduino/setup-protoc@v3
 
       - uses: Swatinem/rust-cache@v2
         with:
