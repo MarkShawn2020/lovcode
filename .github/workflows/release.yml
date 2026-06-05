@@ -239,7 +239,45 @@ jobs:
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Build targeted macOS x64 bundle
+        if: github.event_name == 'workflow_dispatch' && matrix.target == 'x86_64-apple-darwin'
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri build --target ${{ matrix.target }} --verbose
+
+      - name: Upload targeted macOS x64 assets
+        if: github.event_name == 'workflow_dispatch' && matrix.target == 'x86_64-apple-darwin'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.get-tag.outputs.tag }}"
+          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
+          shopt -s globstar nullglob
+          assets=(
+            "$BUNDLE_DIR"/**/*.dmg
+            "$BUNDLE_DIR"/**/*.app.tar.gz
+            "$BUNDLE_DIR"/**/*.sig
+          )
+
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "No assets found in $BUNDLE_DIR" >&2
+            find "$BUNDLE_DIR" -type f -print >&2 || true
+            exit 1
+          fi
+
+          printf 'Uploading assets:\n'
+          printf '  %s\n' "${assets[@]}"
+          gh release upload "$TAG" "${assets[@]}" --clobber
+
       - uses: tauri-apps/tauri-action@v0
+        if: github.event_name != 'workflow_dispatch' || matrix.target != 'x86_64-apple-darwin'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS signing
