@@ -257,6 +257,7 @@ jobs:
           releaseBody: ${{ steps.changelog.outputs.content }}
           releaseDraft: false
           prerelease: false
+          includeUpdaterJson: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'all' }}
           args: --target ${{ matrix.target }}
 
       - name: Cleanup keychain
