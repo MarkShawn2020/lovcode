@@ -8,6 +8,17 @@ on:
       tag:
         description: 'Tag to build (e.g., v0.1.0)'
         required: true
+      target:
+        description: 'Target to build'
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - x86_64-unknown-linux-gnu
+          - x86_64-apple-darwin
+          - aarch64-apple-darwin
+          - x86_64-pc-windows-msvc
 
 env:
   CARGO_INCREMENTAL: 0
@@ -48,9 +59,16 @@ jobs:
         run: |
           VERSION=$(node -p "require('./package.json').version")
           TAG="v$VERSION"
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists on remote"
-            echo "tag=$TAG" >> $GITHUB_OUTPUT
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            TAG_COMMIT=$(git rev-list -n 1 "$TAG")
+            HEAD_COMMIT=$(git rev-parse HEAD)
+            if [ "$TAG_COMMIT" = "$HEAD_COMMIT" ]; then
+              echo "Tag $TAG already points to this commit"
+              echo "tag=$TAG" >> $GITHUB_OUTPUT
+            else
+              echo "Tag $TAG already points to $TAG_COMMIT; current commit is $HEAD_COMMIT"
+              echo "Skipping release build for this push"
+            fi
           else
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -65,21 +83,57 @@ jobs:
             echo "tag=$TAG" >> $GITHUB_OUTPUT
           fi
 
-  build:
+  prepare-build:
     needs: [release]
     if: always() && (needs.release.outputs.tag != '' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Select build matrix
+        id: matrix
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TARGET="${{ github.event.inputs.target }}"
+          else
+            TARGET="all"
+          fi
+
+          if [ -z "$TARGET" ]; then
+            TARGET="all"
+          fi
+
+          case "$TARGET" in
+            all)
+              MATRIX='{"include":[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"os":"macos-15-intel","target":"x86_64-apple-darwin"},{"os":"macos-latest","target":"aarch64-apple-darwin"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}]}'
+              ;;
+            x86_64-unknown-linux-gnu)
+              MATRIX='{"include":[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]}'
+              ;;
+            x86_64-apple-darwin)
+              MATRIX='{"include":[{"os":"macos-15-intel","target":"x86_64-apple-darwin"}]}'
+              ;;
+            aarch64-apple-darwin)
+              MATRIX='{"include":[{"os":"macos-latest","target":"aarch64-apple-darwin"}]}'
+              ;;
+            x86_64-pc-windows-msvc)
+              MATRIX='{"include":[{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}]}'
+              ;;
+            *)
+              echo "Unsupported target: $TARGET" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [release, prepare-build]
+    if: always() && needs.prepare-build.result == 'success'
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - os: macos-15-intel
-            target: x86_64-apple-darwin
-          - os: macos-latest
-            target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+      matrix: ${{ fromJSON(needs.prepare-build.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
