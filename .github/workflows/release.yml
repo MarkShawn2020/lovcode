@@ -259,11 +259,23 @@ jobs:
         run: |
           TAG="${{ steps.get-tag.outputs.tag }}"
           BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
-          shopt -s globstar nullglob
-          assets=(
-            "$BUNDLE_DIR"/**/*.dmg
-            "$BUNDLE_DIR"/**/*.app.tar.gz
-            "$BUNDLE_DIR"/**/*.sig
+          MACOS_DIR="$BUNDLE_DIR/macos"
+          if [ -f "$MACOS_DIR/lovcode.app.tar.gz" ]; then
+            mv "$MACOS_DIR/lovcode.app.tar.gz" "$MACOS_DIR/lovcode_x64.app.tar.gz"
+          fi
+          if [ -f "$MACOS_DIR/lovcode.app.tar.gz.sig" ]; then
+            mv "$MACOS_DIR/lovcode.app.tar.gz.sig" "$MACOS_DIR/lovcode_x64.app.tar.gz.sig"
+          fi
+
+          assets=()
+          while IFS= read -r asset; do
+            assets+=("$asset")
+          done < <(
+            find "$BUNDLE_DIR" -type f \( \
+              -name '*.dmg' -o \
+              -name '*.app.tar.gz' -o \
+              -name '*.sig' \
+            \) -print
           )
 
           if [ "${#assets[@]}" -eq 0 ]; then
