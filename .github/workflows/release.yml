@@ -314,3 +314,38 @@ jobs:
         if: runner.os == 'macOS' && always()
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+
+  # 各 build slot 并行都写了 latest.json,last-writer-wins 会丢平台条目。
+  # 这步等 build 全部完成,基于 release 上各 target 的 .sig 合并一份正确且跨平台的 latest.json 并覆盖。
+  publish-json:
+    needs: [build]
+    if: always() && needs.build.result == 'success' && (needs.release.outputs.tag != '' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Determine tag
+        id: get-tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = 'workflow_dispatch' ]; then
+            echo "tag=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ needs.release.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download all .sig artifacts from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.get-tag.outputs.tag }}
+        shell: bash
+        run: |
+          mkdir -p sigs
+          gh release download "$TAG" --pattern '*.sig' --dir sigs
+
+      - name: Build and upload merged latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.get-tag.outputs.tag }}
+        shell: bash
+        run: node scripts/publish-update-json.cjs
