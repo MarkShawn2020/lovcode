@@ -5,10 +5,50 @@ pub(crate) fn get_claude_json_path() -> PathBuf {
     dirs::home_dir().unwrap().join(".claude.json")
 }
 
-/// Encode project path to project ID (inverse of decode_project_path).
-/// Claude Code encodes: `/.` -> `--`, then `/` -> `-`
+/// Encode project path to project ID. Mirrors Claude Code's `sanitizePath` in
+/// `src/utils/sessionStoragePortable.ts`: every non-alphanumeric character is
+/// replaced with `-`. For paths ≤ 200 chars no hash is appended; for longer
+/// paths we truncate at 200 and append a base-36 hash. Claude Code picks
+/// `Bun.hash` (wyhash) or `simpleHash` (djb2) depending on runtime, but
+/// Lovcode only runs in the desktop Tauri app (no Bun), so we always use the
+/// djb2 variant. Claude Code's `findProjectDir` falls back to prefix-scanning
+/// for cross-runtime hashes anyway, so a deterministic djb2 is sufficient for
+/// round-tripping our own writes.
 pub(crate) fn encode_project_path(path: &str) -> String {
-    path.replace("/.", "--").replace("/", "-")
+    const MAX_LEN: usize = 200;
+    let sanitized: String = path
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    if sanitized.len() <= MAX_LEN {
+        return sanitized;
+    }
+    let hash = djb2_base36(path);
+    format!("{}-{}", &sanitized[..MAX_LEN], hash)
+}
+
+/// Classic djb2 hash, base-36-encoded. We don't need cryptographic quality —
+/// only a short stable tag to disambiguate two paths that share the first 200
+/// chars after sanitization.
+fn djb2_base36(input: &str) -> String {
+    const CHARS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut hash: u64 = 5381;
+    for b in input.bytes() {
+        hash = hash.wrapping_mul(33).wrapping_add(u64::from(b));
+    }
+    let mut n = (hash as i64).unsigned_abs();
+    if n == 0 {
+        return "0".to_string();
+    }
+    let mut buf = [0u8; 16];
+    let mut len = 0;
+    while n > 0 && len < buf.len() {
+        buf[len] = CHARS[(n % 36) as usize];
+        n /= 36;
+        len += 1;
+    }
+    buf[..len].reverse();
+    String::from_utf8(buf[..len].to_vec()).unwrap()
 }
 
 /// Decode project ID to actual filesystem path.
@@ -34,7 +74,7 @@ pub(crate) fn decode_project_path(id: &str) -> String {
         .replace("-", "/")
         .replace("\x00", "/.");
 
-    // Normalize: strip trailing /. and / segments (e.g. /Users/mark/././ → /Users/mark)
+    // Normalize: strip trailing /. and / segments (e.g. /home/<user>/././ → /home/<user>)
     let base = base.trim_end_matches('/').to_string();
     let base = {
         let mut b = base.as_str();
@@ -63,7 +103,7 @@ pub(crate) fn decode_project_path(id: &str) -> String {
         }
     }
 
-    // Try merging from /Users/mark/ (home dir) as base
+    // Try merging from /home/<user>/ (home dir) as base
     if let Some(home) = dirs::home_dir() {
         let home_str = format!("{}/", home.display());
         if base.starts_with(&home_str) {
@@ -78,30 +118,56 @@ pub(crate) fn decode_project_path(id: &str) -> String {
     base
 }
 
-/// Try different combinations of merging path segments with hyphens
+/// Try to recover a filesystem path by progressively merging one contiguous
+/// range of segments with `-` and keeping the remaining segments as `/`.
+///
+/// Claude Code stores the canonical cwd inside each session jsonl itself, so
+/// `decode_project_path` should be treated as a **last-resort fallback** for
+/// projects that don't yet have a parseable session. For everything else, the
+/// display path comes straight from `cwd` in the first jsonl line.
+///
+/// The encoding itself is lossy (Claude Code replaces every non-alphanumeric
+/// character with `-`, so e.g. `/path/<a>-<b>` and `/path/<a>_<b>` would both
+/// encode to the same project id), so no algorithmic decoder can be perfectly
+/// correct. This heuristic enumerates the plausible partitions and lets the
+/// first candidate that exists on disk win; the caller is expected to
+/// overwrite it with `cwd` whenever a parseable session exists.
 pub(crate) fn try_merge_segments(prefix: &str, rest: &str) -> Option<String> {
     let segments: Vec<&str> = rest.split('/').filter(|s| !s.is_empty()).collect();
     if segments.is_empty() {
         return None;
     }
 
-    // Try merging all segments into one (most common: project-name-here)
-    let all_merged = format!("{}{}", prefix, segments.join("-"));
-    if PathBuf::from(&all_merged).exists() {
-        return Some(all_merged);
+    let prefix = prefix.trim_end_matches('/');
+    let n = segments.len();
+
+    // 0 blocks: naive decode (`a/b/c`).
+    let naive = format!("{}/{}", prefix, segments.join("/"));
+    if PathBuf::from(&naive).exists() {
+        return Some(naive);
     }
 
-    // Try merging first N segments, leaving rest as subdirs
-    for merge_count in (1..segments.len()).rev() {
-        let merged_part = segments[..=merge_count].join("-");
-        let rest_part = segments[merge_count + 1..].join("/");
-        let candidate = if rest_part.is_empty() {
-            format!("{}{}", prefix, merged_part)
-        } else {
-            format!("{}{}/{}", prefix, merged_part, rest_part)
-        };
-        if PathBuf::from(&candidate).exists() {
-            return Some(candidate);
+    // 1 block: any contiguous [start, end) merged with '-'.
+    for start in 0..n {
+        for end in (start + 1)..=n {
+            let mut parts: Vec<String> = Vec::with_capacity(3);
+            if start > 0 {
+                parts.push(segments[..start].join("/"));
+            }
+            parts.push(segments[start..end].join("-"));
+            let candidate = format!(
+                "{}/{}",
+                prefix,
+                parts
+                    .into_iter()
+                    .chain(std::iter::once(segments[end..].join("/")))
+                    .filter(|p| !p.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("/")
+            );
+            if PathBuf::from(&candidate).exists() {
+                return Some(candidate);
+            }
         }
     }
 
@@ -126,10 +192,10 @@ pub(crate) async fn list_projects() -> Result<Vec<Project>, String> {
 
             if path.is_dir() {
                 let id = path.file_name().unwrap().to_string_lossy().to_string();
-                let display_path = decode_project_path(&id);
 
                 let mut session_count = 0;
                 let mut last_active: u64 = 0;
+                let mut newest_jsonl: Option<(PathBuf, std::time::SystemTime)> = None;
 
                 if let Ok(entries) = fs::read_dir(&path) {
                     for entry in entries.filter_map(|e| e.ok()) {
@@ -143,11 +209,27 @@ pub(crate) async fn list_projects() -> Result<Vec<Project>, String> {
                                     {
                                         last_active = last_active.max(duration.as_secs());
                                     }
+                                    // Track newest jsonl so we can read its cwd.
+                                    newest_jsonl = Some(match newest_jsonl {
+                                        Some((p, t)) if t >= modified => (p, t),
+                                        _ => (entry.path(), modified),
+                                    });
                                 }
                             }
                         }
                     }
                 }
+
+                // Preferred display path: the cwd stamped into the newest
+                // session's first line (`session_meta.cwd`). Claude Code stores
+                // this verbatim — it's the canonical, lossless source of truth.
+                // Fall back to `decode_project_path` only when no parseable
+                // session exists yet (rare edge case: brand-new project dir).
+                let display_path = newest_jsonl
+                    .as_ref()
+                    .and_then(|(p, _)| read_session_head(p, 20).cwd)
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| decode_project_path(&id));
 
                 projects.push(Project {
                     id: id.clone(),
@@ -763,6 +845,149 @@ mod tests {
             "<skills_instructions>\n## Skills\n</skills_instructions>"
         ));
         assert!(!is_codex_context_message("Write a daily product report"));
+    }
+
+    /// Build a uniquely-named temp directory tree for decode tests.
+    /// Returns (anchor_path, _guard). The anchor path is guaranteed unique and
+    /// self-contained so each test gets its own filesystem namespace.
+    fn make_unique_anchor() -> (PathBuf, impl Drop) {
+        let nonce = uuid::Uuid::new_v4();
+        let path = std::env::temp_dir().join(format!("lovcode-decode-{}", nonce));
+        std::fs::create_dir_all(&path).expect("create temp anchor");
+        let anchor = path.clone();
+        let guard = scopeguard_like(path);
+        (anchor, guard)
+    }
+
+    fn scopeguard_like(path: PathBuf) -> impl Drop {
+        struct RmOnDrop(PathBuf);
+        impl Drop for RmOnDrop {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        RmOnDrop(path)
+    }
+
+    #[test]
+    fn try_merge_segments_recovers_middle_merge() {
+        // Regression: paths like `<anchor>/parent/<dash-named-project>/` where
+        // only the last two segments are merged. The previous algorithm could
+        // not produce this candidate because it only merged a prefix of the
+        // segment list, so such projects decoded to `<anchor>/parent/<a>/<b>`.
+        let (anchor, _g) = make_unique_anchor();
+        let target = anchor.join("parent/cool-project");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let prefix = format!("{}/", anchor.display());
+        let rest = "parent/cool-project";
+
+        let found = try_merge_segments(&prefix, rest).expect("should resolve middle-merge path");
+        assert_eq!(found, target.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn try_merge_segments_recovers_prefix_merge() {
+        // Old behavior: merge first N segments, keep the rest as subdirs.
+        // e.g. `~/projects/my-cool-app/src` should resolve correctly.
+        let (anchor, _g) = make_unique_anchor();
+        let target = anchor.join("projects/my-cool-app/src");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let prefix = format!("{}/", anchor.display());
+        let rest = "projects/my-cool-app/src";
+
+        let found = try_merge_segments(&prefix, rest).expect("should resolve prefix-merge path");
+        assert_eq!(found, target.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn try_merge_segments_recovers_all_merged() {
+        // Old "all_merged" case: every segment is part of a dash-named project.
+        let (anchor, _g) = make_unique_anchor();
+        let target = anchor.join("repos/this-is-a-deeply-nested-name");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let prefix = format!("{}/", anchor.display());
+        let rest = "repos/this-is-a-deeply-nested-name";
+
+        let found = try_merge_segments(&prefix, rest).expect("should resolve all-merged path");
+        assert_eq!(found, target.to_string_lossy().to_string());
+    }
+
+    #[test]
+    fn try_merge_segments_returns_none_when_no_match() {
+        let (anchor, _g) = make_unique_anchor();
+        let prefix = format!("{}/", anchor.display());
+        // Don't create any of the listed directories — no candidate exists.
+        let rest = "parent/nowhere-to-be-found";
+        assert!(try_merge_segments(&prefix, rest).is_none());
+    }
+
+    // ----- encode_project_path ----------------------------------------------------
+    // Mirrors Claude Code's `sanitizePath` (src/utils/sessionStoragePortable.ts:311).
+
+    #[test]
+    fn encode_project_path_replaces_all_non_alphanumeric() {
+        // Mirrors Claude Code's regex: `[^a-zA-Z0-9]` → `-`.
+        // Includes `_`, `.`, ` `, `:`, etc. — all collapse to `-`.
+        // Consecutive non-alphanumeric chars (e.g. `/.`) become consecutive `-`.
+        assert_eq!(
+            encode_project_path("/home/example/projects/cool-app"),
+            "-home-example-projects-cool-app"
+        );
+        assert_eq!(
+            encode_project_path("/srv/repos/cool-project/"),
+            "-srv-repos-cool-project-"
+        );
+        // `/.` (hidden-dir marker) becomes `--`, not collapsed.
+        assert_eq!(
+            encode_project_path("/home/example/.claude"),
+            "-home-example--claude"
+        );
+        assert_eq!(
+            encode_project_path("/home/example/my_project.dev/"),
+            "-home-example-my-project-dev-"
+        );
+    }
+
+    #[test]
+    fn encode_project_path_truncates_long_paths_with_hash() {
+        // Paths longer than 200 chars after sanitization get truncated and
+        // a hash suffix appended.
+        let long = "/".to_string() + &"a/".repeat(150); // 301 chars raw
+        let encoded = encode_project_path(&long);
+        assert!(encoded.len() > 200, "got: {encoded}");
+        // Sanitized form alternates `-a` (50 pairs) followed by a trailing
+        // `-` for the final `/`. Truncation keeps the first 200 chars, so the
+        // encoded form starts with 50 `-a` pairs (100 chars) followed by 100
+        // more `-a` pairs (200 chars total), then `-<hash>`.
+        assert!(
+            encoded.starts_with(&"-a".repeat(100)),
+            "expected first 200 chars to be `-a` x100, got: {encoded}"
+        );
+        // Hash suffix: tail of the encoded form is `-<base36>` where the
+        // base36 chunk is short (capped to 16 chars by djb2_base36).
+        let suffix = encoded.rsplit('-').next().unwrap();
+        assert!(suffix.chars().all(|c| c.is_ascii_alphanumeric()));
+        assert!(suffix.len() <= 16);
+    }
+
+    #[test]
+    fn encode_project_path_then_decode_with_heuristic_finds_real_path() {
+        // End-to-end: a real directory path is encoded, then the decode
+        // heuristic is asked to recover it. This guards against regressions
+        // where the encoder and decoder drift out of sync.
+        let (anchor, _g) = make_unique_anchor();
+        let target = anchor.join("parent/cool-project");
+        std::fs::create_dir_all(&target).unwrap();
+
+        // Pass the *decoded* segment list as the decoder would see it after
+        // the `--` → `/.` step: every `/`-separated part of the encoded id.
+        let prefix = format!("{}/", anchor.display());
+        let rest = "parent/cool-project";
+        let found = try_merge_segments(&prefix, rest).expect("heuristic should resolve");
+        assert_eq!(found, target.to_string_lossy().to_string());
     }
 }
 

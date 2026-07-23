@@ -56,7 +56,7 @@ pub(crate) struct SessionsCache {
     pub(crate) entries: Vec<SessionCacheEntry>,
 }
 
-pub(crate) const SESSIONS_CACHE_VERSION: u32 = 6;
+pub(crate) const SESSIONS_CACHE_VERSION: u32 = 7;
 
 pub(crate) fn sessions_cache_path() -> PathBuf {
     get_lovstudio_dir().join("sessions-cache.json")
@@ -122,6 +122,45 @@ fn collect_lightweight_sessions_snapshot() -> Vec<Session> {
     let mut sessions = Vec::new();
     let projects_dir = get_claude_dir().join("projects");
 
+    // Pre-pass: build project_id → cwd lookup so tail-only jsonl snapshots
+    // (no cwd in head) can still resolve to the correct project path.
+    // Scans all jsonls (not just newest) so a cwd-less tail snapshot doesn't
+    // shadow a richer earlier session's cwd.
+    let project_cwd_map: std::collections::HashMap<String, String> = {
+        let mut map = std::collections::HashMap::new();
+        if let Ok(project_entries) = fs::read_dir(&projects_dir) {
+            for project_entry in project_entries.filter_map(|e| e.ok()) {
+                let project_path = project_entry.path();
+                if !project_path.is_dir() {
+                    continue;
+                }
+                let project_id = project_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if let Ok(files) = fs::read_dir(&project_path) {
+                    for f in files.filter_map(|e| e.ok()) {
+                        let name = f.file_name().to_string_lossy().to_string();
+                        if !name.ends_with(".jsonl") || name.starts_with("agent-") {
+                            continue;
+                        }
+                        if map.contains_key(&project_id) {
+                            break;
+                        }
+                        if let Some(cwd) = read_session_head(&f.path(), 20).cwd {
+                            if !cwd.is_empty() {
+                                map.insert(project_id.clone(), cwd);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        map
+    };
+
     if projects_dir.exists() {
         for project_entry in fs::read_dir(&projects_dir).into_iter().flatten().flatten() {
             let project_path = project_entry.path();
@@ -133,7 +172,10 @@ fn collect_lightweight_sessions_snapshot() -> Vec<Session> {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
-            let display_path = decode_project_path(&project_id);
+            let display_path = project_cwd_map
+                .get(&project_id)
+                .cloned()
+                .unwrap_or_else(|| decode_project_path(&project_id));
 
             for entry in fs::read_dir(&project_path).into_iter().flatten().flatten() {
                 let path = entry.path();
@@ -234,6 +276,50 @@ pub(crate) fn compute_all_sessions() -> Vec<Session> {
     if !projects_dir.exists() {
         return Vec::new();
     }
+
+    // Pre-pass: build `project_id → project_cwd` by reading cwd from the
+    // first jsonl in each project_dir that has one. Sessions within the
+    // same project share the same cwd in Claude Code's encoding, so when a
+    // particular jsonl's head doesn't contain a cwd line (typical for
+    // tail-only snapshots a few hundred bytes long) we fall back to the
+    // project-level cwd rather than the lossy `decode_project_path`
+    // heuristic. Scanning all jsonls (rather than just the newest) handles
+    // the case where the newest happens to be the cwd-less tail snapshot.
+    let project_cwd_map: std::collections::HashMap<String, String> = {
+        let mut map = std::collections::HashMap::new();
+        if let Ok(project_entries) = fs::read_dir(&projects_dir) {
+            for project_entry in project_entries.filter_map(|e| e.ok()) {
+                let project_path = project_entry.path();
+                if !project_path.is_dir() {
+                    continue;
+                }
+                let project_id = project_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if let Ok(files) = fs::read_dir(&project_path) {
+                    for f in files.filter_map(|e| e.ok()) {
+                        let name = f.file_name().to_string_lossy().to_string();
+                        if !name.ends_with(".jsonl") || name.starts_with("agent-") {
+                            continue;
+                        }
+                        if map.contains_key(&project_id) {
+                            break;
+                        }
+                        if let Some(cwd) = read_session_head(&f.path(), 20).cwd {
+                            if !cwd.is_empty() {
+                                map.insert(project_id.clone(), cwd);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        map
+    };
+
     let history_index = build_session_index_from_history();
     let cache = load_sessions_cache();
     // Collected during pass1/pass2 (cache hits + fresh reads alike) so we
@@ -296,6 +382,7 @@ pub(crate) fn compute_all_sessions() -> Vec<Session> {
             let display_path = head
                 .cwd
                 .clone()
+                .or_else(|| project_cwd_map.get(project_id).cloned())
                 .unwrap_or_else(|| decode_project_path(project_id));
 
             let session = Session {
@@ -343,7 +430,10 @@ pub(crate) fn compute_all_sessions() -> Vec<Session> {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let display_path = decode_project_path(&project_id);
+        let display_path = project_cwd_map
+            .get(&project_id)
+            .cloned()
+            .unwrap_or_else(|| decode_project_path(&project_id));
 
         for entry in fs::read_dir(&project_path).into_iter().flatten().flatten() {
             let path = entry.path();
@@ -1126,4 +1216,176 @@ pub(crate) async fn get_app_starred_session_ids() -> Result<Vec<String>, String>
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: write a jsonl line into `path`. Appends a trailing newline so
+    /// each line is treated as a separate record.
+    fn append_jsonl(path: &Path, json_line: &str) {
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        writeln!(f, "{json_line}").unwrap();
+    }
+
+    /// Helper: build a temp directory shaped like `~/.claude/projects/<id>/`
+    /// and return the path to the projects root.
+    fn make_unique_claude_root() -> (PathBuf, impl Drop) {
+        let nonce = uuid::Uuid::new_v4();
+        let path = std::env::temp_dir().join(format!("lovcode-cache-{nonce}"));
+        std::fs::create_dir_all(&path).unwrap();
+        let root = path.clone();
+        let guard = scopeguard_like(path);
+        (root, guard)
+    }
+
+    fn scopeguard_like(path: PathBuf) -> impl Drop {
+        struct RmOnDrop(PathBuf);
+        impl Drop for RmOnDrop {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        RmOnDrop(path)
+    }
+
+    /// Helper: write the minimum jsonl lines that give `read_session_head`
+    /// something to extract cwd from. Real Claude Code lines include more
+    /// fields but for the head scanner only `"cwd"` matters.
+    fn write_session_with_cwd(jsonl_path: &Path, cwd: &str, session_id: &str) {
+        // First line: a user-message-like envelope carrying cwd. The head
+        // scanner doesn't care about type, only the `"cwd":"..."` pattern.
+        let first = format!(
+            r#"{{"parentUuid":null,"isSidechain":false,"userType":"external","entrypoint":"cli","cwd":"{cwd}","sessionId":"{session_id}","version":"2.0.0"}}"#
+        );
+        append_jsonl(jsonl_path, &first);
+        // A second line ensures the head isn't just one record.
+        append_jsonl(
+            jsonl_path,
+            r#"{"parentUuid":null,"isSidechain":false,"type":"user","message":{"role":"user","content":"hello"}}"#,
+        );
+    }
+
+    /// Tail-only snapshots start with `last-prompt` / `mode` / `permission-mode`
+    /// — metadata-only, no message lines and no `cwd` in the first 64KB.
+    fn write_tail_only_snapshot(jsonl_path: &Path, session_id: &str) {
+        append_jsonl(
+            jsonl_path,
+            &format!(
+                r#"{{"type":"last-prompt","leafUuid":"x","sessionId":"{session_id}"}}"#
+            ),
+        );
+        append_jsonl(jsonl_path, r#"{"type":"mode","mode":"normal"}"#);
+        append_jsonl(
+            jsonl_path,
+            r#"{"type":"permission-mode","permissionMode":"bypassPermissions"}"#,
+        );
+    }
+
+    /// Build the project_cwd_map exactly the way `compute_all_sessions` does.
+    /// Returns a `HashMap<project_id, cwd>`. Used to verify the fallback.
+    fn build_project_cwd_map(projects_dir: &Path) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+        if let Ok(project_entries) = fs::read_dir(projects_dir) {
+            for project_entry in project_entries.filter_map(|e| e.ok()) {
+                let project_path = project_entry.path();
+                if !project_path.is_dir() {
+                    continue;
+                }
+                let project_id = project_path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
+                if let Ok(files) = fs::read_dir(&project_path) {
+                    for f in files.filter_map(|e| e.ok()) {
+                        let name = f.file_name().to_string_lossy().to_string();
+                        if !name.ends_with(".jsonl") || name.starts_with("agent-") {
+                            continue;
+                        }
+                        if map.contains_key(&project_id) {
+                            break;
+                        }
+                        if let Some(cwd) = read_session_head(&f.path(), 20).cwd {
+                            if !cwd.is_empty() {
+                                map.insert(project_id.clone(), cwd);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        map
+    }
+
+    #[test]
+    fn project_cwd_map_picks_cwd_from_any_session_in_project() {
+        // Two sessions under the same project_id, but only one of them has
+        // a cwd in its jsonl head. The map should still surface that cwd,
+        // even if the cwd-less one happens to be the newest (e.g. just a
+        // tail snapshot append).
+        let (claude_root, _g) = make_unique_claude_root();
+        let projects_dir = claude_root.join("projects");
+        let project_id = "some-dashed-project";
+        let project_dir = projects_dir.join(project_id);
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let good = project_dir.join("good.jsonl");
+        let tail_only = project_dir.join("tail-only.jsonl");
+
+        write_session_with_cwd(&good, "/path/to/some-dashed-project", "good-session");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        write_tail_only_snapshot(&tail_only, "tail-session");
+        // Bump tail-only's mtime to "newest" so it would be picked by the
+        // old (newest-only) implementation. The new scan-all approach
+        // should still surface the cwd from `good`.
+        let now = std::time::SystemTime::now();
+        filetime::set_file_mtime(
+            &tail_only,
+            filetime::FileTime::from_system_time(now),
+        )
+        .unwrap();
+
+        let map = build_project_cwd_map(&projects_dir);
+
+        assert_eq!(
+            map.get(project_id).map(String::as_str),
+            Some("/path/to/some-dashed-project")
+        );
+    }
+
+    #[test]
+    fn tail_only_session_falls_back_to_project_cwd() {
+        // End-to-end simulation: two sessions under the same project, only
+        // one with cwd in head. The head-less session's `read_session_head`
+        // returns cwd=None; the project_cwd_map supplies the right answer.
+        let (claude_root, _g) = make_unique_claude_root();
+        let projects_dir = claude_root.join("projects");
+        let project_id = "dashed-project";
+        let project_dir = projects_dir.join(project_id);
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        let good = project_dir.join("good.jsonl");
+        let tail_only = project_dir.join("tail.jsonl");
+        write_session_with_cwd(&good, "/srv/dashed-project", "good");
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        write_tail_only_snapshot(&tail_only, "tail");
+
+        // Simulate pass2: read tail-only's head → no cwd. Then fall back to
+        // the project-level cwd from the map.
+        let head = read_session_head(&tail_only, 20);
+        assert!(head.cwd.is_none(), "tail snapshot should have no cwd in head");
+
+        let map = build_project_cwd_map(&projects_dir);
+        let project_cwd = map.get(project_id).expect("map should have entry");
+        let session_path = head.cwd.clone().unwrap_or_else(|| project_cwd.clone());
+        assert_eq!(session_path, "/srv/dashed-project");
+    }
 }
