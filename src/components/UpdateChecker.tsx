@@ -10,6 +10,19 @@ import { useI18n } from "@/i18n";
 
 export type UpdateStage = "checking" | "latest" | "available" | "downloading" | "done" | "error" | "disabled";
 
+// "Platform missing" 不是真正的检查失败 —— 该 release 没为当前平台打包。
+// tauri-plugin-updater 2.10 抛的两类:
+//   Error::TargetNotFound     → "the platform `X` was not found in the response `platforms` object"
+//   Error::TargetsNotFound    → "None of the fallback platforms `[..]` were found in the response `platforms` object"
+function isUpdaterPlatformMissingError(e: unknown): boolean {
+  if (!(e instanceof Error)) return false;
+  const m = e.message;
+  return (
+    m.includes("was not found in the response `platforms` object") ||
+    m.includes("fallback platforms")
+  );
+}
+
 interface UpdateState {
   stage: UpdateStage;
   update: Update | null;
@@ -91,8 +104,13 @@ export function UpdateChecker() {
       .catch((e) => {
         window.clearTimeout(timeout);
         if (checkId.current !== currentCheckId) return;
-        const msg = e instanceof Error ? e.message : String(e);
+        if (isUpdaterPlatformMissingError(e)) {
+          // 该 release 没为当前平台出包,UI 不再尖叫
+          setState({ stage: "latest", update: null, error: "" });
+          return;
+        }
         console.error("[UpdateChecker]", e);
+        const msg = e instanceof Error ? e.message : String(e);
         setState({ stage: "error", update: null, error: msg });
       });
   }, [autoUpdateEnabled, setState, updaterProxy]);
