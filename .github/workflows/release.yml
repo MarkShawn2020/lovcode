@@ -307,10 +307,72 @@ jobs:
           releaseBody: ${{ steps.changelog.outputs.content }}
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.target == 'all' }}
+          # Matrix jobs race when each one read/merges/uploads latest.json.
+          # A single job below generates it after every platform asset exists.
+          includeUpdaterJson: false
           args: --target ${{ matrix.target }}
 
       - name: Cleanup keychain
         if: runner.os == 'macOS' && always()
         run: |
           security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+
+  finalize-updater:
+    needs: [release, prepare-build, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine tag and required updater platforms
+        id: updater
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+            TARGET="${{ github.event.inputs.target }}"
+          else
+            TAG="${{ needs.release.outputs.tag }}"
+            TARGET="all"
+          fi
+
+          case "$TARGET" in
+            all)
+              REQUIRED="darwin-aarch64,darwin-x86_64,linux-x86_64,windows-x86_64"
+              ;;
+            aarch64-apple-darwin)
+              REQUIRED="darwin-aarch64"
+              ;;
+            x86_64-apple-darwin)
+              REQUIRED="darwin-x86_64"
+              ;;
+            x86_64-unknown-linux-gnu)
+              REQUIRED="linux-x86_64"
+              ;;
+            x86_64-pc-windows-msvc)
+              REQUIRED="windows-x86_64"
+              ;;
+            *)
+              echo "Unsupported target: $TARGET" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "required=$REQUIRED" >> "$GITHUB_OUTPUT"
+
+      - name: Generate complete updater manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          node scripts/generate-updater-manifest.mjs \
+            --repo "$GITHUB_REPOSITORY" \
+            --tag "${{ steps.updater.outputs.tag }}" \
+            --require "${{ steps.updater.outputs.required }}"
+
+      - name: Upload complete updater manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.updater.outputs.tag }}" latest.json --clobber
