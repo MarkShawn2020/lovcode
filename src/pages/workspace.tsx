@@ -74,7 +74,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildAgentCommand, labelForProvider, makeSessionTitle, prefixCommandEnv, runtimeForProvider } from "@/lib/agent/commands";
@@ -5459,6 +5458,85 @@ function getConversationStatusLabel(row: WorkbenchConversation, t?: TranslateFn)
   return t ? t("workspace.history") : "history";
 }
 
+function buildConversationBasicInformation(row: WorkbenchConversation, t: TranslateFn) {
+  const copiedAt = Date.now();
+  const title = getConversationTitle(row, {
+    untitledConversation: t("common.untitledConversation"),
+    shell: t("chat.shell"),
+    newSession: t("chat.newSession"),
+  });
+  const status = row.archived
+    ? "archived"
+    : isConversationAgentRunning(row)
+      ? "running"
+      : (row.runtime?.status
+        ?? (row.needsReview ? "needs-review" : row.unread ? "unread" : "history"));
+
+  return JSON.stringify(
+    {
+      copiedAt,
+      copiedAtIso: new Date(copiedAt).toISOString(),
+      conversation: {
+        id: row.id,
+        conversationId: row.conversationId,
+        title,
+        projectPath: row.projectPath,
+        provider: getConversationProvider(row),
+        source: row.transcript?.source ?? (row.runtime ? "runtime" : "unknown"),
+        sourceLabel: getConversationSourceLabel(row, t),
+        status,
+        statusLabel: getConversationStatusLabel(row, t),
+        displayMode: getConversationDisplayMode(row),
+        lastActivityAtMs: row.timestamp,
+        createdAtMs: row.createdAt,
+        archived: row.archived,
+        pinned: row.pinned,
+        unread: row.unread,
+        needsReview: row.needsReview,
+        agentRunning: isConversationAgentRunning(row),
+        agentRunningSource: row.agentRunningSource ?? null,
+        agentRunningAtMs: row.agentRunningAt ?? null,
+        transcript: row.transcript
+          ? {
+              sessionId: row.transcript.id,
+              projectId: row.transcript.project_id,
+              projectPath: row.transcript.project_path,
+              source: row.transcript.source,
+              titleSource: row.transcript.title_source ?? null,
+              rounds: row.transcript.rounds,
+              messageCount: row.transcript.message_count,
+              createdAtSeconds: row.transcript.created_at,
+              lastModifiedSeconds: row.transcript.last_modified,
+              usage: row.transcript.usage ?? null,
+            }
+          : null,
+        runtime: row.runtime
+          ? {
+              sessionId: row.runtime.id,
+              provider: row.runtime.provider,
+              runtime: row.runtime.runtime,
+              cwd: row.runtime.cwd,
+              status: row.runtime.status,
+              workState: row.runtime.workState ?? null,
+              ptyId: row.runtime.ptyId ?? null,
+              harnessRunId: row.runtime.harnessRunId ?? null,
+              harnessExitCode: row.runtime.harnessExitCode ?? null,
+              linkedHistorySessionId: row.runtime.linkedHistorySessionId ?? null,
+              historyLinkStatus: row.runtime.historyLinkStatus ?? null,
+              historyLinkLastTriedAtMs: row.runtime.historyLinkLastTriedAt ?? null,
+              historyLinkLastReason: row.runtime.historyLinkLastReason ?? null,
+              forkParentSessionId: row.runtime.forkParentSessionId ?? null,
+              createdAtMs: row.runtime.createdAt,
+              updatedAtMs: row.runtime.updatedAt,
+            }
+          : null,
+      },
+    },
+    null,
+    2,
+  );
+}
+
 function DayOverviewPanel({
   day,
   platform,
@@ -5758,88 +5836,9 @@ function ProjectDetailsPanel({
     lastActive: analysis.lastActivity ?? 0,
     createdAt: analysis.firstActivity ?? 0,
   };
-  const copyBasicInformation = async () => {
-    const copiedAt = Date.now();
-    const content = JSON.stringify(
-      {
-        copiedAt,
-        copiedAtIso: new Date(copiedAt).toISOString(),
-        project: {
-          name: getProjectName(projectPath),
-          path: projectPath,
-          indexed: Boolean(project),
-          id: project?.id ?? null,
-          indexedSessionCount: project?.session_count ?? null,
-        },
-        summary: {
-          total: analysis.total,
-          active: statSource.active,
-          archived: statSource.archived,
-          running: statSource.running,
-          needsReview: statSource.needsReview,
-          unread: statSource.unread,
-          runtime: analysis.runtime,
-          history: analysis.history,
-          rounds: analysis.rounds,
-          messages: analysis.messages,
-          lastActivityAt: analysis.lastActivity,
-          firstActivityAt: analysis.firstActivity,
-        },
-        conversations: conversations.map((row) => ({
-          id: row.id,
-          conversationId: row.conversationId,
-          title: getConversationTitle(row, {
-            untitledConversation: t("common.untitledConversation"),
-            shell: t("chat.shell"),
-            newSession: t("chat.newSession"),
-          }),
-          projectPath: row.projectPath,
-          provider: getConversationProvider(row),
-          status: row.archived
-            ? "archived"
-            : isConversationAgentRunning(row)
-              ? "running"
-              : (row.runtime?.status
-                ?? (row.needsReview ? "needs-review" : row.unread ? "unread" : "history")),
-          displayMode: getConversationDisplayMode(row),
-          timestamp: row.timestamp,
-          createdAt: row.createdAt,
-          archived: row.archived,
-          pinned: row.pinned,
-          unread: row.unread,
-          needsReview: row.needsReview,
-          transcript: row.transcript
-            ? {
-                sessionId: row.transcript.id,
-                projectId: row.transcript.project_id,
-                source: row.transcript.source,
-                rounds: row.transcript.rounds,
-                messageCount: row.transcript.message_count,
-                createdAt: row.transcript.created_at,
-                lastModified: row.transcript.last_modified,
-              }
-            : null,
-          runtime: row.runtime
-            ? {
-                sessionId: row.runtime.id,
-                provider: row.runtime.provider,
-                runtime: row.runtime.runtime,
-                status: row.runtime.status,
-                workState: row.runtime.workState ?? null,
-                linkedHistorySessionId: row.runtime.linkedHistorySessionId ?? null,
-                historyLinkStatus: row.runtime.historyLinkStatus ?? null,
-                createdAt: row.runtime.createdAt,
-                updatedAt: row.runtime.updatedAt,
-              }
-            : null,
-        })),
-      },
-      null,
-      2,
-    );
-
+  const copyConversationBasicInformation = async (row: WorkbenchConversation) => {
     try {
-      await invoke("copy_to_clipboard", { text: content });
+      await invoke("copy_to_clipboard", { text: buildConversationBasicInformation(row, t) });
       toast.success(t("workspace.basicInformationCopied"));
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -5956,19 +5955,7 @@ function ProjectDetailsPanel({
           <section className="rounded-xl border border-border bg-card">
             <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
               <h3 className="font-serif text-base font-semibold text-foreground">{t("workspace.allSessions")}</h3>
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-medium tabular-nums text-muted-foreground">{formatNumber(analysis.total)}</span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-8 gap-1.5 rounded-lg px-2.5 text-xs"
-                  onClick={() => void copyBasicInformation()}
-                >
-                  <Copy className="h-3.5 w-3.5" />
-                  {t("workspace.copyBasicInformation")}
-                </Button>
-              </div>
+              <span className="text-xs font-medium tabular-nums text-muted-foreground">{formatNumber(analysis.total)}</span>
             </div>
             <div className="divide-y divide-border">
               {conversations.length > 0 ? (
@@ -5981,41 +5968,50 @@ function ProjectDetailsPanel({
                     newSession: t("chat.newSession"),
                   });
                   return (
-                    <button
-                      key={row.id}
-                      type="button"
-                      onClick={() => onSelectConversation(row)}
-                      disabled={row.archived}
-                      className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-card-alt disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
-                      title={row.archived ? t("workspace.archivedSession") : title}
-                    >
-                      {provider ? (
-                        <ProviderIcon provider={provider} />
-                      ) : (
-                        <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-card-alt text-muted-foreground">
-                          <MessageSquare className="h-3.5 w-3.5" />
-                        </span>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-foreground">{title}</div>
-                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                          <span>{getConversationSourceLabel(row, t)}</span>
-                          <span>/</span>
-                          <span>{status}</span>
-                          {row.transcript ? (
-                            <>
-                              <span>/</span>
-                              <span>{t("chat.rounds", { count: formatNumber(row.transcript.rounds) })}</span>
-                              <span>/</span>
-                              <span>{t("chat.messagesTotal", { count: formatNumber(row.transcript.message_count) })}</span>
-                            </>
-                          ) : null}
+                    <div key={row.id} className="flex min-w-0 items-center">
+                      <button
+                        type="button"
+                        onClick={() => onSelectConversation(row)}
+                        disabled={row.archived}
+                        className="flex min-w-0 flex-1 items-center gap-3 py-3 pl-4 pr-2 text-left transition-colors hover:bg-card-alt disabled:cursor-default disabled:opacity-70 disabled:hover:bg-transparent"
+                        title={row.archived ? t("workspace.archivedSession") : title}
+                      >
+                        {provider ? (
+                          <ProviderIcon provider={provider} />
+                        ) : (
+                          <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md bg-card-alt text-muted-foreground">
+                            <MessageSquare className="h-3.5 w-3.5" />
+                          </span>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">{title}</div>
+                          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+                            <span>{getConversationSourceLabel(row, t)}</span>
+                            <span>/</span>
+                            <span>{status}</span>
+                            {row.transcript ? (
+                              <>
+                                <span>/</span>
+                                <span>{t("chat.rounds", { count: formatNumber(row.transcript.rounds) })}</span>
+                                <span>/</span>
+                                <span>{t("chat.messagesTotal", { count: formatNumber(row.transcript.message_count) })}</span>
+                              </>
+                            ) : null}
+                          </div>
                         </div>
+                        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                          {formatRelativeTime(row.timestamp, t)}
+                        </span>
+                      </button>
+                      <div className="shrink-0 pr-4">
+                        <IconButton
+                          title={`${t("workspace.copyBasicInformation")}: ${title}`}
+                          onClick={() => void copyConversationBasicInformation(row)}
+                        >
+                          <Copy className="h-3.5 w-3.5" />
+                        </IconButton>
                       </div>
-                      <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                        {formatRelativeTime(row.timestamp, t)}
-                      </span>
-                    </button>
+                    </div>
                   );
                 })
               ) : (
