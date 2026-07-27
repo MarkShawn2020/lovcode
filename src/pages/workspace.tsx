@@ -74,6 +74,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildAgentCommand, labelForProvider, makeSessionTitle, prefixCommandEnv, runtimeForProvider } from "@/lib/agent/commands";
@@ -5757,6 +5758,94 @@ function ProjectDetailsPanel({
     lastActive: analysis.lastActivity ?? 0,
     createdAt: analysis.firstActivity ?? 0,
   };
+  const copyBasicInformation = async () => {
+    const copiedAt = Date.now();
+    const content = JSON.stringify(
+      {
+        copiedAt,
+        copiedAtIso: new Date(copiedAt).toISOString(),
+        project: {
+          name: getProjectName(projectPath),
+          path: projectPath,
+          indexed: Boolean(project),
+          id: project?.id ?? null,
+          indexedSessionCount: project?.session_count ?? null,
+        },
+        summary: {
+          total: analysis.total,
+          active: statSource.active,
+          archived: statSource.archived,
+          running: statSource.running,
+          needsReview: statSource.needsReview,
+          unread: statSource.unread,
+          runtime: analysis.runtime,
+          history: analysis.history,
+          rounds: analysis.rounds,
+          messages: analysis.messages,
+          lastActivityAt: analysis.lastActivity,
+          firstActivityAt: analysis.firstActivity,
+        },
+        conversations: conversations.map((row) => ({
+          id: row.id,
+          conversationId: row.conversationId,
+          title: getConversationTitle(row, {
+            untitledConversation: t("common.untitledConversation"),
+            shell: t("chat.shell"),
+            newSession: t("chat.newSession"),
+          }),
+          projectPath: row.projectPath,
+          provider: getConversationProvider(row),
+          status: row.archived
+            ? "archived"
+            : isConversationAgentRunning(row)
+              ? "running"
+              : (row.runtime?.status
+                ?? (row.needsReview ? "needs-review" : row.unread ? "unread" : "history")),
+          displayMode: getConversationDisplayMode(row),
+          timestamp: row.timestamp,
+          createdAt: row.createdAt,
+          archived: row.archived,
+          pinned: row.pinned,
+          unread: row.unread,
+          needsReview: row.needsReview,
+          transcript: row.transcript
+            ? {
+                sessionId: row.transcript.id,
+                projectId: row.transcript.project_id,
+                source: row.transcript.source,
+                rounds: row.transcript.rounds,
+                messageCount: row.transcript.message_count,
+                createdAt: row.transcript.created_at,
+                lastModified: row.transcript.last_modified,
+              }
+            : null,
+          runtime: row.runtime
+            ? {
+                sessionId: row.runtime.id,
+                provider: row.runtime.provider,
+                runtime: row.runtime.runtime,
+                status: row.runtime.status,
+                workState: row.runtime.workState ?? null,
+                linkedHistorySessionId: row.runtime.linkedHistorySessionId ?? null,
+                historyLinkStatus: row.runtime.historyLinkStatus ?? null,
+                createdAt: row.runtime.createdAt,
+                updatedAt: row.runtime.updatedAt,
+              }
+            : null,
+        })),
+      },
+      null,
+      2,
+    );
+
+    try {
+      await invoke("copy_to_clipboard", { text: content });
+      toast.success(t("workspace.basicInformationCopied"));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      toast.error(t("workspace.basicInformationCopyFailed", { message }));
+    }
+  };
 
   return (
     <>
@@ -5867,7 +5956,19 @@ function ProjectDetailsPanel({
           <section className="rounded-xl border border-border bg-card">
             <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
               <h3 className="font-serif text-base font-semibold text-foreground">{t("workspace.allSessions")}</h3>
-              <span className="text-xs font-medium tabular-nums text-muted-foreground">{formatNumber(analysis.total)}</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium tabular-nums text-muted-foreground">{formatNumber(analysis.total)}</span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 gap-1.5 rounded-lg px-2.5 text-xs"
+                  onClick={() => void copyBasicInformation()}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                  {t("workspace.copyBasicInformation")}
+                </Button>
+              </div>
             </div>
             <div className="divide-y divide-border">
               {conversations.length > 0 ? (
