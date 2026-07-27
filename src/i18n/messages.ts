@@ -473,6 +473,8 @@ export const TRANSLATIONS = {
   "session.filePath": { en: "File Path", zh: "文件路径" },
   "session.files": { en: "Files", zh: "文件" },
   "session.openInEditorFailed": { en: "Could not open session in editor: {{message}}", zh: "无法在编辑器中打开会话：{{message}}" },
+  "session.openInYoda": { en: "Open in Yoda", zh: "在 Yoda 中打开" },
+  "session.openInYodaFailed": { en: "Could not open session in Yoda: {{message}}", zh: "无法在 Yoda 中打开会话：{{message}}" },
   "session.forkToRuntime": { en: "Fork to runtime", zh: "分叉到运行时" },
   "session.resumeInRuntime": { en: "Resume in runtime", zh: "在运行时恢复" },
   "session.copyForkPromptFor": { en: "Copy fork prompt for {{target}}", zh: "复制给 {{target}} 的分叉提示词" },

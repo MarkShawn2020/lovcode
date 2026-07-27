@@ -3037,6 +3037,7 @@ export function SessionDetail({
                   onClose={onClose}
                   displayMode={effectiveDisplayMode}
                   onDisplayModeChange={setEffectiveDisplayMode}
+                  showOpenInYoda
                 />
               </DropdownMenuContent>
             </DropdownMenu>

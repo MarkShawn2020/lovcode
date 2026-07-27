@@ -24,6 +24,7 @@ interface OpenInEditorMenuProps {
   onSelect: OpenInEditorAction;
   label?: string;
   includeDefault?: boolean;
+  excludeTargets?: readonly EditorTargetId[];
 }
 
 function EditorTargetIcon({ editor }: { editor?: EditorTargetId }) {
@@ -37,9 +38,11 @@ export function OpenInEditorMenu({
   onSelect,
   label,
   includeDefault = true,
+  excludeTargets = [],
 }: OpenInEditorMenuProps) {
   const { t } = useI18n();
   const triggerLabel = label ?? t("editor.openWith");
+  const editorTargets = EDITOR_TARGETS.filter((target) => !excludeTargets.includes(target.id));
   const select = (editor?: EditorTargetId) => {
     void onSelect(editor);
   };
@@ -67,7 +70,7 @@ export function OpenInEditorMenu({
               <DropdownMenuSeparator />
             </>
           ) : null}
-          {EDITOR_TARGETS.map((target) => (
+          {editorTargets.map((target) => (
             <DropdownMenuItem key={target.id} onSelect={() => select(target.id)} className="gap-2">
               <EditorTargetIcon editor={target.id} />
               {target.label}
@@ -93,7 +96,7 @@ export function OpenInEditorMenu({
             <ContextMenuSeparator />
           </>
         ) : null}
-        {EDITOR_TARGETS.map((target) => (
+        {editorTargets.map((target) => (
           <ContextMenuItem key={target.id} onSelect={() => select(target.id)} className="gap-2">
             <EditorTargetIcon editor={target.id} />
             {target.label}
