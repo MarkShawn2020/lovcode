@@ -5,6 +5,7 @@ use std::os::unix::process::CommandExt;
 #[cfg(all(debug_assertions, unix))]
 use std::process::{Command, Stdio};
 
+// Restart replaces the native process and backend state; it is intentionally distinct from reload.
 const RESTART_MENU_ITEM_ID: &str = "restart_app";
 
 #[cfg(all(debug_assertions, unix))]
