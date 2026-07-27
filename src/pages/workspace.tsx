@@ -79,6 +79,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { buildAgentCommand, labelForProvider, makeSessionTitle, prefixCommandEnv, runtimeForProvider } from "@/lib/agent/commands";
 import { readDevResumeState, writeWorkspaceDevResumeState } from "@/lib/appResume";
 import type { EditorTargetId } from "@/lib/editorTargets";
+import { updateWorkspaceConversationRoute } from "@/lib/workspaceRoute";
 import {
   buildEnvironmentCommand,
   getDefaultSessionEnvironmentKey,
@@ -3911,10 +3912,45 @@ export default function AgentWorkspacePage() {
   };
   const selectConversation = (row: WorkbenchConversation) => {
     if (row.archived) return;
+    const displayMode = getConversationDisplayMode(row);
+    const routeSessionSelection = row.transcript
+      ? {
+          projectId: row.transcript.project_id,
+          projectPath: row.transcript.project_path ?? row.projectPath,
+          sessionId: row.transcript.id,
+        }
+      : row.runtime
+        ? {
+            projectId: null,
+            projectPath: row.runtime.cwd || row.projectPath,
+            sessionId: row.runtime.id,
+          }
+        : null;
+
+    console.log("[DEBUG][WorkspaceConversation] select:", {
+      conversationId: row.conversationId,
+      transcriptId: row.transcript?.id ?? null,
+      runtimeId: row.runtime?.id ?? null,
+      displayMode,
+      selectedProjectDetailsPath,
+      routeProjectPath,
+      routeSessionId,
+    });
+
+    projectDetailsOpenRef.current = false;
+    routeProjectDetailsRestoredRef.current = null;
+    if (routeSessionSelection) {
+      routeSelectionRestoredRef.current =
+        `${routeSessionSelection.projectId ?? ""}:${routeSessionSelection.sessionId}`;
+      setSearchParams(
+        (prev) => updateWorkspaceConversationRoute(prev, routeSessionSelection),
+        { replace: true },
+      );
+    }
+
     setSelectedProjectDetailsPath(null);
     setSelectedDayOverview(null);
     setMainPanelClosed(false);
-    const displayMode = getConversationDisplayMode(row);
     if (displayMode === "cli" && row.runtime && isHarnessSession(row.runtime) && row.transcript) {
       void createRuntimeForHistorySession(row.transcript);
       return;
