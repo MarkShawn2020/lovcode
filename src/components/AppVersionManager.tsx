@@ -166,7 +166,13 @@ export function AppVersionManager({ open, onOpenChange }: AppVersionManagerProps
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" onClick={handleRefresh} disabled={fetching}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={handleRefresh}
+              disabled={fetching}
+            >
               <RefreshCw className={`w-3.5 h-3.5 ${fetching ? "animate-spin" : ""}`} />
               {t("updates.refreshReleases")}
             </Button>
