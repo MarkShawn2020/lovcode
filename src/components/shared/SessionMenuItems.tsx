@@ -17,6 +17,7 @@ import {
   MessageSquare,
   Archive,
   ArchiveRestore,
+  AppWindow,
   Pin,
   PinOff,
   Settings2,
@@ -147,6 +148,7 @@ export interface SessionDetailMenuConfig extends SessionMenuConfig {
   onToggleRead?: () => void;
   needsReview?: boolean;
   onMarkNeedsReview?: () => void;
+  showOpenInYoda?: boolean;
 }
 
 function shellQuote(value: string): string {
@@ -488,7 +490,12 @@ export function useSessionMenuHandlers(projectId: string, sessionId: string, sou
     try {
       await invoke<void>("open_session_in_editor", { projectId, sessionId, editor });
     } catch (error) {
-      toast.error(t("session.openInEditorFailed", { message: errorMessage(error) }));
+      const message = errorMessage(error);
+      toast.error(
+        editor === "yoda"
+          ? t("session.openInYodaFailed", { message })
+          : t("session.openInEditorFailed", { message }),
+      );
     }
   };
   const handleCopyPath = async () => {
@@ -879,6 +886,7 @@ export function SessionDetailDropdownMenuItems({
   onToggleRead,
   needsReview,
   onMarkNeedsReview,
+  showOpenInYoda,
   ...sessionConfig
 }: SessionDetailMenuConfig) {
   const { t } = useI18n();
@@ -929,6 +937,15 @@ export function SessionDetailDropdownMenuItems({
         onCopyRelatedFiles={handleCopyRelatedFiles}
         onCopyTraceContext={handleCopyTraceContext}
       />
+      {showOpenInYoda && (
+        <>
+          <DropdownMenuItem onSelect={() => void handleOpenInEditor("yoda")} className="gap-2">
+            <AppWindow size={14} />
+            {t("session.openInYoda")}
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+        </>
+      )}
       <DropdownMenuSub>
         <DropdownMenuSubTrigger className="gap-2">
           <Eye size={14} />
@@ -1079,7 +1096,11 @@ export function SessionDetailDropdownMenuItems({
             <FolderOpen size={14} />
             {t("fileViewer.revealInFinder")}
           </DropdownMenuItem>
-          <OpenInEditorMenu variant="dropdown" onSelect={handleOpenInEditor} />
+          <OpenInEditorMenu
+            variant="dropdown"
+            onSelect={handleOpenInEditor}
+            excludeTargets={showOpenInYoda ? ["yoda"] : undefined}
+          />
         </DropdownMenuSubContent>
       </DropdownMenuSub>
       {onClose && (
