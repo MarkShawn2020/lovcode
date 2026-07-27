@@ -2409,6 +2409,7 @@ export function SessionDetail({
   composerOverride,
   projectPath,
   projectPathMenuItems,
+  onProjectClick,
   onFork,
   displayMode,
   onDisplayModeChange,
@@ -2422,6 +2423,7 @@ export function SessionDetail({
   composerOverride?: ReactNode;
   projectPath?: string | null;
   projectPathMenuItems?: ReactNode;
+  onProjectClick?: (projectPath: string) => void;
   onFork?: (payload: SessionForkPayload) => void;
   displayMode?: SessionDetailDisplayMode;
   onDisplayModeChange?: (mode: SessionDetailDisplayMode) => void;
@@ -2963,6 +2965,7 @@ export function SessionDetail({
         projectPath={headerProjectPath}
         projectLabel={headerProjectPath ? undefined : session.project_id}
         projectPathMenuItems={projectPathMenuItems}
+        onProjectClick={onProjectClick}
         title={
           <EditableSessionTitle
             sessionId={session.id}

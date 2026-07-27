@@ -13,6 +13,7 @@ interface SessionDetailHeaderProps {
   actions?: ReactNode;
   className?: string;
   projectClassName?: string;
+  onProjectClick?: (projectPath: string) => void;
 }
 
 export function SessionDetailHeader({
@@ -26,6 +27,7 @@ export function SessionDetailHeader({
   actions,
   className,
   projectClassName,
+  onProjectClick,
 }: SessionDetailHeaderProps) {
   const hasProjectLabel = Boolean(projectPath || projectLabel);
 
@@ -41,6 +43,7 @@ export function SessionDetailHeader({
           <ProjectPathLabel
             path={projectPath}
             menuItems={projectPathMenuItems}
+            onClick={onProjectClick}
             className={cn("max-w-[40%] text-muted-foreground", projectClassName)}
           />
         ) : projectLabel ? (

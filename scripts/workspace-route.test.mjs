@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { updateWorkspaceConversationRoute } from "../src/lib/workspaceRoute.ts";
+import {
+  updateWorkspaceConversationRoute,
+  updateWorkspaceProjectRoute,
+} from "../src/lib/workspaceRoute.ts";
 
 test("promotes a project overview route to a history conversation route", () => {
   const current = new URLSearchParams({
@@ -42,5 +45,28 @@ test("clears stale history and message targeting when selecting a runtime conver
   assert.equal(next.get("messageId"), null);
   assert.equal(next.get("lineNumber"), null);
   assert.equal(next.get("roundIndex"), null);
+  assert.equal(next.get("q"), null);
+});
+
+test("returns from a session route to its project overview route", () => {
+  const current = new URLSearchParams({
+    view: "active",
+    projectId: "-Users-mark-Documents-Codex-2026-07-23-dui",
+    projectPath: "/Users/mark/Documents/Codex/2026-07-23/dui",
+    sessionId: "019f8d65-93d9-7e51-aac1-232d97b5e895",
+    messageId: "target-message",
+    q: "target query",
+  });
+
+  const next = updateWorkspaceProjectRoute(current, {
+    projectId: "-Users-mark-Documents-Codex-2026-07-23-dui",
+    projectPath: "/Users/mark/Documents/Codex/2026-07-23/dui",
+  });
+
+  assert.equal(next.get("view"), "active");
+  assert.equal(next.get("projectId"), "-Users-mark-Documents-Codex-2026-07-23-dui");
+  assert.equal(next.get("projectPath"), "/Users/mark/Documents/Codex/2026-07-23/dui");
+  assert.equal(next.get("sessionId"), null);
+  assert.equal(next.get("messageId"), null);
   assert.equal(next.get("q"), null);
 });

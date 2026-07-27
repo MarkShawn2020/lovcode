@@ -79,7 +79,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { buildAgentCommand, labelForProvider, makeSessionTitle, prefixCommandEnv, runtimeForProvider } from "@/lib/agent/commands";
 import { readDevResumeState, writeWorkspaceDevResumeState } from "@/lib/appResume";
 import type { EditorTargetId } from "@/lib/editorTargets";
-import { updateWorkspaceConversationRoute } from "@/lib/workspaceRoute";
+import { updateWorkspaceConversationRoute, updateWorkspaceProjectRoute } from "@/lib/workspaceRoute";
 import {
   buildEnvironmentCommand,
   getDefaultSessionEnvironmentKey,
@@ -3825,6 +3825,23 @@ export default function AgentWorkspacePage() {
     setState(nextState);
     persist(nextState).catch(console.error);
   };
+  const openProjectDetailsFromSession = (path: string, projectId?: string | null) => {
+    const projectKey = getProjectGroupKey(path, mergeWorktrees) || normalizeProjectPath(path);
+    routeProjectDetailsRestoredRef.current = projectKey;
+    routeSelectionRestoredRef.current = null;
+    setSearchParams(
+      (prev) => updateWorkspaceProjectRoute(prev, {
+        projectId,
+        projectPath: path,
+      }),
+      { replace: true },
+    );
+    console.log("[DEBUG][WorkspaceProject] open from session:", {
+      projectId: projectId ?? null,
+      projectPath: path,
+    });
+    openProjectDetails(path);
+  };
 
   useEffect(() => {
     if (!routeProjectPath || routeSessionId) {
@@ -5279,6 +5296,7 @@ export default function AgentWorkspacePage() {
             projectPathMenuItems={
               standardDetailProjectPath ? renderProjectPathMenuItems(standardDetailProjectPath, "context") : undefined
             }
+            onProjectClick={(path) => openProjectDetailsFromSession(path, standardDetailSession.project_id)}
             onClose={closeCurrentConversation}
             onFork={forkHistorySession}
             displayMode={standardDetailDisplayMode}
@@ -5311,6 +5329,10 @@ export default function AgentWorkspacePage() {
               projectPathMenuItems={
                 activeHeaderProjectPath ? renderProjectPathMenuItems(activeHeaderProjectPath, "context") : undefined
               }
+              onProjectClick={(path) => openProjectDetailsFromSession(
+                path,
+                activeSessionRow?.transcript?.project_id ?? null,
+              )}
               titlePrefix={<ProviderIcon provider={activeSession.provider} />}
 	              title={
 	                <h2 className="min-w-0 flex-1 truncate font-serif text-base font-semibold text-foreground">

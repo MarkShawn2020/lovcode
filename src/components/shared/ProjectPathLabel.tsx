@@ -27,22 +27,36 @@ interface ProjectPathLabelProps {
   path: string;
   className?: string;
   menuItems?: ReactNode;
+  onClick?: (path: string) => void;
 }
 
 /** Single-line project-path label with a right-click menu aligned for folder paths. */
-export function ProjectPathLabel({ path, className = "", menuItems }: ProjectPathLabelProps) {
+export function ProjectPathLabel({ path, className = "", menuItems, onClick }: ProjectPathLabelProps) {
   const { text, tooltip } = formatProjectPathLabel(path);
+  const content = onClick ? (
+    <button
+      type="button"
+      className={`inline-flex min-w-0 max-w-full cursor-pointer items-center gap-1 text-left transition-colors hover:text-foreground ${className}`}
+      title={tooltip}
+      onClick={() => onClick(path)}
+    >
+      <FolderOpen className="h-3 w-3 shrink-0 opacity-60" />
+      <span className="min-w-0 truncate">{text}</span>
+    </button>
+  ) : (
+    <span
+      className={`inline-flex min-w-0 max-w-full cursor-default items-center gap-1 ${className}`}
+      title={tooltip}
+    >
+      <FolderOpen className="h-3 w-3 shrink-0 opacity-60" />
+      <span className="min-w-0 truncate">{text}</span>
+    </span>
+  );
 
   return (
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>
-        <span
-          className={`inline-flex items-center gap-1 min-w-0 max-w-full cursor-default ${className}`}
-          title={tooltip}
-        >
-          <FolderOpen className="w-3 h-3 opacity-60 shrink-0" />
-          <span className="truncate min-w-0">{text}</span>
-        </span>
+        {content}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-56" onCloseAutoFocus={(e) => e.preventDefault()}>
         {menuItems ?? <ProjectPathMenuItems path={path} variant="context" />}
