@@ -127,6 +127,10 @@ fn toggle_search_overlay(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    if let Some(exit_code) = run_cli_if_requested() {
+        std::process::exit(exit_code);
+    }
+
     use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
     let toggle_search_shortcut = {
