@@ -23,6 +23,8 @@ use tauri::{Emitter, Manager};
 
 mod core;
 pub(crate) use core::*;
+mod cli;
+pub(crate) use cli::*;
 mod maas_types;
 pub(crate) use maas_types::*;
 mod session_listing;
