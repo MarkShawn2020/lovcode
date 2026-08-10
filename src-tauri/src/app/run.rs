@@ -4,29 +4,14 @@ use super::*;
 use std::os::unix::process::CommandExt;
 #[cfg(all(debug_assertions, unix))]
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // Restart replaces the native process and backend state; it is intentionally distinct from reload.
 const RESTART_MENU_ITEM_ID: &str = "restart_app";
+static RESTART_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(debug_assertions, unix))]
 fn schedule_dev_restart() -> bool {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .map(Path::to_path_buf);
-    let Some(repo_root) = repo_root else {
-        eprintln!("[Lovcode] failed to resolve repository root for restart");
-        return false;
-    };
-
-    let tauri_cli = repo_root.join("node_modules/.bin/tauri");
-    if !tauri_cli.is_file() {
-        eprintln!(
-            "[Lovcode] dev restart skipped because Tauri CLI was not found at {}",
-            tauri_cli.display()
-        );
-        return false;
-    }
-
     let executable = match std::env::current_exe() {
         Ok(executable) => executable,
         Err(error) => {
@@ -34,27 +19,36 @@ fn schedule_dev_restart() -> bool {
             return false;
         }
     };
+    let working_dir = match std::env::current_dir() {
+        Ok(working_dir) => working_dir,
+        Err(error) => {
+            eprintln!("[Lovcode] failed to resolve working directory for restart: {error}");
+            return false;
+        }
+    };
 
     let binary_log = std::env::temp_dir().join("lovcode-tauri-binary-restart.log");
-    let dev_runner_log = std::env::temp_dir().join("lovcode-tauri-dev-restart.log");
     let executable_args = std::env::args_os()
         .skip(1)
         .map(|argument| shell_single_quote(argument.to_string_lossy().as_ref()))
         .collect::<Vec<_>>()
         .join(" ");
+    let current_pid = std::process::id();
     let script = format!(
-        "sleep 2; if /usr/bin/nc -z 127.0.0.1 51216 >/dev/null 2>&1; then exec {} {} >> {} 2>&1; else exec pnpm --dir {} tauri dev >> {} 2>&1; fi",
+        "attempt=0; while /bin/kill -0 {} 2>/dev/null && [ \"$attempt\" -lt 100 ]; do attempt=$((attempt + 1)); /bin/sleep 0.1; done; if /bin/kill -0 {} 2>/dev/null; then echo 'old process did not exit before restart timeout' >> {}; exit 1; fi; exec {} {} >> {} 2>&1",
+        current_pid,
+        current_pid,
+        shell_single_quote(binary_log.to_string_lossy().as_ref()),
         shell_single_quote(executable.to_string_lossy().as_ref()),
         executable_args,
         shell_single_quote(binary_log.to_string_lossy().as_ref()),
-        shell_single_quote(repo_root.to_string_lossy().as_ref()),
-        shell_single_quote(dev_runner_log.to_string_lossy().as_ref()),
     );
 
-    let mut command = Command::new("sh");
+    let mut command = Command::new("/bin/sh");
     command
-        .arg("-lc")
+        .arg("-c")
         .arg(script)
+        .current_dir(&working_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -64,9 +58,11 @@ fn schedule_dev_restart() -> bool {
     match command.spawn() {
         Ok(_) => {
             println!(
-                "[Lovcode] dev restart scheduled, binary_log={}, dev_runner_log={}",
-                binary_log.display(),
-                dev_runner_log.display()
+                "[Lovcode] dev restart scheduled for pid={}, executable={}, cwd={}, log={}",
+                current_pid,
+                executable.display(),
+                working_dir.display(),
+                binary_log.display()
             );
             true
         }
@@ -83,11 +79,19 @@ fn schedule_dev_restart() -> bool {
 }
 
 fn restart_app(app: &tauri::AppHandle) {
+    if RESTART_SCHEDULED.swap(true, Ordering::AcqRel) {
+        println!("[Lovcode] restart already scheduled; ignoring duplicate request");
+        return;
+    }
+
     #[cfg(debug_assertions)]
     if schedule_dev_restart() {
         app.exit(0);
         return;
     }
+
+    #[cfg(debug_assertions)]
+    RESTART_SCHEDULED.store(false, Ordering::Release);
 
     app.request_restart();
 }
