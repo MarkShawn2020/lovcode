@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+  <title>Ataru macOS app icon</title>
+  <desc>Ataru's green saber mark on a rounded deep-green tile.</desc>
+
+  <!-- Keep the corners transparent so macOS renders the Dock silhouette cleanly. -->
+  <rect x="32" y="32" width="960" height="960" rx="220" fill="#0C150F" />
+
+  <!-- The mark is intentionally inset for Dock legibility at small sizes. -->
+  <g transform="translate(512 512) scale(0.76) translate(-512 -512)">
+    <polygon points="130,894 464,464 894,130 560,560" fill="#5DC98F" />
+    <polygon points="164,860 498,498 860,164 526,526" fill="#F0EEE6" />
+    <circle cx="512" cy="512" r="102" fill="#3EA866" />
+  </g>
+</svg>
