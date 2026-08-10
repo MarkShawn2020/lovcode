@@ -37,7 +37,6 @@ import { readableError } from "./ataru-search/utils";
 
 const RECENT_QUERY_KEY = "ataru:recentQueries";
 const LEGACY_RECENT_QUERY_KEY = "lovcode:search-overlay:recent-searches";
-const SEARCH_DELAY_MS = 160;
 const IME_ENTER_GUARD_MS = 160;
 const RESULT_LIMIT = 40;
 
@@ -99,9 +98,11 @@ function removeRecentQuery(query: string, current: string[]): string[] {
 export function AtaruSearchPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
+  const initialQuery = searchParams.get("q") ?? "";
   const initialLevel = searchParams.get("level");
   const initialMode = searchParams.get("mode");
-  const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
+  const [query, setQuery] = useState(() => initialQuery);
+  const [submittedQuery, setSubmittedQuery] = useState(() => initialQuery);
   const [level, setLevel] = useState<SearchLevel>(() => (isSearchLevel(initialLevel) ? initialLevel : "turn"));
   const [mode, setMode] = useState<SearchMode>(() => (isSearchMode(initialMode) ? initialMode : "auto"));
   const [response, setResponse] = useState<SearchResponse | null>(null);
@@ -110,8 +111,6 @@ export function AtaruSearchPage() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [recentQueries, setRecentQueries] = useState<string[]>(loadRecentQueries);
-  const [isComposing, setIsComposing] = useState(false);
-  const [showSearchResults, setShowSearchResults] = useState(() => Boolean(searchParams.get("q")?.trim()));
   const requestSequence = useRef(0);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const lastSearchKey = useRef("");
@@ -123,16 +122,14 @@ export function AtaruSearchPage() {
 
   const handleCompositionStart = useCallback(() => {
     composingRef.current = true;
-    setIsComposing(true);
   }, []);
 
   const handleCompositionEnd = useCallback(() => {
     compositionEndAtRef.current = Date.now();
     // Keep the ref active through the trailing Enter keydown used by some IMEs
-    // to commit a candidate. The next frame then searches the committed value.
+    // to commit a candidate. The next frame then returns control to the input.
     requestAnimationFrame(() => {
       composingRef.current = false;
-      setIsComposing(false);
     });
   }, []);
 
@@ -155,11 +152,6 @@ export function AtaruSearchPage() {
     window.addEventListener("keydown", handleShortcut);
     return () => window.removeEventListener("keydown", handleShortcut);
   }, []);
-
-  useEffect(() => {
-    if (isComposing) return;
-    setShowSearchResults(query.trim().length > 0);
-  }, [isComposing, query]);
 
   const performSearch = useCallback(
     async (rawQuery: string, force = false) => {
@@ -221,12 +213,18 @@ export function AtaruSearchPage() {
   );
 
   useEffect(() => {
-    if (isComposing) return;
-    const timer = window.setTimeout(() => {
-      void performSearch(query);
-    }, SEARCH_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [isComposing, performSearch, query]);
+    if (!submittedQuery.trim()) return;
+    void performSearch(submittedQuery);
+  }, [performSearch, submittedQuery]);
+
+  const submitQuery = useCallback(
+    (nextQuery: string) => {
+      const trimmed = nextQuery.trim();
+      setSubmittedQuery(trimmed);
+      void performSearch(trimmed);
+    },
+    [performSearch],
+  );
 
   const handleInputKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Process") return;
@@ -238,16 +236,17 @@ export function AtaruSearchPage() {
       Date.now() - compositionEndAtRef.current < IME_ENTER_GUARD_MS;
     if (isImeConfirming) return;
     event.preventDefault();
-    void performSearch(query);
+    submitQuery(query);
   };
 
   const selectQuery = (nextQuery: string) => {
     setQuery(nextQuery);
+    submitQuery(nextQuery);
     searchInputRef.current?.focus();
   };
 
   const selectedHit = response?.hits.find((hit) => hit.id === selectedHitId) ?? response?.hits.at(0) ?? null;
-  const hasQuery = showSearchResults;
+  const hasQuery = submittedQuery.trim().length > 0;
   const selectHit = useCallback((hitId: string) => {
     setSelectedHitId(hitId);
     setIsPreviewOpen(true);
@@ -358,7 +357,7 @@ export function AtaruSearchPage() {
             selectedHitId={selectedHit?.id ?? null}
             onSelectHit={selectHit}
             onOpenContext={openHitContext}
-            onRetry={() => void performSearch(query, true)}
+            onRetry={() => void performSearch(submittedQuery, true)}
             onSelectQuery={selectQuery}
           />
           <TranscriptPreview

@@ -55,6 +55,7 @@ export function RecallHome({
             onCompositionEnd={onInputCompositionEnd}
             placeholder="搜索关键词或描述…"
             aria-label="搜索 AI 对话记录"
+            enterKeyHint="search"
             autoFocus
             className="h-11 w-full rounded-lg border border-foreground/15 bg-card pl-11 pr-20 text-sm font-medium shadow-sm outline-none transition placeholder:text-muted-foreground hover:border-primary/60 focus:border-primary focus:ring-2 focus:ring-primary/15 sm:text-base"
           />
