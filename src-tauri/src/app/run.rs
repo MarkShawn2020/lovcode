@@ -3,52 +3,166 @@ use super::*;
 #[cfg(all(debug_assertions, unix))]
 use std::os::unix::process::CommandExt;
 #[cfg(all(debug_assertions, unix))]
+use std::path::PathBuf;
+#[cfg(all(debug_assertions, unix))]
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(all(debug_assertions, unix))]
+use std::sync::OnceLock;
 
 // Restart replaces the native process and backend state; it is intentionally distinct from reload.
 const RESTART_MENU_ITEM_ID: &str = "restart_app";
 static RESTART_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(all(debug_assertions, unix))]
-fn schedule_dev_restart() -> bool {
-    let executable = match std::env::current_exe() {
-        Ok(executable) => executable,
-        Err(error) => {
-            eprintln!("[Lovcode] failed to resolve current executable for restart: {error}");
-            return false;
-        }
-    };
-    let working_dir = match std::env::current_dir() {
-        Ok(working_dir) => working_dir,
-        Err(error) => {
-            eprintln!("[Lovcode] failed to resolve working directory for restart: {error}");
-            return false;
-        }
+const DEV_SERVER_URL: &str = "http://localhost:51216/";
+
+#[cfg(all(debug_assertions, unix))]
+#[derive(Clone)]
+struct DevRestartPlan {
+    executable: PathBuf,
+    args: Vec<String>,
+    cwd: PathBuf,
+    runner_executable: Option<PathBuf>,
+    runner_args: Vec<String>,
+    owner_pgid: Option<u32>,
+}
+
+#[cfg(all(debug_assertions, unix))]
+static DEV_RESTART_PLAN: OnceLock<DevRestartPlan> = OnceLock::new();
+
+#[cfg(all(debug_assertions, unix))]
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+#[cfg(all(debug_assertions, unix))]
+fn current_process_group_id() -> Option<u32> {
+    let pgid = unsafe { libc::getpgrp() };
+    (pgid > 0).then_some(pgid as u32)
+}
+
+#[cfg(all(debug_assertions, unix))]
+fn capture_dev_restart_plan() -> Option<DevRestartPlan> {
+    let executable = std::env::current_exe().ok()?;
+    let cwd = std::env::current_dir().ok()?;
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .map(PathBuf::from)?;
+    let current_pid = std::process::id();
+    let runner_executable = find_on_path("pnpm");
+
+    Some(DevRestartPlan {
+        executable,
+        args: std::env::args_os()
+            .skip(1)
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect(),
+        cwd,
+        runner_executable,
+        runner_args: vec![
+            "--dir".to_owned(),
+            repo_root.to_string_lossy().into_owned(),
+            "tauri".to_owned(),
+            "dev".to_owned(),
+        ],
+        owner_pgid: current_process_group_id().filter(|pgid| *pgid != current_pid),
+    })
+}
+
+#[cfg(all(debug_assertions, unix))]
+fn initialize_dev_restart_plan() {
+    let Some(plan) = capture_dev_restart_plan() else {
+        eprintln!("[Lovcode] failed to capture dev restart plan");
+        return;
     };
 
-    let binary_log = std::env::temp_dir().join("lovcode-tauri-binary-restart.log");
-    let executable_args = std::env::args_os()
-        .skip(1)
-        .map(|argument| shell_single_quote(argument.to_string_lossy().as_ref()))
+    println!(
+        "[Lovcode] dev restart plan captured: executable={}, cwd={}, owner_pgid={:?}, runner={}",
+        plan.executable.display(),
+        plan.cwd.display(),
+        plan.owner_pgid,
+        plan.runner_executable
+            .as_ref()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "<missing>".to_owned()),
+    );
+    let _ = DEV_RESTART_PLAN.set(plan);
+}
+
+#[cfg(all(debug_assertions, unix))]
+fn shell_args(args: &[String]) -> String {
+    args.iter()
+        .map(|argument| shell_single_quote(argument))
         .collect::<Vec<_>>()
-        .join(" ");
+        .join(" ")
+}
+
+#[cfg(all(debug_assertions, unix))]
+fn schedule_dev_restart() -> bool {
+    let Some(mut plan) = DEV_RESTART_PLAN
+        .get()
+        .cloned()
+        .or_else(capture_dev_restart_plan)
+    else {
+        eprintln!("[Lovcode] failed to resolve dev restart plan");
+        return false;
+    };
+
+    if plan.owner_pgid.is_none() {
+        let current_pid = std::process::id();
+        plan.owner_pgid = current_process_group_id().filter(|pgid| *pgid != current_pid);
+    }
+
+    let binary_log = std::env::temp_dir().join("lovcode-tauri-binary-restart.log");
+    let dev_runner_log = std::env::temp_dir().join("lovcode-tauri-dev-restart.log");
     let current_pid = std::process::id();
-    let script = format!(
-        "attempt=0; while /bin/kill -0 {} 2>/dev/null && [ \"$attempt\" -lt 100 ]; do attempt=$((attempt + 1)); /bin/sleep 0.1; done; if /bin/kill -0 {} 2>/dev/null; then echo 'old process did not exit before restart timeout' >> {}; exit 1; fi; exec {} {} >> {} 2>&1",
-        current_pid,
-        current_pid,
-        shell_single_quote(binary_log.to_string_lossy().as_ref()),
-        shell_single_quote(executable.to_string_lossy().as_ref()),
+    let executable_args = shell_args(&plan.args);
+    let binary_launch = format!(
+        "exec {} {} >> {} 2>&1",
+        shell_single_quote(plan.executable.to_string_lossy().as_ref()),
         executable_args,
         shell_single_quote(binary_log.to_string_lossy().as_ref()),
+    );
+    let runner_launch = match plan.runner_executable {
+        Some(runner_executable) => format!(
+            "exec {} {} >> {} 2>&1",
+            shell_single_quote(runner_executable.to_string_lossy().as_ref()),
+            shell_args(&plan.runner_args),
+            shell_single_quote(dev_runner_log.to_string_lossy().as_ref()),
+        ),
+        None => format!(
+            "echo 'dev server is not ready and pnpm was not found in the startup PATH' >> {}; exit 1",
+            shell_single_quote(dev_runner_log.to_string_lossy().as_ref()),
+        ),
+    };
+    let owner_group_function = match plan.owner_pgid {
+        Some(owner_pgid) => format!(
+            "owner_group_alive() {{ /bin/kill -0 -{} 2>/dev/null; }};",
+            owner_pgid
+        ),
+        None => "owner_group_alive() { false; };".to_owned(),
+    };
+    let script = format!(
+        "attempt=0; while /bin/kill -0 {} 2>/dev/null && [ \"$attempt\" -lt 200 ]; do attempt=$((attempt + 1)); /bin/sleep 0.1; done; if /bin/kill -0 {} 2>/dev/null; then echo 'old process did not exit before restart timeout' >> {}; exit 1; fi; server_ready() {{ /usr/bin/curl --noproxy '*' --fail --silent --show-error --max-time 1 {} >/dev/null 2>&1; }}; {}; attempt=0; while owner_group_alive && ! server_ready && [ \"$attempt\" -lt 200 ]; do attempt=$((attempt + 1)); /bin/sleep 0.1; done; if server_ready; then {}; elif owner_group_alive; then echo 'dev owner did not stop and dev server is not ready' >> {}; exit 1; else {}; fi",
+        current_pid,
+        current_pid,
+        shell_single_quote(binary_log.to_string_lossy().as_ref()),
+        shell_single_quote(DEV_SERVER_URL),
+        owner_group_function,
+        binary_launch,
+        shell_single_quote(dev_runner_log.to_string_lossy().as_ref()),
+        runner_launch,
     );
 
     let mut command = Command::new("/bin/sh");
     command
         .arg("-c")
         .arg(script)
-        .current_dir(&working_dir)
+        .current_dir(&plan.cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -58,11 +172,13 @@ fn schedule_dev_restart() -> bool {
     match command.spawn() {
         Ok(_) => {
             println!(
-                "[Lovcode] dev restart scheduled for pid={}, executable={}, cwd={}, log={}",
+                "[Lovcode] dev restart scheduled for pid={}, executable={}, cwd={}, owner_pgid={:?}, binary_log={}, runner_log={}",
                 current_pid,
-                executable.display(),
-                working_dir.display(),
-                binary_log.display()
+                plan.executable.display(),
+                plan.cwd.display(),
+                plan.owner_pgid,
+                binary_log.display(),
+                dev_runner_log.display(),
             );
             true
         }
@@ -134,6 +250,9 @@ pub fn run() {
     if let Some(exit_code) = run_cli_if_requested() {
         std::process::exit(exit_code);
     }
+
+    #[cfg(all(debug_assertions, unix))]
+    initialize_dev_restart_plan();
 
     use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut, ShortcutState};
 
