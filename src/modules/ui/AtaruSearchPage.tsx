@@ -354,7 +354,7 @@ export function AtaruSearchPage() {
             response={response}
             loading={isSearching}
             error={searchError}
-            selectedHitId={selectedHit?.id ?? null}
+            selectedHitId={isPreviewOpen ? selectedHit?.id ?? null : null}
             onSelectHit={selectHit}
             onOpenContext={openHitContext}
             onRetry={() => void performSearch(submittedQuery, true)}
