@@ -3,16 +3,10 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import Pages from "vite-plugin-pages";
-import { LovinspPlugin } from "lovinsp";
 import pkg from "./package.json";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
-
-const lovinspExclude = [
-  // Keep source jumps on feature/page call sites instead of shadcn/ui primitives.
-  /[/\\]src[/\\]components[/\\]ui[/\\]/,
-];
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -20,16 +14,6 @@ export default defineConfig(async () => ({
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   plugins: [
-    LovinspPlugin({
-      bundler: "vite",
-      hideConsole: true,
-      injectTo: [
-        path.resolve(__dirname, "src/main.tsx"),
-      ],
-      exclude: lovinspExclude,
-      match: /\.[jt]sx$/,
-      skipSnippets: ["htmlScript"],
-    }),
     Pages({
       dirs: "src/pages",
       extensions: ["tsx"],

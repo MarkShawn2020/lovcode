@@ -47,7 +47,7 @@ pub(crate) fn activate_and_focus_window(window: &tauri::WebviewWindow) {
         let _: () =
             msg_send![ns_win, performSelector:sel_make_main withObject:nil_ptr afterDelay:delay];
 
-        println!("[Lovcode] Window activation scheduled (50ms delay)");
+        println!("[Ataru] Window activation scheduled (50ms delay)");
     }
 }
 
@@ -115,7 +115,7 @@ fn ensure_nonactivating_methods_injected(ns_window: cocoa::base::id) {
         // that's TaoWindow, not the abstract NSWindow.
         let cls = object_getClass(ns_window as *const _) as *mut Class;
         if cls.is_null() {
-            eprintln!("[Lovcode] object_getClass returned null; skip injection");
+            eprintln!("[Ataru] object_getClass returned null; skip injection");
             return;
         }
 
@@ -128,7 +128,7 @@ fn ensure_nonactivating_methods_injected(ns_window: cocoa::base::id) {
         for sel_name in &[sel!(_isNonactivatingPanel), sel!(canBecomeKeyWindow)] {
             let added = class_addMethod(cls, *sel_name, imp, types);
             eprintln!(
-                "[Lovcode] class_addMethod({:?}) = {}",
+                "[Ataru] class_addMethod({:?}) = {}",
                 *sel_name,
                 added == YES
             );
@@ -170,7 +170,7 @@ unsafe fn configure_overlay(ns_window: cocoa::base::id) {
     // Diagnostic: confirm the AppKit hook now returns YES.
     let is_non: cocoa::base::BOOL = msg_send![ns_window, _isNonactivatingPanel];
     eprintln!(
-        "[Lovcode] after configure: _isNonactivatingPanel = {}",
+        "[Ataru] after configure: _isNonactivatingPanel = {}",
         is_non == YES
     );
 }

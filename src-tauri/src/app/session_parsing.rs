@@ -321,14 +321,36 @@ pub(crate) fn read_codex_session_meta_lightweight(path: &Path) -> CodexSessionHe
 }
 
 pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, String> {
-    use std::collections::HashSet;
+    parse_codex_rollout_messages_from_offset(path, 0, 0)
+}
 
-    let content = fs::read_to_string(path).map_err(|e| e.to_string())?;
+/// Parse only the JSONL suffix that was not included in the last index pass.
+///
+/// Codex rollouts are append-only in normal operation. Keeping the byte and
+/// line offsets outside this parser lets the search indexer avoid materializing
+/// the entire historical transcript on every file watcher event while retaining
+/// the original full-file parser for callers that need a complete session.
+pub(crate) fn parse_codex_rollout_messages_from_offset(
+    path: &Path,
+    offset: u64,
+    base_line_count: usize,
+) -> Result<Vec<Message>, String> {
+    use std::collections::HashSet;
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+
+    let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|e| e.to_string())?;
+    }
+    let reader = BufReader::new(file);
     let mut messages = Vec::new();
     let mut seen_user_texts = HashSet::new();
 
-    for (idx, line) in content.lines().enumerate() {
-        let Ok(parsed) = serde_json::from_str::<CodexRolloutLine>(line) else {
+    for (line_offset, line) in reader.lines().enumerate() {
+        let line = line.map_err(|e| e.to_string())?;
+        let line_number = base_line_count + line_offset + 1;
+        let Ok(parsed) = serde_json::from_str::<CodexRolloutLine>(&line) else {
             continue;
         };
         let timestamp = parsed.timestamp.unwrap_or_default();
@@ -355,13 +377,13 @@ pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, 
                     continue;
                 }
                 messages.push(Message {
-                    uuid: format!("{}:{}", path.display(), idx + 1),
+                    uuid: format!("{}:{}", path.display(), line_number),
                     role: "user".to_string(),
                     content: text,
                     timestamp,
                     is_meta: false,
                     is_tool: false,
-                    line_number: idx + 1,
+                    line_number,
                     content_blocks: None,
                 });
             }
@@ -391,13 +413,13 @@ pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, 
                     }
                     let content_blocks = extract_content_blocks(&payload.get("content").cloned());
                     messages.push(Message {
-                        uuid: format!("{}:{}", path.display(), idx + 1),
+                        uuid: format!("{}:{}", path.display(), line_number),
                         role,
                         content: text,
                         timestamp,
                         is_meta: false,
                         is_tool: false,
-                        line_number: idx + 1,
+                        line_number,
                         content_blocks,
                     });
                 }
@@ -407,13 +429,13 @@ pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, 
                     };
                     let content = content_blocks_to_text(std::slice::from_ref(&block));
                     messages.push(Message {
-                        uuid: format!("{}:{}", path.display(), idx + 1),
+                        uuid: format!("{}:{}", path.display(), line_number),
                         role: "assistant".to_string(),
                         content,
                         timestamp,
                         is_meta: false,
                         is_tool: true,
-                        line_number: idx + 1,
+                        line_number,
                         content_blocks: Some(vec![block]),
                     });
                 }
@@ -423,13 +445,13 @@ pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, 
                     };
                     let content = content_blocks_to_text(std::slice::from_ref(&block));
                     messages.push(Message {
-                        uuid: format!("{}:{}", path.display(), idx + 1),
+                        uuid: format!("{}:{}", path.display(), line_number),
                         role: "assistant".to_string(),
                         content,
                         timestamp,
                         is_meta: false,
                         is_tool: true,
-                        line_number: idx + 1,
+                        line_number,
                         content_blocks: Some(vec![block]),
                     });
                 }
@@ -439,13 +461,13 @@ pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, 
                     };
                     let content = content_blocks_to_text(std::slice::from_ref(&block));
                     messages.push(Message {
-                        uuid: format!("{}:{}", path.display(), idx + 1),
+                        uuid: format!("{}:{}", path.display(), line_number),
                         role: "user".to_string(),
                         content,
                         timestamp,
                         is_meta: false,
                         is_tool: true,
-                        line_number: idx + 1,
+                        line_number,
                         content_blocks: Some(vec![block]),
                     });
                 }
@@ -455,14 +477,14 @@ pub(crate) fn parse_codex_rollout_messages(path: &Path) -> Result<Vec<Message>, 
                     };
                     let content = content_blocks_to_text(&blocks);
                     messages.push(Message {
-                        uuid: format!("{}:{}", path.display(), idx + 1),
+                        uuid: format!("{}:{}", path.display(), line_number),
                         role: "assistant".to_string(),
                         content,
                         timestamp,
                         is_meta: false,
                         is_tool: false,
-                        line_number: idx + 1,
                         content_blocks: Some(blocks),
+                        line_number,
                     });
                 }
                 _ => {}
@@ -530,8 +552,3 @@ pub(crate) fn parse_claude_session_messages(path: &Path) -> Result<Vec<Message>,
 
     Ok(messages)
 }
-
-pub(crate) const HANDOFF_HEAD_MESSAGES: usize = 4;
-pub(crate) const HANDOFF_TAIL_MESSAGES: usize = 36;
-pub(crate) const HANDOFF_MAX_TRANSCRIPT_CHARS: usize = 36_000;
-pub(crate) const HANDOFF_MAX_MESSAGE_CHARS: usize = 2_800;

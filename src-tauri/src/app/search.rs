@@ -140,6 +140,14 @@ enum SearchIndexWorkMode {
         base_round_prompt: String,
         base_round_timestamp: String,
     },
+    AppendCodex {
+        offset: u64,
+        base_line_count: usize,
+        base_message_count: usize,
+        base_round_index: usize,
+        base_round_prompt: String,
+        base_round_timestamp: String,
+    },
 }
 
 impl SearchIndexWorkMode {
@@ -150,8 +158,13 @@ impl SearchIndexWorkMode {
 
 static SEARCH_INDEX_BUILD_STATUS: LazyLock<Mutex<SearchIndexBuildStatus>> =
     LazyLock::new(|| Mutex::new(SearchIndexBuildStatus::default()));
-static SEARCH_INDEX_BUILD_RUNNING: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static SEARCH_INDEX_STATUS_DISK_SIGNATURE: LazyLock<Mutex<Option<SearchIndexDiskSignature>>> =
+    LazyLock::new(|| Mutex::new(None));
+const SEARCH_INDEX_BUILD_IDLE: u8 = 0;
+const SEARCH_INDEX_BUILD_RUNNING: u8 = 1;
+const SEARCH_INDEX_BUILD_PENDING: u8 = 2;
+static SEARCH_INDEX_BUILD_STATE: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(SEARCH_INDEX_BUILD_IDLE);
 
 const SEARCH_INDEX_MANIFEST_VERSION: u32 = 5;
 const SEARCH_INDEX_EVENT: &str = "search-index:build";
@@ -162,6 +175,7 @@ const REQUIRED_SEARCH_INDEX_FIELDS: &[&str] = &[
     "prompt",
     "user",
     "assistant",
+    "project_id",
     "source_path",
     "line_number",
     "round_index",
@@ -169,11 +183,40 @@ const REQUIRED_SEARCH_INDEX_FIELDS: &[&str] = &[
     "round_timestamp",
 ];
 
-struct SearchIndexBuildRunningGuard;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SearchIndexPathSignature {
+    len: u64,
+    modified_nanos: u128,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SearchIndexDiskSignature {
+    manifest: Option<SearchIndexPathSignature>,
+    index_meta: Option<SearchIndexPathSignature>,
+}
+
+struct SearchIndexBuildRunningGuard {
+    active: bool,
+}
+
+impl SearchIndexBuildRunningGuard {
+    fn finish_pass(&mut self) -> bool {
+        let should_continue = complete_search_index_build_pass(&SEARCH_INDEX_BUILD_STATE);
+        if !should_continue {
+            self.active = false;
+        }
+        should_continue
+    }
+}
 
 impl Drop for SearchIndexBuildRunningGuard {
     fn drop(&mut self) {
-        SEARCH_INDEX_BUILD_RUNNING.store(false, std::sync::atomic::Ordering::Release);
+        if self.active {
+            SEARCH_INDEX_BUILD_STATE.store(
+                SEARCH_INDEX_BUILD_IDLE,
+                std::sync::atomic::Ordering::Release,
+            );
+        }
     }
 }
 
@@ -189,6 +232,27 @@ fn search_index_manifest_path() -> PathBuf {
         .parent()
         .map(|parent| parent.join("search-index-manifest.json"))
         .unwrap_or_else(|| PathBuf::from("search-index-manifest.json"))
+}
+
+fn search_index_path_signature(path: &Path) -> Option<SearchIndexPathSignature> {
+    let metadata = fs::metadata(path).ok()?;
+    let modified_nanos = metadata
+        .modified()
+        .ok()?
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_nanos();
+    Some(SearchIndexPathSignature {
+        len: metadata.len(),
+        modified_nanos,
+    })
+}
+
+fn search_index_disk_signature() -> SearchIndexDiskSignature {
+    SearchIndexDiskSignature {
+        manifest: search_index_path_signature(&search_index_manifest_path()),
+        index_meta: search_index_path_signature(&get_index_dir().join("meta.json")),
+    }
 }
 
 fn emit_search_index_status(app: Option<&tauri::AppHandle>, mut status: SearchIndexBuildStatus) {
@@ -218,6 +282,33 @@ fn emit_search_index_status(app: Option<&tauri::AppHandle>, mut status: SearchIn
 }
 
 fn current_search_index_status() -> SearchIndexBuildStatus {
+    let build_running = SEARCH_INDEX_BUILD_STATE.load(std::sync::atomic::Ordering::Acquire)
+        != SEARCH_INDEX_BUILD_IDLE;
+    if build_running {
+        return SEARCH_INDEX_BUILD_STATUS
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+    }
+
+    // Serialise the cold disk hydration and retain its cheap metadata
+    // fingerprint. Multiple windows can ask for status at startup, but only
+    // the first request should deserialize the manifest, open Tantivy, and
+    // walk the index directory.
+    let Ok(mut cached_signature) = SEARCH_INDEX_STATUS_DISK_SIGNATURE.lock() else {
+        return SEARCH_INDEX_BUILD_STATUS
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+    };
+    let disk_signature = search_index_disk_signature();
+    if cached_signature.as_ref() == Some(&disk_signature) {
+        return SEARCH_INDEX_BUILD_STATUS
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default();
+    }
+
     let mut status = SEARCH_INDEX_BUILD_STATUS
         .lock()
         .map(|guard| guard.clone())
@@ -228,7 +319,6 @@ fn current_search_index_status() -> SearchIndexBuildStatus {
         && Index::open_in_dir(get_index_dir())
             .map(|index| search_index_schema_is_current(&index.schema()))
             .unwrap_or(false);
-    let build_running = SEARCH_INDEX_BUILD_RUNNING.load(std::sync::atomic::Ordering::Acquire);
     let mut changed = false;
 
     if !build_running && index_ready && (status.state == "idle" || status.state == "building") {
@@ -274,6 +364,7 @@ fn current_search_index_status() -> SearchIndexBuildStatus {
             *guard = status.clone();
         }
     }
+    *cached_signature = Some(disk_signature);
 
     status
 }
@@ -315,12 +406,46 @@ fn search_index_build_dir_size() -> u64 {
         .unwrap_or(0)
 }
 
+fn mark_search_index_build_requested(state: &std::sync::atomic::AtomicU8) -> bool {
+    let previous = state
+        .fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |current| {
+                Some(match current {
+                    SEARCH_INDEX_BUILD_IDLE => SEARCH_INDEX_BUILD_RUNNING,
+                    SEARCH_INDEX_BUILD_RUNNING | SEARCH_INDEX_BUILD_PENDING => {
+                        SEARCH_INDEX_BUILD_PENDING
+                    }
+                    _ => unreachable!("invalid search index build state"),
+                })
+            },
+        )
+        .expect("search index build state update always returns a value");
+    previous == SEARCH_INDEX_BUILD_IDLE
+}
+
+fn complete_search_index_build_pass(state: &std::sync::atomic::AtomicU8) -> bool {
+    let previous = state
+        .fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |current| {
+                Some(match current {
+                    SEARCH_INDEX_BUILD_PENDING => SEARCH_INDEX_BUILD_RUNNING,
+                    SEARCH_INDEX_BUILD_RUNNING => SEARCH_INDEX_BUILD_IDLE,
+                    SEARCH_INDEX_BUILD_IDLE => SEARCH_INDEX_BUILD_IDLE,
+                    _ => unreachable!("invalid search index build state"),
+                })
+            },
+        )
+        .expect("search index build state update always returns a value");
+    previous == SEARCH_INDEX_BUILD_PENDING
+}
+
 fn try_mark_search_index_build_running() -> Option<SearchIndexBuildRunningGuard> {
-    if SEARCH_INDEX_BUILD_RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
-        None
-    } else {
-        Some(SearchIndexBuildRunningGuard)
-    }
+    mark_search_index_build_requested(&SEARCH_INDEX_BUILD_STATE)
+        .then_some(SearchIndexBuildRunningGuard { active: true })
 }
 
 fn collect_claude_search_sources(projects_dir: &Path) -> Result<Vec<ClaudeSearchSource>, String> {
@@ -441,6 +566,27 @@ fn claude_append_work_mode(
     })
 }
 
+fn codex_append_work_mode(
+    previous: &SearchIndexManifestEntry,
+    source: &CodexSearchSource,
+) -> Option<SearchIndexWorkMode> {
+    if previous.source_kind != SearchIndexSourceKind::Codex.as_str()
+        || previous.session_id != source.session_id
+        || source.size <= previous.indexed_size
+    {
+        return None;
+    }
+
+    Some(SearchIndexWorkMode::AppendCodex {
+        offset: previous.indexed_size,
+        base_line_count: previous.line_count,
+        base_message_count: previous.message_count,
+        base_round_index: previous.round_index,
+        base_round_prompt: previous.round_prompt.clone(),
+        base_round_timestamp: previous.round_timestamp.clone(),
+    })
+}
+
 fn read_file_suffix(path: &Path, offset: u64) -> Result<String, String> {
     let mut file = fs::File::open(path).map_err(|e| e.to_string())?;
     file.seek(SeekFrom::Start(offset))
@@ -546,19 +692,10 @@ fn update_search_index_message_progress(
 }
 
 #[tauri::command]
-pub(crate) async fn build_search_index() -> Result<usize, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let _running_guard = try_mark_search_index_build_running()
-            .ok_or_else(|| "Search index is already building".to_string())?;
-        run_search_index_build(None, true)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-#[tauri::command]
-pub(crate) fn get_search_index_status() -> Result<SearchIndexBuildStatus, String> {
-    Ok(current_search_index_status())
+pub(crate) async fn get_search_index_status() -> Result<SearchIndexBuildStatus, String> {
+    tauri::async_runtime::spawn_blocking(current_search_index_status)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -566,31 +703,36 @@ pub(crate) fn start_search_index_build(
     app_handle: tauri::AppHandle,
     force: Option<bool>,
 ) -> Result<SearchIndexBuildStatus, String> {
-    if SEARCH_INDEX_BUILD_RUNNING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+    let Some(mut running_guard) = try_mark_search_index_build_running() else {
         return Ok(current_search_index_status());
-    }
+    };
 
     let app_for_task = app_handle.clone();
-    let force = force.unwrap_or(false);
+    let mut force = force.unwrap_or(false);
     tauri::async_runtime::spawn(async move {
-        let app_for_blocking = app_for_task.clone();
-        let result = tauri::async_runtime::spawn_blocking(move || {
-            run_search_index_build(Some(app_for_blocking), force)
-        })
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|inner| inner);
+        loop {
+            let app_for_blocking = app_for_task.clone();
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                run_search_index_build(Some(app_for_blocking), force)
+            })
+            .await
+            .map_err(|e| e.to_string())
+            .and_then(|inner| inner);
 
-        if let Err(error) = result {
-            let mut status = current_search_index_status();
-            status.state = "error".to_string();
-            status.error = Some(error);
-            status.completed_at = Some(now_secs());
-            status.updated_at = status.completed_at;
-            emit_search_index_status(Some(&app_for_task), status);
+            if let Err(error) = result {
+                let mut status = current_search_index_status();
+                status.state = "error".to_string();
+                status.error = Some(error);
+                status.completed_at = Some(now_secs());
+                status.updated_at = status.completed_at;
+                emit_search_index_status(Some(&app_for_task), status);
+            }
+
+            if !running_guard.finish_pass() {
+                break;
+            }
+            force = false;
         }
-
-        SEARCH_INDEX_BUILD_RUNNING.store(false, std::sync::atomic::Ordering::Release);
     });
 
     Ok(current_search_index_status())
@@ -688,7 +830,10 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         };
         work_bytes += match &mode {
             SearchIndexWorkMode::Reindex => source.size,
-            SearchIndexWorkMode::AppendClaude { offset, .. } => source.size.saturating_sub(*offset),
+            SearchIndexWorkMode::AppendClaude { offset, .. }
+            | SearchIndexWorkMode::AppendCodex { offset, .. } => {
+                source.size.saturating_sub(*offset)
+            }
         };
         claude_work_by_path.insert(path, mode);
     }
@@ -717,8 +862,21 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
             continue;
         }
 
-        work_bytes += source.size;
-        codex_work_by_path.insert(path, SearchIndexWorkMode::Reindex);
+        let mode = if !full_rebuild {
+            previous
+                .and_then(|entry| codex_append_work_mode(entry, source))
+                .unwrap_or(SearchIndexWorkMode::Reindex)
+        } else {
+            SearchIndexWorkMode::Reindex
+        };
+        work_bytes += match &mode {
+            SearchIndexWorkMode::Reindex => source.size,
+            SearchIndexWorkMode::AppendClaude { offset, .. }
+            | SearchIndexWorkMode::AppendCodex { offset, .. } => {
+                source.size.saturating_sub(*offset)
+            }
+        };
+        codex_work_by_path.insert(path, mode);
     }
 
     let deleted_entries: Vec<SearchIndexManifestEntry> = if full_rebuild {
@@ -788,6 +946,14 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     let mut index_writer: IndexWriter = index
         .writer(50_000_000) // 50MB heap
         .map_err(|e| e.to_string())?;
+    if !full_rebuild {
+        // Incremental session updates should publish quickly. Tantivy's
+        // default policy can start four expensive merge workers for every
+        // append, and those workers may outlive the writer while a trailing
+        // pass is queued. Keep the update append-only; the next explicit full
+        // rebuild can compact the accumulated segments off the hot path.
+        index_writer.set_merge_policy(Box::new(tantivy::indexer::NoMergePolicy));
+    }
 
     let uuid_field = schema.get_field("uuid").unwrap();
     let content_field = schema.get_field("content").unwrap();
@@ -825,72 +991,12 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                 index_writer.delete_term(Term::from_field_text(source_path_field, path));
             }
         }
-        for path in codex_work_by_path.keys() {
-            index_writer.delete_term(Term::from_field_text(source_path_field, path));
-        }
-    }
-
-    // === Command stats collection ===
-    let mut command_stats: Option<HashMap<String, HashMap<String, usize>>> =
-        full_rebuild.then(HashMap::new);
-    let command_pattern =
-        regex::Regex::new(r"<command-name>(/[^<]+)</command-name>").map_err(|e| e.to_string())?;
-
-    // Build alias -> canonical name mapping
-    let mut alias_map: HashMap<String, String> = HashMap::new();
-    let commands_dir = get_claude_dir().join("commands");
-
-    fn scan_commands_for_aliases(
-        dir: &std::path::Path,
-        alias_map: &mut HashMap<String, String>,
-        base_dir: &std::path::Path,
-    ) {
-        if let Ok(entries) = fs::read_dir(dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.is_dir() {
-                    scan_commands_for_aliases(&path, alias_map, base_dir);
-                } else if path.extension().map_or(false, |e| e == "md") {
-                    let rel_path = path.strip_prefix(base_dir).unwrap_or(&path);
-                    let canonical = rel_path
-                        .with_extension("")
-                        .to_string_lossy()
-                        .replace('/', ":")
-                        .replace('\\', ":");
-
-                    if let Ok(content) = fs::read_to_string(&path) {
-                        if content.starts_with("---") {
-                            if let Some(end) = content[3..].find("---") {
-                                let fm = &content[3..3 + end];
-                                for line in fm.lines() {
-                                    if line.starts_with("aliases:") {
-                                        let aliases_str =
-                                            line.trim_start_matches("aliases:").trim();
-                                        for alias in aliases_str.split(',') {
-                                            let alias = alias
-                                                .trim()
-                                                .trim_matches('"')
-                                                .trim_matches('\'')
-                                                .trim_start_matches('/')
-                                                .to_string();
-                                            if !alias.is_empty() {
-                                                alias_map.insert(alias, canonical.clone());
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+        for (path, mode) in codex_work_by_path.iter() {
+            if mode.should_delete_existing_docs() {
+                index_writer.delete_term(Term::from_field_text(source_path_field, path));
             }
         }
     }
-
-    if command_stats.is_some() && commands_dir.exists() {
-        scan_commands_for_aliases(&commands_dir, &mut alias_map, &commands_dir);
-    }
-    // === End command stats setup ===
 
     for (source, source_path, work_mode) in claude_sources.iter().filter_map(|source| {
         let source_path = source_path_key(&source.path);
@@ -936,6 +1042,9 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                 base_round_timestamp.clone(),
                 source.size.saturating_sub(*offset),
             ),
+            SearchIndexWorkMode::AppendCodex { .. } => {
+                return Err("Codex append mode was assigned to a Claude source".to_string())
+            }
         };
         let session_start_bytes = status.processed_bytes;
         let mut session_bytes_seen = 0u64;
@@ -1040,32 +1149,6 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                     }
                 }
 
-                if command_stats.is_some()
-                    && line.contains("<command-name>")
-                    && !line.contains("\"type\":\"queue-operation\"")
-                {
-                    if let Some(ts_str) = &parsed.timestamp {
-                        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(ts_str) {
-                            let week_key = ts.format("%Y-W%V").to_string();
-                            for cap in command_pattern.captures_iter(line) {
-                                if let Some(cmd_match) = cap.get(1) {
-                                    let raw_name =
-                                        cmd_match.as_str().trim_start_matches('/').to_string();
-                                    let name =
-                                        alias_map.get(&raw_name).cloned().unwrap_or(raw_name);
-                                    if let Some(command_stats) = command_stats.as_mut() {
-                                        command_stats
-                                            .entry(name)
-                                            .or_default()
-                                            .entry(week_key.clone())
-                                            .and_modify(|c| *c += 1)
-                                            .or_insert(1);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
         status.processed_bytes = session_start_bytes + session_work_bytes;
@@ -1091,17 +1174,30 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         );
     }
 
-    for (source, source_path) in codex_sources.iter().filter_map(|source| {
+    for (source, source_path, work_mode) in codex_sources.iter().filter_map(|source| {
         let source_path = source_path_key(&source.path);
         codex_work_by_path
-            .contains_key(&source_path)
-            .then_some((source, source_path))
+            .get(&source_path)
+            .cloned()
+            .map(|work_mode| (source, source_path, work_mode))
     }) {
         let codex_path = &source.path;
         let session_start_bytes = status.processed_bytes;
-        let Some(session) = build_codex_session(&codex_path) else {
+        let session_work_bytes = match &work_mode {
+            SearchIndexWorkMode::Reindex => source.size,
+            SearchIndexWorkMode::AppendCodex { offset, .. } => source.size.saturating_sub(*offset),
+            SearchIndexWorkMode::AppendClaude { .. } => {
+                return Err("Claude append mode was assigned to a Codex source".to_string())
+            }
+        };
+        let session = match &work_mode {
+            SearchIndexWorkMode::AppendCodex { .. } => build_codex_session_lightweight(codex_path),
+            SearchIndexWorkMode::Reindex => build_codex_session(codex_path),
+            SearchIndexWorkMode::AppendClaude { .. } => None,
+        };
+        let Some(session) = session else {
             status.skipped_sessions += 1;
-            status.processed_bytes = session_start_bytes + source.size;
+            status.processed_bytes = session_start_bytes + session_work_bytes;
             update_search_index_progress(
                 app.as_ref(),
                 &mut status,
@@ -1111,35 +1207,55 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
             );
             continue;
         };
-        let messages = match parse_codex_rollout_messages(&codex_path) {
-            Ok(messages) => messages,
-            Err(_) => {
-                status.skipped_sessions += 1;
-                status.processed_bytes = session_start_bytes + source.size;
-                update_search_index_progress(
-                    app.as_ref(),
-                    &mut status,
-                    Some(source.session_id.clone()),
-                    session.title.clone(),
-                    session.project_path.clone(),
-                );
-                continue;
+        let (
+            messages,
+            mut round_index,
+            mut round_prompt,
+            mut round_timestamp,
+            mut session_message_count,
+            mut line_count,
+        ) = match &work_mode {
+            SearchIndexWorkMode::Reindex => (
+                parse_codex_rollout_messages(codex_path)?,
+                0usize,
+                String::new(),
+                String::new(),
+                0usize,
+                0usize,
+            ),
+            SearchIndexWorkMode::AppendCodex {
+                offset,
+                base_line_count,
+                base_message_count,
+                base_round_index,
+                base_round_prompt,
+                base_round_timestamp,
+            } => (
+                parse_codex_rollout_messages_from_offset(codex_path, *offset, *base_line_count)?,
+                *base_round_index,
+                base_round_prompt.clone(),
+                base_round_timestamp.clone(),
+                *base_message_count,
+                *base_line_count,
+            ),
+            SearchIndexWorkMode::AppendClaude { .. } => {
+                return Err("Claude append mode was assigned to a Codex source".to_string())
             }
         };
+        let base_message_count = session_message_count;
+        let is_codex_append = matches!(&work_mode, SearchIndexWorkMode::AppendCodex { .. });
         let project_path = session.project_path.clone().unwrap_or_default();
         let session_title = session.title.clone().unwrap_or_default();
-        let session_last_prompt = session.last_prompt.clone().unwrap_or_default();
+        let session_last_prompt = if is_codex_append && !round_prompt.is_empty() {
+            round_prompt.clone()
+        } else {
+            session.last_prompt.clone().unwrap_or_default()
+        };
         let session_summary = session
             .title
             .clone()
-            .or_else(|| session.last_prompt.clone())
+            .or_else(|| Some(session_last_prompt.clone()).filter(|value| !value.is_empty()))
             .unwrap_or_default();
-
-        let mut round_index = 0usize;
-        let mut round_prompt = String::new();
-        let mut round_timestamp = String::new();
-        let mut session_message_count = 0usize;
-        let mut line_count = 0usize;
         let parsed_message_total = messages.len().max(1) as u64;
 
         for message in messages {
@@ -1171,6 +1287,12 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
             };
             session_message_count += 1;
             line_count = line_count.max(message.line_number);
+            let new_message_count = session_message_count.saturating_sub(base_message_count) as u64;
+            let document_last_prompt = if is_codex_append && !round_prompt.is_empty() {
+                round_prompt.clone()
+            } else {
+                session_last_prompt.clone()
+            };
 
             index_writer
                 .add_document(doc!(
@@ -1178,7 +1300,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                     content_field => message.content,
                     title_field => session_title.clone(),
                     summary_field => session_summary.clone(),
-                    last_prompt_field => session_last_prompt.clone(),
+                    last_prompt_field => document_last_prompt,
                     prompt_field => prompt_text.clone(),
                     user_field => prompt_text,
                     assistant_field => assistant_text,
@@ -1198,8 +1320,8 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                 .map_err(|e| e.to_string())?;
 
             status.processed_bytes = session_start_bytes
-                + ((session_message_count as u64 * source.size) / parsed_message_total)
-                    .min(source.size);
+                + ((new_message_count * session_work_bytes) / parsed_message_total)
+                    .min(session_work_bytes);
             update_search_index_message_progress(
                 app.as_ref(),
                 &mut status,
@@ -1209,7 +1331,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                 false,
             );
         }
-        status.processed_bytes = session_start_bytes + source.size;
+        status.processed_bytes = session_start_bytes + session_work_bytes;
         final_manifest_entries.push(SearchIndexManifestEntry {
             path: source_path.clone(),
             source_kind: SearchIndexSourceKind::Codex.as_str().to_string(),
@@ -1233,6 +1355,10 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     }
 
     index_writer.commit().map_err(|e| e.to_string())?;
+    // End the writer before swapping the in-memory reader and before a
+    // coalesced trailing pass can start. This releases Tantivy's directory
+    // lock and stops its worker pools at the narrowest possible boundary.
+    drop(index_writer);
     let indexed_count = status.indexed_messages;
 
     let mut guard = SEARCH_INDEX.lock().map_err(|e| e.to_string())?;
@@ -1253,24 +1379,6 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         index: final_index,
         schema: final_schema,
     });
-
-    // Write full command stats only during full rebuilds. Incremental search
-    // updates should not block on a full historical stats scan.
-    if let Some(command_stats) = command_stats {
-        let stats_path = get_command_stats_path();
-        if let Some(parent) = stats_path.parent() {
-            fs::create_dir_all(parent).ok();
-        }
-        let stats_json = serde_json::json!({
-            "updated_at": chrono::Utc::now().timestamp(),
-            "commands": command_stats,
-        });
-        fs::write(
-            &stats_path,
-            serde_json::to_string_pretty(&stats_json).unwrap_or_default(),
-        )
-        .ok();
-    }
 
     final_manifest_entries.sort();
     let (corpus_sessions, corpus_messages, corpus_bytes) = manifest_totals(&final_manifest_entries);
@@ -1646,9 +1754,28 @@ fn search_index_documents(
     let parsed_query = query_parser
         .parse_query(query_text)
         .map_err(|e| e.to_string())?;
+    let scoped_query: Box<dyn tantivy::query::Query> = if let Some(project_id) = project_id {
+        let project_id_field = search_index
+            .schema
+            .get_field("project_id")
+            .map_err(|e| e.to_string())?;
+        let project_query = tantivy::query::ConstScoreQuery::new(
+            Box::new(tantivy::query::TermQuery::new(
+                Term::from_field_text(project_id_field, project_id),
+                schema::IndexRecordOption::Basic,
+            )),
+            0.0,
+        );
+        Box::new(tantivy::query::BooleanQuery::new(vec![
+            (tantivy::query::Occur::Must, parsed_query),
+            (tantivy::query::Occur::Must, Box::new(project_query)),
+        ]))
+    } else {
+        parsed_query
+    };
 
     let top_docs = searcher
-        .search(&parsed_query, &TopDocs::with_limit(max_results))
+        .search(&scoped_query, &TopDocs::with_limit(max_results))
         .map_err(|e| e.to_string())?;
 
     let mut results = Vec::new();
@@ -1678,11 +1805,6 @@ fn search_index_documents(
         };
 
         let doc_project_id = get_text("project_id");
-        if let Some(filter_id) = project_id {
-            if doc_project_id != filter_id {
-                continue;
-            }
-        }
 
         let summary = get_text("session_summary");
         let title = get_text("title");
@@ -1732,6 +1854,147 @@ fn search_index_documents(
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod search_index_documents_tests {
+    use super::*;
+
+    #[test]
+    fn search_index_build_requests_coalesce_into_one_trailing_pass() {
+        let state = std::sync::atomic::AtomicU8::new(SEARCH_INDEX_BUILD_IDLE);
+
+        assert!(mark_search_index_build_requested(&state));
+        assert_eq!(
+            state.load(std::sync::atomic::Ordering::Acquire),
+            SEARCH_INDEX_BUILD_RUNNING
+        );
+
+        assert!(!mark_search_index_build_requested(&state));
+        assert!(!mark_search_index_build_requested(&state));
+        assert_eq!(
+            state.load(std::sync::atomic::Ordering::Acquire),
+            SEARCH_INDEX_BUILD_PENDING
+        );
+
+        assert!(complete_search_index_build_pass(&state));
+        assert_eq!(
+            state.load(std::sync::atomic::Ordering::Acquire),
+            SEARCH_INDEX_BUILD_RUNNING
+        );
+        assert!(!complete_search_index_build_pass(&state));
+        assert_eq!(
+            state.load(std::sync::atomic::Ordering::Acquire),
+            SEARCH_INDEX_BUILD_IDLE
+        );
+
+        assert!(mark_search_index_build_requested(&state));
+    }
+
+    #[test]
+    fn codex_source_growth_uses_append_mode_and_truncation_reindexes() {
+        let previous = SearchIndexManifestEntry {
+            path: "/tmp/codex-rollout.jsonl".to_string(),
+            source_kind: SearchIndexSourceKind::Codex.as_str().to_string(),
+            session_id: "session-1".to_string(),
+            size: 100,
+            mtime: 10,
+            indexed_size: 100,
+            line_count: 12,
+            message_count: 7,
+            round_index: 3,
+            round_prompt: "latest prompt".to_string(),
+            round_timestamp: "2026-08-10T00:00:00Z".to_string(),
+        };
+        let grown = CodexSearchSource {
+            path: PathBuf::from(&previous.path),
+            session_id: previous.session_id.clone(),
+            size: 160,
+            mtime: 11,
+        };
+
+        let mode = codex_append_work_mode(&previous, &grown).expect("append mode");
+        match mode {
+            SearchIndexWorkMode::AppendCodex {
+                offset,
+                base_line_count,
+                base_message_count,
+                base_round_index,
+                base_round_prompt,
+                base_round_timestamp,
+            } => {
+                assert_eq!(offset, 100);
+                assert_eq!(base_line_count, 12);
+                assert_eq!(base_message_count, 7);
+                assert_eq!(base_round_index, 3);
+                assert_eq!(base_round_prompt, "latest prompt");
+                assert_eq!(base_round_timestamp, "2026-08-10T00:00:00Z");
+            }
+            SearchIndexWorkMode::Reindex | SearchIndexWorkMode::AppendClaude { .. } => {
+                panic!("expected Codex append mode")
+            }
+        }
+
+        let truncated = CodexSearchSource { size: 90, ..grown };
+        assert!(codex_append_work_mode(&previous, &truncated).is_none());
+    }
+
+    fn add_search_document(
+        writer: &mut IndexWriter,
+        schema: &Schema,
+        uuid: &str,
+        content: &str,
+        project_id: &str,
+    ) {
+        writer
+            .add_document(doc!(
+                schema.get_field("uuid").unwrap() => uuid,
+                schema.get_field("content").unwrap() => content,
+                schema.get_field("project_id").unwrap() => project_id,
+            ))
+            .unwrap();
+    }
+
+    #[test]
+    fn project_filter_is_applied_before_top_docs_limit() {
+        let schema = create_schema();
+        let index = Index::create_in_ram(schema.clone());
+        register_jieba_tokenizer(&index);
+        let mut writer = index.writer(15_000_000).unwrap();
+
+        add_search_document(
+            &mut writer,
+            &schema,
+            "other-project-hit",
+            "needle needle needle needle needle needle",
+            "other-project",
+        );
+        add_search_document(
+            &mut writer,
+            &schema,
+            "target-project-hit",
+            "needle",
+            "target-project",
+        );
+        writer.commit().unwrap();
+
+        let search_index = SearchIndex { index, schema };
+        let global_results =
+            search_index_documents(&search_index, "needle", &["content"], 1, None).unwrap();
+        assert_eq!(global_results[0].project_id, "other-project");
+
+        let scoped_results = search_index_documents(
+            &search_index,
+            "needle",
+            &["content"],
+            1,
+            Some("target-project"),
+        )
+        .unwrap();
+        assert_eq!(scoped_results.len(), 1);
+        assert_eq!(scoped_results[0].uuid, "target-project-hit");
+        assert_eq!(scoped_results[0].project_id, "target-project");
+    }
 }
 
 #[tauri::command]
@@ -3371,7 +3634,7 @@ async fn embed_texts(
 ) -> Result<Vec<Vec<f32>>, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(90))
-        .user_agent("Lovcode/semantic-search")
+        .user_agent("Ataru/semantic-search")
         .build()
         .map_err(|e| e.to_string())?;
     let mut vectors = Vec::with_capacity(texts.len());

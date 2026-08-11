@@ -263,6 +263,142 @@ pub(crate) async fn list_sessions(project_id: String) -> Result<Vec<Session>, St
     .map_err(|e| e.to_string())?
 }
 
+pub(crate) fn build_codex_session(path: &Path) -> Option<Session> {
+    build_codex_session_from_head(path, read_codex_session_head(path))
+}
+
+pub(crate) fn build_codex_session_lightweight(path: &Path) -> Option<Session> {
+    build_codex_session_from_head(path, read_codex_session_meta_lightweight(path))
+}
+
+fn build_codex_session_from_head(path: &Path, head: CodexSessionHead) -> Option<Session> {
+    let metadata = fs::metadata(path).ok();
+    let last_modified = metadata
+        .as_ref()
+        .and_then(|value| value.modified().ok())
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
+        .unwrap_or_else(|| head.created_at.unwrap_or(0));
+    let created_at = metadata
+        .as_ref()
+        .and_then(|value| value.created().ok())
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
+        .or(head.created_at)
+        .unwrap_or(last_modified);
+    let project_path = head.cwd.clone()?;
+    let usage = head.model.clone().map(|model| SessionUsage {
+        model: Some(model),
+        ..SessionUsage::default()
+    });
+
+    Some(Session {
+        id: head.id,
+        project_id: encode_project_path(&project_path),
+        project_path: Some(project_path),
+        title_source: head.title.as_ref().map(|_| "ai".to_string()),
+        title: head.title,
+        summary: None,
+        last_prompt: head.last_prompt,
+        rounds: head.rounds,
+        message_count: head.message_count,
+        created_at,
+        last_modified,
+        usage,
+        source: "codex".to_string(),
+    })
+}
+
+#[derive(Serialize, Deserialize)]
+struct HistoryIndexCache {
+    version: u32,
+    history_size: u64,
+    history_mtime: u64,
+    entries: Vec<(String, String, u64, Option<String>)>,
+}
+
+const HISTORY_INDEX_CACHE_VERSION: u32 = 1;
+
+pub(crate) fn build_session_index_from_history() -> HashMap<(String, String), (u64, Option<String>)> {
+    use std::io::{BufRead, BufReader};
+
+    let history_path = get_claude_dir().join("history.jsonl");
+    let metadata = fs::metadata(&history_path).ok();
+    let history_size = metadata.as_ref().map(|value| value.len()).unwrap_or(0);
+    let history_mtime = metadata
+        .as_ref()
+        .and_then(|value| value.modified().ok())
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    let cache_path = get_lovstudio_dir().join("history-index.json");
+
+    if let Ok(bytes) = fs::read(&cache_path) {
+        if let Ok(cache) = serde_json::from_slice::<HistoryIndexCache>(&bytes) {
+            if cache.version == HISTORY_INDEX_CACHE_VERSION
+                && cache.history_size == history_size
+                && cache.history_mtime == history_mtime
+            {
+                return cache
+                    .entries
+                    .into_iter()
+                    .map(|(project, session, timestamp, display)| {
+                        ((project, session), (timestamp, display))
+                    })
+                    .collect();
+            }
+        }
+    }
+
+    let mut index = HashMap::new();
+    let Ok(file) = fs::File::open(&history_path) else {
+        return index;
+    };
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Ok(entry) = serde_json::from_str::<HistoryEntry>(&line) else {
+            continue;
+        };
+        let (Some(session_id), Some(project), Some(timestamp)) =
+            (entry.session_id, entry.project, entry.timestamp)
+        else {
+            continue;
+        };
+        let useful_display = entry
+            .display
+            .as_deref()
+            .map(|value| !value.trim().is_empty() && !value.trim().starts_with('/'))
+            .unwrap_or(false);
+        index
+            .entry((encode_project_path(&project), session_id))
+            .and_modify(|(current_timestamp, display): &mut (u64, Option<String>)| {
+                *current_timestamp = (*current_timestamp).max(timestamp);
+                if useful_display || display.is_none() {
+                    *display = entry.display.clone();
+                }
+            })
+            .or_insert((timestamp, entry.display));
+    }
+
+    let cache = HistoryIndexCache {
+        version: HISTORY_INDEX_CACHE_VERSION,
+        history_size,
+        history_mtime,
+        entries: index
+            .iter()
+            .map(|((project, session), (timestamp, display))| {
+                (project.clone(), session.clone(), *timestamp, display.clone())
+            })
+            .collect(),
+    };
+    if let Some(parent) = cache_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(bytes) = serde_json::to_vec(&cache) {
+        let _ = fs::write(cache_path, bytes);
+    }
+    index
+}
+
 /// Pricing constants (USD per 1M tokens) - Claude Opus 4.5 pricing as baseline
 pub(crate) const PRICE_INPUT_PER_M: f64 = 15.0;
 pub(crate) const PRICE_OUTPUT_PER_M: f64 = 75.0;

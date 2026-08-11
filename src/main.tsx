@@ -3,10 +3,6 @@ import { QueryClient } from "@tanstack/react-query";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { createSyncStoragePersister } from "@tanstack/query-sync-storage-persister";
 import { AppRouter } from "./router";
-import { Toaster } from "./components/ui/toast";
-import { NativeTitleTooltip } from "./components/ui/native-title-tooltip";
-import { PageWindowMenuListener } from "./components/PageWindowMenuListener";
-import { I18nProvider } from "./i18n";
 import { restoreLocationForDevReload, saveCurrentLocationForDevResume } from "./lib/appResume";
 import "./index.css";
 
@@ -67,33 +63,27 @@ window.addEventListener("app:ready", () => {
 setTimeout(notifyAppReady, 1500);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <I18nProvider>
-    <PersistQueryClientProvider
-      client={queryClient}
-      persistOptions={{
-        persister,
-        maxAge: 1000 * 60 * 60 * 24 * 7,
-        dehydrateOptions: {
-          // Only mirror the listed query keys to localStorage.
-          shouldDehydrateQuery: (q) =>
-            q.state.status === "success" &&
-            Array.isArray(q.queryKey) &&
-            typeof q.queryKey[0] === "string" &&
-            PERSIST_KEYS.includes(q.queryKey[0] as string),
-        },
-      }}
-      onSuccess={() => {
-        PERSIST_KEYS.forEach((key) => {
-          queryClient.refetchQueries({ queryKey: [key] });
-        });
-      }}
-    >
-      <PageWindowMenuListener />
-      <AppRouter />
-      <NativeTitleTooltip />
-      <Toaster />
-    </PersistQueryClientProvider>
-  </I18nProvider>,
+  <PersistQueryClientProvider
+    client={queryClient}
+    persistOptions={{
+      persister,
+      maxAge: 1000 * 60 * 60 * 24 * 7,
+      dehydrateOptions: {
+        shouldDehydrateQuery: (q) =>
+          q.state.status === "success" &&
+          Array.isArray(q.queryKey) &&
+          typeof q.queryKey[0] === "string" &&
+          PERSIST_KEYS.includes(q.queryKey[0] as string),
+      },
+    }}
+    onSuccess={() => {
+      PERSIST_KEYS.forEach((key) => {
+        queryClient.refetchQueries({ queryKey: [key] });
+      });
+    }}
+  >
+    <AppRouter />
+  </PersistQueryClientProvider>,
 );
 
 requestAnimationFrame(() => requestAnimationFrame(notifyAppReady));

@@ -136,7 +136,6 @@ fn collect_lightweight_sessions_snapshot() -> Vec<Session> {
             let display_path = decode_project_path(&project_id);
 
             for entry in fs::read_dir(&project_path).into_iter().flatten().flatten() {
-                let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
                 if !name.ends_with(".jsonl") || name.starts_with("agent-") {
                     continue;
@@ -731,15 +730,10 @@ pub(crate) async fn compute_all_sessions_dedup() -> Vec<Session> {
     fresh
 }
 
-#[tauri::command]
-pub(crate) async fn list_all_sessions() -> Result<Vec<Session>, String> {
-    Ok(compute_all_sessions_dedup().await)
-}
-
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub(crate) enum SessionStreamEvent {
-    /// Fast preview from Lovcode's own on-disk cache. The full scan will follow.
+    /// Fast preview from Ataru's own on-disk cache. The full scan will follow.
     Cached {
         sessions: Vec<Session>,
         total: usize,
@@ -748,22 +742,6 @@ pub(crate) enum SessionStreamEvent {
     Batch { sessions: Vec<Session> },
     /// All batches sent. Front-end can flip loading=false for sure.
     Done { total: usize },
-}
-
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SessionFileActivityRequest {
-    pub(crate) project_id: String,
-    pub(crate) session_id: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SessionFileActivity {
-    pub(crate) project_id: String,
-    pub(crate) session_id: String,
-    pub(crate) modified_at: u64,
-    pub(crate) size: u64,
 }
 
 /// Streamed variant of list_all_sessions. It first ships a small cached preview,
@@ -905,225 +883,4 @@ pub(crate) async fn list_all_sessions_streamed(
     });
 
     Ok(())
-}
-
-#[tauri::command]
-pub(crate) async fn get_session_file_activity(
-    sessions: Vec<SessionFileActivityRequest>,
-) -> Result<Vec<SessionFileActivity>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut codex_paths_by_id: Option<HashMap<String, PathBuf>> = None;
-        let mut result = Vec::with_capacity(sessions.len());
-
-        for session in sessions {
-            let claude_path = get_session_path(&session.project_id, &session.session_id);
-            let path = if claude_path.exists() {
-                Some(claude_path)
-            } else {
-                if codex_paths_by_id.is_none() {
-                    codex_paths_by_id = Some(
-                        collect_codex_session_paths()
-                            .into_iter()
-                            .filter_map(|path| {
-                                codex_session_id_from_path(&path).map(|id| (id, path))
-                            })
-                            .collect(),
-                    );
-                }
-                codex_paths_by_id
-                    .as_ref()
-                    .and_then(|paths| paths.get(&session.session_id).cloned())
-            };
-
-            let Some(path) = path else {
-                continue;
-            };
-            let Ok(metadata) = fs::metadata(path) else {
-                continue;
-            };
-            let modified_at = metadata
-                .modified()
-                .ok()
-                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_millis() as u64)
-                .unwrap_or(0);
-
-            result.push(SessionFileActivity {
-                project_id: session.project_id,
-                session_id: session.session_id,
-                modified_at,
-                size: metadata.len(),
-            });
-        }
-
-        Ok(result)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-/// Read Claude desktop app's "starredIds" (its name for pinned sessions) and
-/// translate them into our session ids (cliSessionIds).
-///
-/// The state lives in IndexedDB LevelDB at:
-///   ~/Library/Application Support/Claude/IndexedDB/https_claude.ai_0.indexeddb.leveldb/*.log
-///
-/// We can't open the LevelDB while Claude app is running (it holds an exclusive
-/// lock). Instead we scan the .log file (an append-only text-ish format) and
-/// extract the most recent `{"state":{"starredIds":[...]}}` blob — last write
-/// wins. This is read-only and lock-free.
-///
-/// The starredIds use app session ids (`local_<uuid>`); we map each to its
-/// cliSessionId by reading the matching `local_<uuid>.json` metadata file.
-#[tauri::command]
-pub(crate) async fn get_app_starred_session_ids() -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(|| {
-        let Some(home) = dirs::home_dir() else {
-            return Ok(vec![]);
-        };
-        let leveldb_dir = home
-            .join("Library")
-            .join("Application Support")
-            .join("Claude")
-            .join("IndexedDB")
-            .join("https_claude.ai_0.indexeddb.leveldb");
-        if !leveldb_dir.exists() {
-            return Ok(vec![]);
-        }
-
-        // Find the most recent starredIds entry across all .log/.ldb files
-        let mut latest: Option<(u64, Vec<String>)> = None;
-        let needle = b"\"starredIds\"";
-
-        for entry in fs::read_dir(&leveldb_dir).into_iter().flatten().flatten() {
-            let path = entry.path();
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if ext != "log" && ext != "ldb" {
-                continue;
-            }
-            let Ok(bytes) = fs::read(&path) else { continue };
-
-            // Find every occurrence of `"starredIds"` and back up to the
-            // enclosing `{"state":...,"updatedAt":<num>}` object.
-            let mut search_from = 0;
-            while let Some(idx) = find_subslice(&bytes[search_from..], needle) {
-                let abs_idx = search_from + idx;
-                // Walk backward to nearest `{"state":` (start of the JSON object)
-                let start_marker = b"{\"state\":";
-                let start = match find_subslice_rev(&bytes[..abs_idx], start_marker) {
-                    Some(s) => s,
-                    None => {
-                        search_from = abs_idx + needle.len();
-                        continue;
-                    }
-                };
-                // Walk forward to find the matching closing `}` by brace counting
-                let end = match scan_balanced_json(&bytes, start) {
-                    Some(e) => e,
-                    None => {
-                        search_from = abs_idx + needle.len();
-                        continue;
-                    }
-                };
-                if let Ok(text) = std::str::from_utf8(&bytes[start..end]) {
-                    if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
-                        let updated_at = v.get("updatedAt").and_then(|x| x.as_u64()).unwrap_or(0);
-                        let ids: Vec<String> = v
-                            .get("state")
-                            .and_then(|s| s.get("starredIds"))
-                            .and_then(|a| a.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|x| x.as_str().map(String::from))
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        if !ids.is_empty() {
-                            match &latest {
-                                Some((ts, _)) if *ts >= updated_at => {}
-                                _ => latest = Some((updated_at, ids)),
-                            }
-                        }
-                    }
-                }
-                search_from = end;
-            }
-        }
-
-        let app_ids = match latest {
-            Some((_, ids)) => ids,
-            None => return Ok(vec![]),
-        };
-
-        // Map app session ids (local_<uuid>) -> cliSessionId by scanning
-        // claude-code-sessions/<deviceId>/<accountId>/local_*.json
-        let app_sessions_root = home
-            .join("Library")
-            .join("Application Support")
-            .join("Claude")
-            .join("claude-code-sessions");
-
-        let mut id_to_cli: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        if app_sessions_root.exists() {
-            for d in fs::read_dir(&app_sessions_root)
-                .into_iter()
-                .flatten()
-                .flatten()
-            {
-                for a in fs::read_dir(d.path()).into_iter().flatten().flatten() {
-                    for f in fs::read_dir(a.path()).into_iter().flatten().flatten() {
-                        let p = f.path();
-                        let name = p
-                            .file_name()
-                            .unwrap_or_default()
-                            .to_string_lossy()
-                            .to_string();
-                        if !name.starts_with("local_") || !name.ends_with(".json") {
-                            continue;
-                        }
-                        let Ok(content) = fs::read_to_string(&p) else {
-                            continue;
-                        };
-                        let Ok(meta) = serde_json::from_str::<serde_json::Value>(&content) else {
-                            continue;
-                        };
-                        let session_id = meta
-                            .get("sessionId")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        let cli_id = meta
-                            .get("cliSessionId")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
-                        if let (Some(sid), Some(cli)) = (session_id, cli_id) {
-                            id_to_cli.insert(sid, cli);
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut resolved: Vec<String> = app_ids
-            .into_iter()
-            .filter_map(|aid| id_to_cli.get(&aid).cloned())
-            .collect();
-
-        // Also include web-starred conversation uuids cached by the latest
-        // sync_claude_web_conversations run. These are claude.ai web pins
-        // (separate from Code-tab starredIds) — we union them here so the
-        // frontend gets a single source of "what's app-starred".
-        let web_cache = get_lovstudio_dir().join("claude-web-starred.json");
-        if let Ok(content) = fs::read_to_string(&web_cache) {
-            if let Ok(arr) = serde_json::from_str::<Vec<String>>(&content) {
-                for uuid in arr {
-                    resolved.push(uuid);
-                }
-            }
-        }
-
-        Ok(resolved)
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }

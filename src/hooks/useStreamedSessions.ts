@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { invoke, Channel } from "@/lib/tauri";
+import { startTransition, useEffect, useState } from "react";
+import { invoke, Channel, isTauri } from "@/lib/tauri";
 import { listen } from "@tauri-apps/api/event";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { Session } from "../types";
@@ -110,6 +110,17 @@ function stopActiveSessionStream(reason: string) {
 function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClient) {
   currentQueryClient = queryClient;
 
+  if (!isTauri()) {
+    queryClient.setQueryData<Session[]>(SESSIONS_QUERY_KEY, []);
+    publishSessionSnapshot({
+      sessions: [],
+      initialLoading: false,
+      streaming: false,
+      hasCompleteSnapshot: true,
+    });
+    return;
+  }
+
   if (mode === "initial" && sessionSnapshot.hasCompleteSnapshot) return;
   if (sessionSnapshot.streaming) {
     if (mode === "refresh") pendingRefresh = true;
@@ -118,7 +129,7 @@ function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClien
 
   const cachedSessions = getCachedSessions(queryClient);
   const hasUsableSnapshot = sessionSnapshot.hasCompleteSnapshot || cachedSessions.length > 0;
-  const publishBatches = mode === "initial" && !hasUsableSnapshot;
+  let hasPublishedStreamPreview = hasUsableSnapshot;
   const seq = streamSeq + 1;
   const streamId = createSessionStreamId(seq);
   const accumulated: Session[] = [];
@@ -149,6 +160,7 @@ function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClien
     if (streamSeq !== seq || activeStreamId !== streamId) return;
 
     if (event.kind === "cached") {
+      if (event.sessions.length > 0) hasPublishedStreamPreview = true;
       if (
         !sessionSnapshot.hasCompleteSnapshot &&
         sessionSnapshot.sessions.length === 0 &&
@@ -170,7 +182,10 @@ function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClien
 
     if (event.kind === "batch") {
       accumulated.push(...event.sessions);
-      if (publishBatches) {
+      // Paint at most one streamed preview. Publishing every growing batch
+      // repeatedly re-renders the 2k+ session tree and starves wheel input.
+      if (!hasPublishedStreamPreview && accumulated.length > 0) {
+        hasPublishedStreamPreview = true;
         patchSessionSnapshot({
           sessions: [...accumulated],
           initialLoading: false,
@@ -185,12 +200,14 @@ function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClien
 
     const completeSessions = [...accumulated];
     activeStreamId = null;
-    queryClient.setQueryData<Session[]>(SESSIONS_QUERY_KEY, completeSessions);
-    publishSessionSnapshot({
-      sessions: completeSessions,
-      initialLoading: false,
-      streaming: false,
-      hasCompleteSnapshot: true,
+    startTransition(() => {
+      queryClient.setQueryData<Session[]>(SESSIONS_QUERY_KEY, completeSessions);
+      publishSessionSnapshot({
+        sessions: completeSessions,
+        initialLoading: false,
+        streaming: false,
+        hasCompleteSnapshot: true,
+      });
     });
     debugSessionStream(`done total=${event.total} at +${(performance.now() - t0).toFixed(0)}ms`);
     maybeRunPendingRefresh(queryClient);
@@ -212,6 +229,7 @@ function startSessionStream(mode: "initial" | "refresh", queryClient: QueryClien
 
 function ensureSessionsChangedListener(queryClient: QueryClient) {
   currentQueryClient = queryClient;
+  if (!isTauri()) return;
   if (sessionsChangedListenerStarted) return;
   sessionsChangedListenerStarted = true;
   listen("sessions-changed", () => {

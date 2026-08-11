@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Channel, invoke } from "@/lib/tauri";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { emitTo, listen } from "@tauri-apps/api/event";
@@ -7,7 +7,7 @@ import type { Session } from "../types";
 import { matchesScopedSessionMetadata, parseScopedSearchQuery, shouldUseSemanticSessionSearch } from "../lib/searchScopes";
 import { formatDate, formatRelativeTime, restoreSlashCommand } from "../views/Chat/utils";
 import { HighlightText } from "../views/Chat/HighlightText";
-import { useSearchIndexBuildStatus } from "../hooks";
+import { useSearchIndexBuildStatus } from "../hooks/useSearchIndexBuildStatus";
 import { getSearchIndexPresentation } from "@/lib/searchIndexStatus";
 
 interface SearchChatHit {
@@ -261,6 +261,10 @@ function itemTimestampSeconds(item: SearchResultItem) {
   return item.session.last_modified;
 }
 
+function itemRelevanceScore(item: SearchResultItem) {
+  return getItemHit(item)?.score ?? 0;
+}
+
 function itemLineNumber(item: SearchResultItem) {
   return getItemHit(item)?.line_number ?? 0;
 }
@@ -326,6 +330,9 @@ function variantFromItem(item: MessageSearchResultItem | RoundSearchResultItem):
 
 function sortSearchItems(items: SearchResultItem[]) {
   return [...items].sort((a, b) => {
+    const relevanceDiff = itemRelevanceScore(b) - itemRelevanceScore(a);
+    if (relevanceDiff !== 0) return relevanceDiff;
+
     const timestampDiff = itemTimestampSeconds(b) - itemTimestampSeconds(a);
     if (timestampDiff !== 0) return timestampDiff;
 
@@ -688,6 +695,7 @@ export default function SearchOverlay() {
   const [expandedVariantKey, setExpandedVariantKey] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const sessionStreamSeqRef = useRef(0);
+  const activeSessionStreamIdRef = useRef<string | null>(null);
   const resultsScrollRef = useRef<HTMLDivElement | null>(null);
   const resultItemRefs = useRef<Array<HTMLDivElement | null>>([]);
   const expandedVariantsRef = useRef<HTMLDivElement | null>(null);
@@ -752,10 +760,22 @@ export default function SearchOverlay() {
     });
   }, []);
 
+  const cancelSearchDataRefresh = useCallback(() => {
+    sessionStreamSeqRef.current += 1;
+    const streamId = activeSessionStreamIdRef.current;
+    activeSessionStreamIdRef.current = null;
+    if (streamId) invoke("cancel_session_stream", { streamId }).catch(() => {});
+  }, []);
+
   const refreshSearchData = useCallback((options: { rebuildIndex?: boolean } = {}) => {
+    const previousStreamId = activeSessionStreamIdRef.current;
+    if (previousStreamId) {
+      invoke("cancel_session_stream", { streamId: previousStreamId }).catch(() => {});
+    }
     const seq = sessionStreamSeqRef.current + 1;
     sessionStreamSeqRef.current = seq;
     const streamId = `search-${Date.now()}-${seq}-${Math.random().toString(36).slice(2)}`;
+    activeSessionStreamIdRef.current = streamId;
     const channel = new Channel<SessionStreamEvent>();
     const accumulated: Session[] = [];
 
@@ -767,22 +787,29 @@ export default function SearchOverlay() {
       }
       if (event.kind === "batch") {
         accumulated.push(...event.sessions);
-        setAllSessions([...accumulated]);
         return;
       }
-      setAllSessions([...accumulated]);
+      activeSessionStreamIdRef.current = null;
+      startTransition(() => setAllSessions([...accumulated]));
     };
 
     invoke("list_all_sessions_streamed", {
       streamId,
       onEvent: channel,
       refresh: options.rebuildIndex ?? false,
-    }).catch(() => {});
+    }).catch(() => {
+      if (sessionStreamSeqRef.current === seq) activeSessionStreamIdRef.current = null;
+    });
 
     if (options.rebuildIndex && searchIndexStateRef.current !== "building") {
       startSearchIndexBuild(false).catch(() => {});
     }
   }, [startSearchIndexBuild]);
+
+  const hide = useCallback(() => {
+    cancelSearchDataRefresh();
+    getCurrentWindow().hide().catch(() => {});
+  }, [cancelSearchDataRefresh]);
 
   // Make html/body transparent so only the floating card paints. This window
   // has `transparent: true` in tauri.conf.json — without this the canvas
@@ -808,7 +835,7 @@ export default function SearchOverlay() {
       if (!focused) hide();
     });
     return () => { unlisten.then((fn) => fn()).catch(() => {}); };
-  }, []);
+  }, [hide]);
 
   // Re-focus input every time the overlay becomes visible / focused.
   useEffect(() => {
@@ -818,17 +845,11 @@ export default function SearchOverlay() {
       refreshSearchData({ rebuildIndex: true });
       requestAnimationFrame(() => inputRef.current?.focus());
     });
-    // Also try to focus immediately on first mount.
-    requestAnimationFrame(() => inputRef.current?.focus());
     return () => {
+      cancelSearchDataRefresh();
       unlisten.then((fn) => fn()).catch(() => {});
     };
-  }, [refreshSearchData]);
-
-  // Load sessions + build index on mount, then refresh again whenever the panel is shown.
-  useEffect(() => {
-    refreshSearchData({ rebuildIndex: true });
-  }, [refreshSearchData]);
+  }, [cancelSearchDataRefresh, refreshSearchData]);
 
   useEffect(() => {
     if (!trimmedQuery) {
@@ -987,10 +1008,6 @@ export default function SearchOverlay() {
     });
     return () => cancelAnimationFrame(frame);
   }, [activeIdx, activeResultKey]);
-
-  const hide = () => {
-    getCurrentWindow().hide().catch(() => {});
-  };
 
   const onResultMouseEnter = (index: number) => {
     setActiveIdx(index);

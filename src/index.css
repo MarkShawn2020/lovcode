@@ -8,17 +8,14 @@
 @plugin "@tailwindcss/typography";
 
 @theme {
-  /* Lovstudio Warm Academic Theme */
-  /* Warm Academic Color Palette */
-  --color-canvas: #F9F9F7;
-  --color-canvas-alt: #F0EEE6;
-  --color-ink: #181818;
-  --color-ink-muted: #87867F;
-  --color-clay: #CC785C;
-  --color-clay-hover: #B86A4E;
-
-  /* Terminal - warm dark background */
-  --color-terminal: #1a1a1a;
+  /* Yoda-aligned neutral palette. Keep the legacy names as semantic aliases
+     so older workspace surfaces inherit the same visual language. */
+  --color-canvas: color(display-p3 1 1 1);
+  --color-canvas-alt: color(display-p3 0.98 0.98 0.98);
+  --color-ink: color(display-p3 0.125 0.125 0.125);
+  --color-ink-muted: color(display-p3 0.392 0.392 0.392);
+  --color-clay: color(display-p3 0.142 0.229 0.194);
+  --color-clay-hover: color(display-p3 0.15 0.5 0.37);
 
   /* Typography */
   --font-serif: Georgia, "Times New Roman", Times, serif;
@@ -41,140 +38,6 @@ html.transparent-window body {
 body {
   margin: 0;
   min-height: 100vh;
-}
-
-.config-page-container {
-  container-type: inline-size;
-}
-
-.env-actions-cell {
-  position: sticky;
-  right: 0;
-  background: var(--color-canvas);
-}
-
-.env-actions-cell::before {
-  content: "";
-  position: absolute;
-  left: -8px;
-  top: 0;
-  bottom: 0;
-  width: 8px;
-  background: linear-gradient(to left, var(--color-canvas), transparent);
-  pointer-events: none;
-}
-
-.env-actions--icon {
-  display: none;
-}
-
-.env-actions--text {
-  display: flex;
-}
-
-@container (max-width: 640px) {
-  .env-actions--icon {
-    display: flex;
-  }
-
-  .env-actions--text {
-    display: none;
-  }
-}
-
-.router-actions--icon {
-  display: none;
-}
-
-.router-actions--text {
-  display: flex;
-}
-
-@container (max-width: 640px) {
-  .router-actions--icon {
-    display: flex;
-  }
-
-  .router-actions--text {
-    display: none;
-  }
-}
-
-.agent-composer-panel {
-  container-type: inline-size;
-}
-
-.agent-composer-panel-controls {
-  display: flex;
-  justify-content: flex-start;
-  width: 100%;
-}
-
-.agent-composer-panel-picker-grid {
-  display: grid;
-  width: 100%;
-  align-items: center;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.25rem;
-  padding: 0.25rem;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  background: var(--background);
-}
-
-.agent-composer-panel-picker-grid > * {
-  min-width: 0;
-  width: 100%;
-  max-width: 100%;
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-  justify-content: flex-start;
-}
-
-.agent-composer-panel .agent-composer-picker-icon {
-  height: 1.5rem;
-  width: 1.5rem;
-  background: transparent;
-  box-shadow: none;
-}
-
-.agent-composer-panel .agent-composer-picker-icon > span {
-  height: 1.25rem;
-  width: 1.25rem;
-  background: transparent;
-  box-shadow: none;
-}
-
-.agent-composer-panel .agent-composer-picker-icon img {
-  height: 1rem;
-  width: 1rem;
-}
-
-@container (max-width: 560px) {
-  .agent-composer-panel-picker-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .agent-composer-panel-picker-grid > * {
-    border-color: var(--border);
-    background: var(--card);
-    justify-content: center;
-    padding-left: 0;
-    padding-right: 0;
-  }
-
-  .agent-composer-panel .agent-composer-picker-label,
-  .agent-composer-panel .agent-composer-picker-chevron {
-    display: none;
-  }
-}
-
-@container (max-width: 440px) {
-  .agent-composer-panel-titlebar,
-  .agent-composer-panel-body {
-    padding: 1rem;
-  }
 }
 
 /* Disable Tauri window drag on input elements */
@@ -206,72 +69,65 @@ input, button, a, select, textarea {
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
 }
 
 :root {
-  /* Lovstudio Warm Academic Theme - Light Mode */
-  --radius: 1rem;
+  /* Yoda light theme: white canvas, graphite text, dark-green action. */
+  --radius: 0.5rem;
+  --background: color(display-p3 1 1 1);
+  --foreground: color(display-p3 0.125 0.125 0.125);
 
-  /* #F9F9F7 暖米色 (Warm Beige) */
-  --background: oklch(0.98 0.005 85);
-  /* #181818 炭灰色 (Charcoal) */
-  --foreground: oklch(0.15 0 0);
+  --card: color(display-p3 0.98 0.98 0.98);
+  --card-foreground: color(display-p3 0.125 0.125 0.125);
 
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.15 0 0);
+  --popover: color(display-p3 0.997 0.997 0.997);
+  --popover-foreground: color(display-p3 0.125 0.125 0.125);
 
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.15 0 0);
+  --primary: color(display-p3 0.142 0.229 0.194);
+  --primary-foreground: color(display-p3 0.962 0.983 0.969);
 
-  /* #CC785C 陶土色 (Terracotta) - Primary accent */
-  --primary: oklch(0.62 0.12 35);
-  --primary-foreground: oklch(1 0 0);
+  --secondary: color(display-p3 0.949 0.949 0.949);
+  --secondary-foreground: color(display-p3 0.392 0.392 0.392);
 
-  /* #F0EEE6 浅灰 (Light Gray) - Secondary */
-  --secondary: oklch(0.94 0.005 85);
-  --secondary-foreground: oklch(0.15 0 0);
+  --muted: color(display-p3 0.949 0.949 0.949);
+  --muted-foreground: color(display-p3 0.392 0.392 0.392);
 
-  /* #E8E6DC Muted background */
-  --muted: oklch(0.92 0.005 85);
-  /* #87867F Muted foreground */
-  --muted-foreground: oklch(0.55 0.01 85);
+  --accent: color(display-p3 0.949 0.949 0.949);
+  --accent-foreground: color(display-p3 0.125 0.125 0.125);
 
-  --accent: oklch(0.94 0.005 85);
-  --accent-foreground: oklch(0.15 0 0);
+  --destructive: color(display-p3 0.744 0.234 0.222);
+  --destructive-foreground: color(display-p3 1 1 1);
 
-  --destructive: oklch(0.55 0.22 27);
-  --destructive-foreground: oklch(1 0 0);
-
-  /* #E8E6DC Border/Input */
-  --border: oklch(0.92 0.005 85);
-  --input: oklch(0.92 0.005 85);
-  --ring: oklch(0.62 0.12 35);
+  --border: color(display-p3 0.88 0.88 0.88);
+  --input: color(display-p3 0.88 0.88 0.88);
+  --ring: hsl(0 0% 3.9%);
 }
 
 .dark {
-  /* Lovstudio Warm Academic Theme - Dark Mode */
-  --background: oklch(0.18 0.01 35);
-  --foreground: oklch(0.95 0.005 85);
-  --card: oklch(0.22 0.01 35);
-  --card-foreground: oklch(0.95 0.005 85);
-  --popover: oklch(0.22 0.01 35);
-  --popover-foreground: oklch(0.95 0.005 85);
-  --primary: oklch(0.68 0.12 35);
-  --primary-foreground: oklch(0.18 0.01 35);
-  --secondary: oklch(0.28 0.01 35);
-  --secondary-foreground: oklch(0.95 0.005 85);
-  --muted: oklch(0.28 0.01 35);
-  --muted-foreground: oklch(0.65 0.005 85);
-  --accent: oklch(0.28 0.01 35);
-  --accent-foreground: oklch(0.95 0.005 85);
-  --destructive: oklch(0.55 0.19 29);
-  --destructive-foreground: oklch(0.95 0.005 85);
-  --border: oklch(0.35 0.01 35);
-  --input: oklch(0.35 0.01 35);
-  --ring: oklch(0.68 0.12 35);
+  /* Yoda dark theme: graphite canvas with the same green action accent. */
+  --background: #111111;
+  --foreground: #e9e9e6;
+  --card: #171717;
+  --card-foreground: #e9e9e6;
+  --popover: #171717;
+  --popover-foreground: #e9e9e6;
+  --primary: #7fe0a7;
+  --primary-foreground: #0e1f16;
+  --secondary: #1e1e1d;
+  --secondary-foreground: #8c8c86;
+  --muted: #1e1e1d;
+  --muted-foreground: #8c8c86;
+  --accent: #1e1e1d;
+  --accent-foreground: #e9e9e6;
+  --destructive: #e06c5e;
+  --destructive-foreground: #111111;
+  --border: #262624;
+  --input: #262624;
+  --ring: #403f3b;
 }
 
 @layer base {
@@ -283,163 +139,39 @@ input, button, a, select, textarea {
   }
 }
 
-/* Document Reader Animations */
-@keyframes fade-in {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+/* Ataru keeps Yoda's compact control geometry across search and handoff
+   surfaces. */
+.ataru-linear-shell {
+  --radius: 0.5rem;
 }
 
-@keyframes slide-out-left {
-  from {
-    opacity: 1;
-    transform: translateX(0);
-  }
-  to {
-    opacity: 0;
-    transform: translateX(-16px);
-  }
+/* The result list owns the full width when the context pane is dismissed.
+   Keeping both tracks mounted lets the grid, border and content ease out
+   together instead of snapping the layout. */
+.ataru-search-grid {
+  transition: grid-template-columns 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-@keyframes slide-out-right {
-  from {
-    opacity: 1;
-    transform: translateX(0);
+@media (min-width: 768px) {
+  .ataru-search-grid[data-preview-open="true"] {
+    grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
   }
-  to {
-    opacity: 0;
-    transform: translateX(16px);
-  }
-}
 
-.animate-fade-in {
-  animation: fade-in 0.3s ease-out forwards;
-}
+  .ataru-search-grid[data-preview-open="false"] {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0fr);
+  }
 
-.animate-slide-out-left {
-  animation: slide-out-left 0.15s ease-in forwards;
-}
-
-.animate-slide-out-right {
-  animation: slide-out-right 0.15s ease-in forwards;
-}
-
-/* Heading highlight when navigating from TOC */
-@keyframes heading-highlight {
-  0% {
-    background-color: oklch(0.62 0.12 35 / 0.2);
+  .ataru-search-grid[data-preview-open="false"] > #ataru-search-results {
+    width: min(100%, 60rem);
+    max-width: 60rem;
+    margin-inline: auto;
+    border-right: 0;
   }
-  100% {
-    background-color: transparent;
-  }
-}
-
-.heading-highlight {
-  animation: heading-highlight 2s ease-out forwards;
-  border-radius: 0.25rem;
-  margin-left: -0.5rem;
-  margin-right: -0.5rem;
-  padding-left: 0.5rem;
-  padding-right: 0.5rem;
-}
-
-@keyframes conversation-locate-highlight {
-  0% {
-    box-shadow: inset 0 0 0 1px transparent;
-    opacity: 0;
-  }
-  10% {
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 48%, transparent);
-    opacity: 1;
-  }
-  30% {
-    box-shadow: inset 0 0 0 1px transparent;
-    opacity: 0;
-  }
-  48% {
-    box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 40%, transparent);
-    opacity: 1;
-  }
-  68% {
-    box-shadow: inset 0 0 0 1px transparent;
-    opacity: 0;
-  }
-  100% {
-    box-shadow: inset 0 0 0 1px transparent;
-    opacity: 0;
-  }
-}
-
-.conversation-locate-highlight {
-  animation: conversation-locate-highlight 1.35s linear forwards;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .conversation-locate-highlight {
-    animation-duration: 0.25s;
+  .ataru-search-grid,
+  [data-ataru-preview="true"] {
+    transition: none !important;
   }
-}
-
-/* GitHub README HTML support in prose */
-.prose [align="center"],
-article.prose [align="center"] {
-  text-align: center !important;
-  display: block;
-  margin-left: auto;
-  margin-right: auto;
-}
-
-.prose [align="right"],
-article.prose [align="right"] {
-  text-align: right !important;
-}
-
-.prose [align="left"],
-article.prose [align="left"] {
-  text-align: left !important;
-}
-
-.prose img {
-  display: inline-block;
-  margin: 0 auto;
-}
-
-/* Thin scrollbar */
-.scrollbar-thin {
-  scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
-}
-
-.scrollbar-thin::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
-}
-
-.scrollbar-thin::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.scrollbar-thin::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 2px;
-}
-
-.scrollbar-thin::-webkit-scrollbar-thumb:hover {
-  background: var(--muted-foreground);
-}
-
-/* Recharts tooltip fix */
-.recharts-tooltip-wrapper {
-  z-index: 1000 !important;
-  pointer-events: none !important;
-}
-
-.recharts-tooltip-wrapper > div {
-  background: #FFFFFF !important;
-  opacity: 1 !important;
 }

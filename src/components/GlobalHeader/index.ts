@@ -1,1 +1,1 @@
-export { GlobalHeader } from "./GlobalHeader";
+export { GlobalHeader, type PrimaryRoute } from "./GlobalHeader";

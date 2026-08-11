@@ -9,6 +9,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   BookOpenText,
   FolderKanban,
+  Layers3,
   MessageSquareText,
   Search,
 } from "lucide-react";
@@ -20,7 +21,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useSearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
-import { cn } from "@/lib/utils";
 import {
   ataruSearch,
   type SearchHit,
@@ -39,22 +39,26 @@ const RECENT_QUERY_KEY = "ataru:recentQueries";
 const LEGACY_RECENT_QUERY_KEY = "lovcode:search-overlay:recent-searches";
 const IME_ENTER_GUARD_MS = 160;
 const RESULT_LIMIT = 40;
+const ALL_LEVELS: SearchLevel[] = ["project", "session", "turn"];
 
-const LEVELS: Array<{
-  value: SearchLevel;
+type SearchScope = SearchLevel | "all";
+
+const SCOPES: Array<{
+  value: SearchScope;
   label: string;
   description: string;
   icon: typeof MessageSquareText;
 }> = [
-  { value: "turn", label: "Turn", description: "直接命中一轮问答", icon: MessageSquareText },
-  { value: "session", label: "Session", description: "汇总整段会话", icon: BookOpenText },
+  { value: "all", label: "ALL", description: "依次召回项目、会话与对话回合", icon: Layers3 },
   { value: "project", label: "Project", description: "跨会话归并项目", icon: FolderKanban },
+  { value: "session", label: "Session", description: "汇总整段会话", icon: BookOpenText },
+  { value: "turn", label: "Turn", description: "直接命中一轮问答", icon: MessageSquareText },
 ];
 
 const MODES: SearchMode[] = ["auto", "keyword", "hybrid", "semantic"];
 
-function isSearchLevel(value: string | null): value is SearchLevel {
-  return value === "turn" || value === "session" || value === "project";
+function isSearchScope(value: string | null): value is SearchScope {
+  return value === "all" || value === "turn" || value === "session" || value === "project";
 }
 
 function isSearchMode(value: string | null): value is SearchMode {
@@ -95,6 +99,28 @@ function removeRecentQuery(query: string, current: string[]): string[] {
   return next;
 }
 
+function mergeSearchResponses(
+  responses: SearchResponse[],
+  requestedMode: SearchMode,
+  additionalWarnings: string[] = [],
+): SearchResponse {
+  const first = responses[0];
+  const modes = new Set(responses.map((item) => item.mode));
+  return {
+    ...first,
+    requestedMode,
+    mode: modes.size === 1 ? first.mode : requestedMode,
+    semanticAvailable: responses.some((item) => item.semanticAvailable),
+    tookMs: responses.reduce((total, item) => total + item.tookMs, 0),
+    total: responses.reduce((total, item) => total + item.total, 0),
+    hits: responses.flatMap((item) => item.hits),
+    warnings: [...new Set([
+      ...responses.flatMap((item) => item.warnings),
+      ...additionalWarnings,
+    ])],
+  };
+}
+
 export function AtaruSearchPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -103,11 +129,11 @@ export function AtaruSearchPage() {
   const initialMode = searchParams.get("mode");
   const [query, setQuery] = useState(() => initialQuery);
   const [submittedQuery, setSubmittedQuery] = useState(() => initialQuery);
-  const [level, setLevel] = useState<SearchLevel>(() => (isSearchLevel(initialLevel) ? initialLevel : "turn"));
+  const [level, setLevel] = useState<SearchScope>(() => (isSearchScope(initialLevel) ? initialLevel : "turn"));
   const [mode, setMode] = useState<SearchMode>(() => (isSearchMode(initialMode) ? initialMode : "auto"));
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [selectedHitId, setSelectedHitId] = useState<string | null>(null);
-  const [isPreviewOpen, setIsPreviewOpen] = useState(true);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [recentQueries, setRecentQueries] = useState<string[]>(loadRecentQueries);
@@ -161,7 +187,7 @@ export function AtaruSearchPage() {
         lastSearchKey.current = "";
         setResponse(null);
         setSelectedHitId(null);
-        setIsPreviewOpen(true);
+        setIsPreviewOpen(false);
         setSearchError(null);
         setIsSearching(false);
         setSearchParams({}, { replace: true });
@@ -178,6 +204,7 @@ export function AtaruSearchPage() {
       const searchKey = `${trimmed}\u0000${level}\u0000${mode}`;
       if (!force && searchKey === lastSearchKey.current) return;
       lastSearchKey.current = searchKey;
+      setIsPreviewOpen(false);
       const sequence = requestSequence.current + 1;
       requestSequence.current = sequence;
       setIsSearching(true);
@@ -190,14 +217,39 @@ export function AtaruSearchPage() {
       setSearchParams(nextParams, { replace: true });
 
       try {
-        const next = await ataruSearch({ query: trimmed, level, mode, limit: RESULT_LIMIT });
-        if (requestSequence.current !== sequence) return;
-        setResponse(next);
-        setIsPreviewOpen(true);
-        setSelectedHitId((current) => {
-          if (current && next.hits.some((hit) => hit.id === current)) return current;
-          return next.hits.at(0)?.id ?? null;
-        });
+        const levels = level === "all" ? ALL_LEVELS : [level];
+        const completedResponses: SearchResponse[] = [];
+        const failedLevels: string[] = [];
+
+        for (const currentLevel of levels) {
+          try {
+            const next = await ataruSearch({
+              query: trimmed,
+              level: currentLevel,
+              mode,
+              limit: RESULT_LIMIT,
+            });
+            if (requestSequence.current !== sequence) return;
+            completedResponses.push(next);
+            const merged = mergeSearchResponses(completedResponses, mode, failedLevels);
+            setResponse(merged);
+            setSelectedHitId((current) => {
+              if (current && merged.hits.some((hit) => hit.id === current)) return current;
+              return merged.hits.at(0)?.id ?? null;
+            });
+          } catch (error) {
+            if (requestSequence.current !== sequence) return;
+            failedLevels.push(`${currentLevel} 检索未完成：${readableError(error)}`);
+          }
+        }
+
+        if (completedResponses.length === 0) {
+          throw new Error(failedLevels.join("\n"));
+        }
+
+        if (failedLevels.length > 0) {
+          setResponse(mergeSearchResponses(completedResponses, mode, failedLevels));
+        }
         setRecentQueries((current) => storeRecentQuery(trimmed, current));
       } catch (error) {
         if (requestSequence.current !== sequence) return;
@@ -285,11 +337,27 @@ export function AtaruSearchPage() {
               <span>⌘</span><span>K</span>
             </div>
           </div>
+          <Select value={level} onValueChange={(value) => setLevel(value as SearchScope)}>
+            <SelectTrigger className="h-9 w-28 shrink-0 rounded-md border-foreground/15 bg-card px-3.5 text-sm font-medium shadow-none sm:w-32" aria-label="结果类型">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="rounded-lg border-foreground/15 shadow-lg">
+              {SCOPES.map((item) => {
+                const Icon = item.icon;
+                return (
+                  <SelectItem key={item.value} value={item.value} aria-label={`${item.label}：${item.description}`}>
+                    <Icon className="h-4 w-4" />
+                    {item.label}
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
           <Select value={mode} onValueChange={(value) => setMode(value as SearchMode)}>
             <SelectTrigger className="h-9 w-28 shrink-0 rounded-md border-foreground/15 bg-card px-3.5 text-sm font-medium shadow-none sm:w-32" aria-label="检索方式">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent className="rounded-[6px] border-foreground/15 shadow-lg">
+            <SelectContent className="rounded-lg border-foreground/15 shadow-lg">
               {MODES.map((item) => {
                 const copy = getSearchModeCopy(item);
                 return (
@@ -300,33 +368,6 @@ export function AtaruSearchPage() {
               })}
             </SelectContent>
           </Select>
-          <div className="flex shrink-0 items-center gap-4 border-b border-foreground/10" role="tablist" aria-label="召回层级">
-            {LEVELS.map((item) => {
-              const Icon = item.icon;
-              const active = level === item.value;
-              return (
-                <button
-                  key={item.value}
-                  type="button"
-                  role="tab"
-                  id={`ataru-level-${item.value}`}
-                  aria-selected={active}
-                  aria-controls="ataru-search-results"
-                  aria-label={`${item.label}：${item.description}`}
-                  onClick={() => setLevel(item.value)}
-                  className={cn(
-                    "inline-flex h-7 items-center gap-1.5 rounded-none border-b-2 border-transparent px-0 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
-                    active
-                      ? "border-primary text-foreground"
-                      : "text-muted-foreground hover:border-foreground/25 hover:text-foreground",
-                  )}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
           <div className="shrink-0">
             <IndexStatus status={indexStatus} progress={indexProgress} onRetry={() => void startIndexBuild(false)} />
           </div>

@@ -11,6 +11,7 @@ type DevResumeState = {
 
 const DEV_RESUME_KEY = "lovcode:dev-resume";
 const DEV_RESUME_MAX_AGE_MS = 1000 * 60 * 60 * 24;
+const NON_RESUMABLE_HASH_PREFIXES = ["#/search-overlay", "#/prompt-detail", "#/landing"];
 
 function canUseDevResume() {
   return import.meta.env.DEV && typeof window !== "undefined";
@@ -19,6 +20,19 @@ function canUseDevResume() {
 function normalizeHash(hash: string) {
   if (!hash) return "";
   return hash.startsWith("#") ? hash : `#${hash}`;
+}
+
+function isResumableHash(hash: string) {
+  const normalized = normalizeHash(hash);
+  if (!normalized || normalized === "#" || normalized === "#/") return false;
+  return !isStandaloneHash(normalized);
+}
+
+function isStandaloneHash(hash: string) {
+  const normalized = normalizeHash(hash);
+  return NON_RESUMABLE_HASH_PREFIXES.some((prefix) =>
+    normalized === prefix || normalized.startsWith(`${prefix}?`)
+  );
 }
 
 export function readDevResumeState(): DevResumeState | null {
@@ -30,6 +44,9 @@ export function readDevResumeState(): DevResumeState | null {
     if (typeof parsed.updatedAt !== "number") return null;
     if (Date.now() - parsed.updatedAt > DEV_RESUME_MAX_AGE_MS) return null;
     const hash = normalizeHash(typeof parsed.hash === "string" ? parsed.hash : "");
+    // Secondary windows share WKWebView localStorage with the main window.
+    // Never let a transient popup route become the main-window resume target.
+    if (!isResumableHash(hash)) return null;
     return {
       hash,
       updatedAt: parsed.updatedAt,
@@ -60,12 +77,17 @@ function writeDevResumeState(patch: Partial<DevResumeState>) {
 
 export function saveCurrentLocationForDevResume() {
   if (!canUseDevResume()) return;
-  writeDevResumeState({ hash: window.location.hash });
+  const hash = normalizeHash(window.location.hash);
+  if (!isResumableHash(hash)) return;
+  writeDevResumeState({ hash });
 }
 
 export function restoreLocationForDevReload() {
   if (!canUseDevResume()) return;
   const currentHash = normalizeHash(window.location.hash);
+  // Standalone windows (notably the always-created hidden search overlay)
+  // must keep their own route and must not participate in main-window resume.
+  if (isStandaloneHash(currentHash)) return;
   if (currentHash && currentHash !== "#/" && currentHash !== "#") return;
 
   const saved = readDevResumeState();

@@ -7,16 +7,14 @@
 import { Suspense } from "react";
 import { createHashRouter, RouterProvider } from "react-router-dom";
 import routes from "~react-pages";
-import { LoadingState } from "./components/config";
 import RootLayout from "./pages/_layout";
 
 // ============================================================================
 // Router Configuration
 // ============================================================================
 
-// Routes that bypass RootLayout — used by secondary windows and public-facing
-// pages that render bare UI without the desktop app shell.
-const STANDALONE_PATHS = new Set(["/search-overlay", "/prompt-detail", "/landing"]);
+// The global-search panel renders in its own native window.
+const STANDALONE_PATHS = new Set(["/search-overlay"]);
 const standaloneRoutes = routes.filter((r) =>
   r && typeof r === "object" && "path" in r && STANDALONE_PATHS.has(`/${(r as { path?: string }).path ?? ""}`)
 );
@@ -39,7 +37,7 @@ const router = createHashRouter(routesWithLayout);
 
 export function AppRouter() {
   return (
-    <Suspense fallback={<LoadingState message="Loading app…" />}>
+    <Suspense fallback={<div className="flex h-screen items-center justify-center bg-background text-sm text-muted-foreground">正在读取本地对话…</div>}>
       <RouterProvider router={router} />
     </Suspense>
   );

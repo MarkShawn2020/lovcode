@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@/lib/tauri";
+import { invoke, isTauri } from "@/lib/tauri";
 
 export interface SearchIndexBuildStatus {
   state: "idle" | "building" | "ready" | "error" | string;
@@ -22,46 +22,82 @@ export interface SearchIndexBuildStatus {
   error?: string | null;
 }
 
-export function useSearchIndexBuildStatus() {
-  const [status, setStatus] = useState<SearchIndexBuildStatus | null>(null);
+const unavailableStatus: SearchIndexBuildStatus = {
+  state: "unavailable",
+  totalSessions: 0,
+  processedSessions: 0,
+  indexedMessages: 0,
+  skippedSessions: 0,
+};
 
-  useEffect(() => {
-    let cancelled = false;
-    invoke<SearchIndexBuildStatus>("get_search_index_status")
-      .then((next) => {
-        if (!cancelled) setStatus(next);
-      })
-      .catch(() => {});
+let statusSnapshot: SearchIndexBuildStatus | null = null;
+let statusInitialized = false;
+let statusRequest: Promise<SearchIndexBuildStatus> | null = null;
+let statusPollTimer: number | null = null;
+const statusSubscribers = new Set<() => void>();
 
-    const unlisten = listen<SearchIndexBuildStatus>("search-index:build", (event) => {
-      setStatus(event.payload);
-    });
-
-    return () => {
-      cancelled = true;
-      unlisten.then((fn) => fn()).catch(() => {});
-    };
-  }, []);
-
-  useEffect(() => {
-    if (status?.state !== "building") return;
-
-    const timer = window.setInterval(() => {
-      invoke<SearchIndexBuildStatus>("get_search_index_status")
-        .then((next) => setStatus(next))
-        .catch(() => {});
+function emitStatusSnapshot(next: SearchIndexBuildStatus) {
+  statusSnapshot = next;
+  if (next.state === "building" && statusPollTimer === null) {
+    statusPollTimer = window.setInterval(() => {
+      refreshStatus().catch(() => {});
     }, 1500);
+  } else if (next.state !== "building" && statusPollTimer !== null) {
+    window.clearInterval(statusPollTimer);
+    statusPollTimer = null;
+  }
+  statusSubscribers.forEach((notify) => notify());
+}
 
-    return () => window.clearInterval(timer);
-  }, [status?.state]);
+function refreshStatus() {
+  if (statusRequest) return statusRequest;
+  statusRequest = invoke<SearchIndexBuildStatus>("get_search_index_status")
+    .then((next) => {
+      emitStatusSnapshot(next);
+      return next;
+    })
+    .finally(() => {
+      statusRequest = null;
+    });
+  return statusRequest;
+}
 
-  const start = useCallback((force = false) => {
-    return invoke<SearchIndexBuildStatus>("start_search_index_build", { force })
-      .then((next) => {
-        setStatus(next);
-        return next;
-      });
-  }, []);
+function initializeStatusStore() {
+  if (statusInitialized) return;
+  statusInitialized = true;
+  if (!isTauri()) {
+    emitStatusSnapshot(unavailableStatus);
+    return;
+  }
+
+  refreshStatus().catch(() => {});
+  listen<SearchIndexBuildStatus>("search-index:build", (event) => {
+    emitStatusSnapshot(event.payload);
+  }).catch(() => {});
+}
+
+function subscribeToStatus(notify: () => void) {
+  statusSubscribers.add(notify);
+  initializeStatusStore();
+  return () => {
+    statusSubscribers.delete(notify);
+  };
+}
+
+function getStatusSnapshot() {
+  return statusSnapshot;
+}
+
+function startSearchIndexBuild(force = false) {
+  initializeStatusStore();
+  return invoke<SearchIndexBuildStatus>("start_search_index_build", { force }).then((next) => {
+    emitStatusSnapshot(next);
+    return next;
+  });
+}
+
+export function useSearchIndexBuildStatus() {
+  const status = useSyncExternalStore(subscribeToStatus, getStatusSnapshot, getStatusSnapshot);
 
   const progress = useMemo(() => {
     const totalMessages = status?.totalMessages ?? 0;
@@ -76,5 +112,5 @@ export function useSearchIndexBuildStatus() {
     return Math.min(1, status.processedSessions / status.totalSessions);
   }, [status]);
 
-  return { status, progress, start };
+  return { status, progress, start: startSearchIndexBuild };
 }
