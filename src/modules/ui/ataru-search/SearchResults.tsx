@@ -15,7 +15,6 @@ import {
   formatCount,
   formatTimestamp,
   projectName,
-  roleLabel,
 } from "./utils";
 
 const RESULT_LEVEL_LABELS: Record<SearchHit["level"], string> = {
@@ -182,19 +181,30 @@ function ResultCard({
         )}
       >
         <span className="block min-w-0">
-          <span className="flex min-w-0 items-center gap-1.5 text-[11px] leading-4 text-muted-foreground">
-            <span className="truncate font-medium text-foreground/75" title={hit.projectPath}>
-              {projectName(hit.projectPath)}
+          <span className="flex min-w-0 items-center justify-between gap-3 text-[11px] leading-4 text-muted-foreground">
+            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+              <span className="truncate font-medium text-foreground/75" title={hit.projectPath}>
+                {projectName(hit.projectPath)}
+              </span>
+              <span aria-hidden="true" className="shrink-0 text-foreground/30">›</span>
+              <span className="shrink-0">{levelLabel}</span>
+              {hit.timestamp && (
+                <>
+                  <span aria-hidden="true" className="shrink-0 text-foreground/30">·</span>
+                  <time dateTime={hit.timestamp} className="shrink-0">
+                    {formatTimestamp(hit.timestamp)}
+                  </time>
+                </>
+              )}
             </span>
-            <span aria-hidden="true" className="text-foreground/30">›</span>
-            <span className="shrink-0">{levelLabel}</span>
-            {hit.timestamp && (
-              <>
-                <span aria-hidden="true" className="text-foreground/30">·</span>
-                <time dateTime={hit.timestamp} className="shrink-0">
-                  {formatTimestamp(hit.timestamp)}
-                </time>
-              </>
+            {(hit.matchCount > 1 || hit.sessionCount > 1) && (
+              <span className="flex shrink-0 items-center gap-1.5 font-medium text-muted-foreground/80">
+                {hit.matchCount > 1 && <span>{hit.matchCount} 处命中</span>}
+                {hit.matchCount > 1 && hit.sessionCount > 1 && (
+                  <span aria-hidden="true" className="text-foreground/30">·</span>
+                )}
+                {hit.sessionCount > 1 && <span>{hit.sessionCount} 个会话</span>}
+              </span>
             )}
           </span>
           <span className="mt-1.5 block line-clamp-2 font-sans text-[15px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
@@ -202,11 +212,6 @@ function ResultCard({
           </span>
           <span className="mt-1 block line-clamp-2 text-[13px] leading-6 text-foreground/80">
             <HighlightedText text={excerpt} query={query} />
-          </span>
-          <span className="mt-2 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-medium text-muted-foreground">
-            {hit.role && <span>{roleLabel(hit.role)}</span>}
-            {hit.matchCount > 1 && <span>{hit.matchCount} 处命中</span>}
-            {hit.sessionCount > 1 && <span>{hit.sessionCount} 个会话</span>}
           </span>
         </span>
       </button>
