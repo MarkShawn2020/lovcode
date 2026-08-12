@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookOpenText, ChevronDown, ChevronRight, Copy, Folder, FolderOpen, Search } from "lucide-react";
+import { BookOpenText, ChevronDown, ChevronRight, Copy, Folder, FolderOpen, Search, X } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useStreamedSessions } from "@/hooks/useStreamedSessions";
@@ -176,6 +176,16 @@ export default function WorkspacePage() {
     setSearchParams(next);
   }, [archiveView, setSearchParams]);
 
+  const closeSession = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("projectId");
+    next.delete("sessionId");
+    next.delete("messageId");
+    next.delete("lineNumber");
+    next.delete("roundIndex");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   useEffect(() => {
     if (!selectedProjectId || !selectedSessionId) {
       setMessages([]);
@@ -338,17 +348,30 @@ export default function WorkspacePage() {
                   {selectedSession.project_path || selectedSession.project_id} · {messages.length} 条消息
                 </p>
               </div>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0 rounded-lg"
-                onClick={() => void copyTranscript()}
-                disabled={messageLoading || messages.length === 0}
-              >
-                <Copy className="mr-2 h-4 w-4" />
-                {copied ? "已复制" : "复制全文"}
-              </Button>
+              <div className="flex shrink-0 items-center gap-1">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="rounded-lg"
+                  onClick={() => void copyTranscript()}
+                  disabled={messageLoading || messages.length === 0}
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  {copied ? "已复制" : "复制全文"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 rounded-lg text-muted-foreground hover:text-foreground"
+                  onClick={closeSession}
+                  aria-label="关闭会话阅读区"
+                  title="关闭会话阅读区"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
             </header>
             <ConversationReader
               messages={messages}
