@@ -820,7 +820,7 @@ export default function SearchOverlay() {
   }, []);
 
   // Convert this window into a nonactivating NSPanel on macOS so showing it
-  // doesn't bring the lovcode app to the foreground. Idempotent — safe to
+  // doesn't bring the Ataru app to the foreground. Idempotent — safe to
   // call once on mount.
   useEffect(() => {
     invoke("make_window_nonactivating_panel").catch((err) => {

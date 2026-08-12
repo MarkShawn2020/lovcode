@@ -3,7 +3,7 @@
 const args = process.argv.slice(2);
 
 if (args.includes("--version") || args.includes("-V")) {
-  console.log("lovcode-agent-chat-harness 1.0.0");
+  console.log("ataru-agent-chat-harness 1.0.0");
   process.exit(0);
 }
 

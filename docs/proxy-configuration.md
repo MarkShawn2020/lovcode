@@ -1,6 +1,6 @@
 # Proxy configuration options
 
-Lovcode surfaces the same configuration files that Claude Code reads (`~/.claude/settings.json`). You can choose one of the following proxy setups depending on whether you want to call Anthropic directly or route traffic through a provider such as ZenMux. Replace the placeholder API keys before using.
+Ataru surfaces the same configuration files that Claude Code reads (`~/.claude/settings.json`). You can choose one of the following proxy setups depending on whether you want to call Anthropic directly or route traffic through a provider such as ZenMux. Replace the placeholder API keys before using.
 
 ## 1) Native Anthropic (direct)
 

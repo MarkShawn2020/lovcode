@@ -28,7 +28,7 @@ Reference complete design guide: file:///Users/mark/@lovstudio/design/design-gui
 
 ## Project Overview
 
-Lovcode is a Vibe Coding assistant desktop app built with Tauri 2 + React 19 + TypeScript. Primary focus is supporting AI coding tool ecosystems (Codex, codex, etc.) with chat history viewer as the first feature.
+Ataru is a local-first AI conversation recall desktop app built with Tauri 2 + React 19 + TypeScript. It focuses on searching and recovering useful context from AI coding tool histories while retaining the legacy Lovcode CLI and storage contracts.
 
 ## Commands
 

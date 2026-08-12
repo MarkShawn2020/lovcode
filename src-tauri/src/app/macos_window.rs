@@ -54,7 +54,7 @@ pub(crate) fn activate_and_focus_window(window: &tauri::WebviewWindow) {
 // =====================================================================
 // Spotlight-style overlay configuration for the search window
 //
-// Goal: keyboard input arrives at the overlay WITHOUT bringing lovcode
+// Goal: keyboard input arrives at the overlay WITHOUT bringing Ataru
 // to the foreground (Spotlight / Alfred / Raycast behavior).
 //
 // Why we don't `object_setClass` to NSPanel here
@@ -205,7 +205,7 @@ pub(crate) fn install_overlay_panel(window: &tauri::WebviewWindow) {
 ///
 /// We bypass Tauri's focus path and call `makeKeyAndOrderFront:` directly on
 /// the NSWindow. Combined with `_setPreventsActivation:` set to YES, the
-/// WindowServer routes keyboard events here without making lovcode the
+/// WindowServer routes keyboard events here without making Ataru the
 /// frontmost app.
 #[cfg(target_os = "macos")]
 pub(crate) fn show_overlay_keyed(window: &tauri::WebviewWindow) {

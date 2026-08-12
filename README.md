@@ -1,15 +1,11 @@
-<p align="center">
-  <img src="docs/images/cover.png" alt="Lovcode Cover" width="100%">
-</p>
-
 <h1 align="center">
-  <img src="assets/logo.svg" width="32" height="32" alt="Logo" align="top">
-  Lovcode
+  <img src="assets/logo.svg" width="32" height="32" alt="Ataru" align="top">
+  Ataru
 </h1>
 
 <p align="center">
-  <strong>I came, I saw, I conquered. / 我来，我见，我征服。</strong><br>
-  <sub>Desktop command table for Claude Code, Codex, terminal sessions, and local AI coding history</sub><br>
+  <strong>Search the memory of your AI work.</strong><br>
+  <sub>用关键词或自然语言，快速、准确地找回过去的 AI 对话。</sub><br>
   <sub>macOS • Windows • Linux</sub>
 </p>
 
@@ -20,152 +16,107 @@
   <img src="https://img.shields.io/badge/License-Apache_2.0-green" alt="License">
 </p>
 
----
+## Ataru 是什么
 
-<p align="center">
-  <a href="https://code.lovstudio.ai/">Website</a> •
-  <a href="#overview">Overview</a> •
-  <a href="#features">Features</a> •
-  <a href="#documentation">Docs</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#usage">Usage</a> •
-  <a href="#development">Development</a> •
-  <a href="#tech-stack">Tech Stack</a> •
-  <a href="#release-notes">Release Notes</a>
-</p>
+Ataru 是一个 local-first 的 AI 对话记忆搜索器。它把 Claude Code、Codex 等工具散落在本机的聊天记录建立为统一索引，并按三个真正有用的层级召回：
 
----
+- **Turn**：直接找回包含答案的一轮问答。
+- **Session**：把多个命中归并到一段完整会话。
+- **Project**：跨会话回看一个项目讨论过什么、如何演进。
 
-## Overview
+Ataru 的北极星指标是 **TTCR（Time to Correct Recall）**：从开始输入，到用户确认“就是这条”的时间。关键词检索保持离线可用；自然语言检索在语义索引可用时采用混合召回，失败时降级到关键词结果。
 
-Lovcode is an open-source desktop app for developers who work with multiple AI coding tools. It brings Claude Code, Codex, terminal sessions, local chat history, linked files, runtime configuration, commands, MCP servers, skills, hooks, and MaaS providers into one local command table.
+## 与 Yoda 的关系
 
-The goal is simple: arrive at the right project, see the full context, and resume or hand off work without digging through scattered terminals and exports.
+| 产品 | 负责的问题 |
+|---|---|
+| **Ataru** | 过去聊过什么，答案和上下文在哪里？ |
+| **Yoda Agent Workspace** | 现在由哪个 Agent 继续做，如何执行与交付？ |
 
-![Gallery](docs/assets/gallery.png)
+每条 Ataru 结果都保留原始 project、session、turn 和 message 定位信息。确认上下文后，可以直接在 Yoda 中继续，而不是把 Ataru 重新做成一套 Agent 工作台。
 
-## Workflow
+## 产品能力
 
-| Step | Lovcode keeps close |
-|------|---------------------|
-| **I came** | Project paths, agent runtimes, setup scripts, and session launch controls |
-| **I saw** | Searchable histories, tool calls, linked files, usage details, and structured traces |
-| **I conquered** | Resume actions, cross-agent handoff prompts, archived context, and release-ready records |
-| **我来** | 项目目录、运行时、启动脚本和 Agent 入口 |
-| **我见** | 可搜索历史、工具调用、关联文件和结构化上下文 |
-| **我征服** | 可续接会话、跨 Agent 交接、归档记录和交付线索 |
+- 中文友好的 Tantivy + Jieba 全文索引，支持技术名词、域名和字段查询。
+- 自然语言查询、可选语义向量索引，以及关键词/语义的可解释混合排序。
+- Turn、Session、Project 后端聚合，避免前端只对截断结果做二次猜测。
+- 命中片段、原始会话上下文预览、message/line/turn 精确定位。
+- 本地索引状态、增量刷新和清晰的语义降级提示。
+- 一键将代表会话交给 Yoda 继续处理。
 
-## Features
+## 架构
 
-### Workbench
+Ataru 目前采用模块化单体，先稳定边界和检索质量，再决定哪些模块需要独立发布：
 
-- Launch Claude Code, Codex, terminal, or general chat sessions from a selected project.
-- Keep project/session setup, cleanup, and custom runtime scripts available in the embedded terminal dock.
-- Track pinned, archived, unread, review, runtime, and display-mode state across sessions.
-- Duplicate windows, resume sessions, and copy project path actions from the workbench.
+| 模块 | 职责 |
+|---|---|
+| `sdk` | `SearchRequest/Response/Hit`、稳定实体 ID、层级聚合与排名信号 |
+| `api` | 版本化 Tauri/CLI 入口、模式编排、时限、降级与兼容适配 |
+| `ai` | 查询意图、模式决策与 RRF 融合；现有语义存储暂由兼容适配器承接 |
+| `desktop` | 搜索输入、结果验证、只读上下文与 Yoda handoff |
 
-### History and Search
+详细设计见：
 
-- Browse Claude Code, Codex, app-code, app-web, and app-cowork histories from one viewer.
-- Search full text, session IDs, metadata, and details with Chinese-aware indexing.
-- Index active and archived Codex session files, including dotted tokens such as domains, package names, and asset names.
-- Inspect tool calls, thinking blocks, grouped results, generated images, and token/cost context.
+- [ADR-0001：采用模块化单体重构 Ataru](docs/adr/0001-ataru-search-modular-monolith.md)
+- [Ataru 搜索架构](docs/architecture/ataru-search-architecture.md)
+- [Warm Academic 设计规范](docs/design-guide.md)
 
-### Files and Context
+## 兼容策略
 
-- Open local paths from prompts, markdown links, and agent output directly inside Lovcode.
-- Preview UTF-8 text, Markdown, images, directories, ZIP archives, and unsupported binary fallbacks.
-- Jump to line/column references and route unresolved agent paths through candidate prefixes.
-- Copy session information, related files, trace context, and handoff prompts for Claude Code or Codex.
+Ataru 从 Lovcode 演进而来。第一阶段只切换用户可见品牌与主路径，继续保留以下存量契约：
 
-### Configuration
+- `lovcode` npm/Rust package、CLI 命令与 GitHub release 资产。
+- `app.lovpen.code` bundle identifier 和现有 updater endpoint。
+- `lovcode:*` 本地存储键、`LOVCODE_*` 环境变量及旧数据/索引目录。
+- 已有 Tauri commands、JSON 字段及 Yoda stable mapping ID。
 
-- Manage commands, MCP servers, skills, hooks, sub-agents, output styles, runtime environments, and MaaS providers.
-- Configure Claude Code and Codex runtimes, inspect install/version status, and keep runtime preferences local.
-- Activate MaaS providers separately for Claude Code and Codex with vendor/model metadata and token verification.
-- Browse marketplace templates and installed skills with sorting, filtering, previews, and token estimates.
+这些兼容项会通过别名或双读迁移逐步收口，避免一次改名让旧历史、升级通道或 Yoda 映射失效。
 
-### App Surface
+## 使用
 
-- Localized interface for English, Chinese, and system language.
-- In-app update checks, release history, auto-update controls, and direct release links.
-- Authenticated Lovstudio feedback tickets with tags, ticket IDs, and admin review tooling.
+1. 启动 Ataru，首页会读取本地会话快照并检查搜索索引。
+2. 输入关键词，或描述你记得的问题、决策与上下文。
+3. 在 Turn、Session、Project 之间切换，选择最合适的召回粒度。
+4. 在右侧核对原始上下文；需要继续工作时选择 **在 Yoda 中继续**。
 
-## Documentation
-
-Project documentation that does not need to live in the repository root is kept under `docs/`.
-
-- [Proxy configuration](docs/proxy-configuration.md)
-- [Product requirements](docs/prd-parallel-vibe-coding.md)
-- [Warm Academic design guide](docs/design-guide.md)
-- [OpenCode research index](docs/research/RESEARCH_INDEX.md)
-
-## oh-my-lovcode
-
-Community configuration framework for Lovcode, inspired by oh-my-zsh.
+既有兼容 CLI 仍可使用：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/lovstudio/oh-my-lovcode/main/install.sh | bash
+lovcode search "search ranking" --json --limit 20
+
+# v1 Ataru 聚合契约；旧命令输出保持不变
+lovcode search "search ranking" --json --level turn --limit 20
 ```
 
-Share and discover statusbar themes, keybindings, and more at [oh-my-lovcode](https://github.com/lovstudio/oh-my-lovcode).
-
-## Installation
-
-Download the latest release for your platform from [Releases](https://github.com/lovstudio/lovcode/releases).
-
-Lovcode publishes desktop builds for macOS, Windows, and Linux when release workflows complete.
-
-## Usage
-
-1. Launch Lovcode.
-2. Open **Workbench** and choose a project, runtime, setup script, and agent channel.
-3. Start Claude Code, Codex, terminal, or general chat work from the selected context.
-4. Use **History** and global search to find previous sessions across Claude Code, Codex, and app sources.
-5. Open a session to inspect tool calls, thinking, linked files, generated images, and usage details.
-6. Continue from the session footer, resume in a new agent, or copy handoff context.
-7. Manage commands, MCP servers, skills, hooks, output styles, runtime settings, and MaaS providers under **Configuration**.
-
-## Development
+## 开发
 
 ```bash
-# Clone the repository (with submodules)
-git clone --recursive https://github.com/lovstudio/lovcode.git
-cd lovcode
-
-# Install dependencies
+git clone --recursive https://github.com/lovstudio/Ataru.git
+cd Ataru
 pnpm install
 
-# Run full Tauri development with Rust watcher
+# Tauri + Vite 开发
 pnpm dev:app
 
-# Frontend-focused development: Vite HMR stays on, Rust changes do not restart the app
+# 仅前端 HMR，Rust 进程不自动重启
 pnpm dev:app:no-watch
 
-# Build for distribution
+# 发布构建
 pnpm tauri build
 ```
 
-## Tech Stack
+| 层 | 技术 |
+|---|---|
+| Desktop | Tauri 2 |
+| Frontend | React 19, TypeScript, Tailwind CSS, shadcn/ui |
+| Keyword Search | Tantivy, Jieba |
+| Semantic Search | OpenAI-compatible embeddings, LanceDB / SQLite fallback |
+| State | React Query, Jotai |
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | React 19, TypeScript, Tailwind CSS, Vite |
-| Backend | Rust, Tauri 2 |
-| UI Components | shadcn/ui |
-| State | Jotai |
-| Search | Tantivy + jieba (full-text, Chinese-aware) |
-
-## Release Notes
-
-The README stays focused on the current product surface. Version-by-version details live in:
+## Release notes
 
 - [CHANGELOG.md](CHANGELOG.md)
-- [GitHub Releases](https://github.com/lovstudio/lovcode/releases)
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=lovstudio/lovcode&type=Date)](https://star-history.com/#lovstudio/lovcode&Date)
+- [GitHub Releases](https://github.com/lovstudio/Ataru/releases)
 
 ## License
 

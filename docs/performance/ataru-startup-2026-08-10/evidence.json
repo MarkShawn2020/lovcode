@@ -1,0 +1,236 @@
+{
+  "schema": "app-runtime-evidence/v1",
+  "title": "Ataru foreground open and reload responsiveness",
+  "status": "partially_verified",
+  "scope": {
+    "platform_family": "desktop",
+    "runtime": "Tauri 2 + React 19 + WKWebView on macOS 26.6",
+    "workload": "Foreground main-window reload in pnpm tauri dev with an already-ready Tantivy chat index",
+    "host_adapter": "macOS ps, sample, Accessibility and screenshot",
+    "runtime_adapter": "Tauri IPC, Tokio blocking pool, React external store and WKWebView",
+    "build": "debug binary from HEAD d4ce0de plus the dirty working-tree patch",
+    "profile_scope": "All app-optimizer module profiles loaded; language zh-CN and timezone Asia/Shanghai; no retained optimization preferences"
+  },
+  "observations": [
+    {
+      "id": "before-indexed-session-count",
+      "stage": "before",
+      "kind": "measurement",
+      "value": 2200,
+      "unit": "sessions",
+      "source": "search index manifest summary",
+      "note": "The pre-change ready index represented 655739 messages and 9335769619 source bytes.",
+      "provenance": {
+        "source_ref": "manifest-summary-before-20260810T223345+0800",
+        "build_ref": "HEAD d4ce0de plus pre-fix working tree",
+        "observed_at": "2026-08-10T22:33:45+08:00",
+        "workload_id": "foreground-reload-ready-index-debug-v1"
+      }
+    },
+    {
+      "id": "after-indexed-session-count",
+      "stage": "after",
+      "kind": "measurement",
+      "value": 2201,
+      "unit": "sessions",
+      "source": "search index manifest summary",
+      "note": "The live corpus grew during the work to 656300 messages and 9360440931 source bytes, so CPU comparisons are directional rather than strict paired A/B.",
+      "provenance": {
+        "source_ref": "manifest-summary-after-20260810T224706+0800",
+        "build_ref": "HEAD d4ce0de plus post-fix working tree",
+        "observed_at": "2026-08-10T22:47:06+08:00",
+        "workload_id": "foreground-reload-ready-index-debug-v2"
+      }
+    },
+    {
+      "id": "main-webview-status-consumers",
+      "stage": "before",
+      "kind": "code_fact",
+      "value": 3,
+      "unit": "mounted consumers",
+      "source": "React call sites",
+      "note": "AtaruSearchPage, GlobalChatSearch and StatusBar each mounted an independent status request, event listener and build poller; the search overlay added a fourth consumer in its own WebView.",
+      "provenance": {
+        "source_ref": "useSearchIndexBuildStatus call sites in src/modules/ui/AtaruSearchPage.tsx, src/components/GlobalChatSearch.tsx and src/components/StatusBar.tsx",
+        "build_ref": "HEAD d4ce0de plus pre-fix working tree"
+      }
+    },
+    {
+      "id": "main-webview-status-store",
+      "stage": "after",
+      "kind": "code_fact",
+      "value": 1,
+      "unit": "shared stores per WebView",
+      "source": "post-fix React external store",
+      "note": "All hook consumers in one JavaScript context now share one initial request, one Tauri event listener and one polling timer.",
+      "provenance": {
+        "source_ref": "src/hooks/useSearchIndexBuildStatus.ts statusSnapshot and statusSubscribers",
+        "build_ref": "HEAD d4ce0de plus post-fix working tree"
+      }
+    },
+    {
+      "id": "cold-status-request-amplification",
+      "stage": "before",
+      "kind": "inference",
+      "value": 3,
+      "unit": "synchronous status requests per main WebView mount",
+      "source": "React ownership graph and Tauri command call chain",
+      "note": "Each request could deserialize the 1.7 MB manifest, open Tantivy and recursively size the index before returning.",
+      "provenance": {
+        "source_ref": "status-hook-call-graph-20260810",
+        "build_ref": "HEAD d4ce0de plus pre-fix working tree",
+        "derivation": {
+          "formula": "3 mounted main-WebView consumers x 1 cold status request per consumer = 3 synchronous requests",
+          "inputs": {
+            "mounted_main_webview_consumers": 3,
+            "cold_requests_per_consumer": 1,
+            "manifest_bytes": 1737325,
+            "manifest_entries": 2200,
+            "index_files": 1812
+          },
+          "assumptions": [
+            "The root search route, global search and status bar mount in the same main WebView.",
+            "A native sample can miss a short third request; the count is a source-derived upper workload, not a directly observed call count."
+          ]
+        }
+      }
+    },
+    {
+      "id": "ui-main-thread-index-status-samples",
+      "stage": "before",
+      "kind": "measurement",
+      "value": 100,
+      "unit": "1 ms native samples",
+      "source": "macOS sample call graph",
+      "note": "Two synchronous get_search_index_status invocations occupied 61 and 39 main-thread samples; 80 samples were in manifest loading and 18 in Tantivy open paths.",
+      "provenance": {
+        "source_ref": "native-sample-before-20260810T223640+0800",
+        "build_ref": "HEAD d4ce0de plus pre-fix working tree",
+        "observed_at": "2026-08-10T22:36:40+08:00",
+        "sample_window": "5 seconds at a 1 millisecond sampling interval after foreground Cmd+R",
+        "sampler": "macOS sample",
+        "workload_id": "foreground-reload-ready-index-debug-v1"
+      }
+    },
+    {
+      "id": "ui-main-thread-index-status-samples",
+      "stage": "after",
+      "kind": "acceptance",
+      "value": 0,
+      "unit": "1 ms native samples",
+      "source": "two post-fix macOS sample call graphs",
+      "note": "Neither repeated 8-second trace contained current_search_index_status, manifest loading or Tantivy opening on the UI main thread; the remaining metadata check ran on a Tokio blocking worker.",
+      "provenance": {
+        "source_ref": "native-samples-after-20260810T224839+0800-and-20260810T224907+0800",
+        "build_ref": "HEAD d4ce0de plus post-fix working tree",
+        "observed_at": "2026-08-10T22:49:07+08:00",
+        "sample_window": "Two foreground reload traces of 8 seconds each at a 1 millisecond sampling interval",
+        "sampler": "macOS sample",
+        "workload_id": "foreground-reload-ready-index-debug-v2",
+        "acceptance": {
+          "threshold": "Zero filesystem, manifest-deserialization or Tantivy-open samples beneath get_search_index_status on the Tauri UI main thread",
+          "workload_contract": "Foreground main-window reload on the same macOS host and pnpm tauri dev runtime with a ready index and no index rebuild"
+        }
+      },
+      "comparison": {
+        "quality": "directional",
+        "note": "The post-change corpus was 0.3 percent larger and the trace windows were longer, so the helper must suppress an exact percentage delta."
+      }
+    },
+    {
+      "id": "after-ready-ui-capture-time",
+      "stage": "after",
+      "kind": "measurement",
+      "value": 1,
+      "unit": "seconds after reload trigger",
+      "source": "foreground screenshot",
+      "note": "The application shell, search input, recent queries and Index ready state were visible in the one-second capture.",
+      "provenance": {
+        "source_ref": "foreground-screenshot-after-20260810T224859+0800",
+        "build_ref": "HEAD d4ce0de plus post-fix working tree",
+        "observed_at": "2026-08-10T22:48:59+08:00",
+        "sample_window": "Screenshot captured one second after foreground Cmd+R",
+        "sampler": "macOS screencapture",
+        "workload_id": "foreground-reload-ready-index-debug-v2"
+      }
+    },
+    {
+      "id": "after-index-integrity-state",
+      "stage": "after",
+      "kind": "measurement",
+      "value": "ready",
+      "unit": "application state",
+      "source": "live status bar and manifest metadata",
+      "note": "Both final reloads retained Index ready, did not create search-index-building, and left the manifest timestamp unchanged at 1786373226.",
+      "provenance": {
+        "source_ref": "live-runtime-readback-20260810T224907+0800",
+        "build_ref": "HEAD d4ce0de plus post-fix working tree",
+        "observed_at": "2026-08-10T22:49:07+08:00",
+        "workload_id": "foreground-reload-ready-index-debug-v2"
+      }
+    }
+  ],
+  "resources": [],
+  "hypotheses": [
+    {
+      "id": "synchronous-index-status-io",
+      "statement": "Independent mount-time index status consumers amplified ready-state verification into repeated manifest, Tantivy and directory I/O on the Tauri UI main thread.",
+      "supports": [
+        "main-webview-status-consumers",
+        "cold-status-request-amplification",
+        "ui-main-thread-index-status-samples"
+      ],
+      "falsifier": "A pre-change native trace shows get_search_index_status returning without manifest or Tantivy work on the main thread, or the root surface mounts only one status consumer.",
+      "priority": "P0"
+    },
+    {
+      "id": "residual-development-load",
+      "statement": "Residual CPU after the first paint is dominated by development-mode module loading and existing session/project streaming rather than search-index status hydration.",
+      "supports": [
+        "after-ready-ui-capture-time",
+        "after-index-integrity-state",
+        "ui-main-thread-index-status-samples"
+      ],
+      "falsifier": "A post-fix main-thread trace again places manifest loading or Tantivy opening below get_search_index_status, or a packaged release reproduces the same delayed module-serving workload.",
+      "priority": "P1"
+    }
+  ],
+  "verification_gates": [
+    {
+      "name": "TypeScript typecheck",
+      "status": "passed",
+      "source_ref": "pnpm exec tsc --noEmit --pretty false",
+      "note": "Correctness gate only; completed without diagnostics."
+    },
+    {
+      "name": "Rust formatting",
+      "status": "passed",
+      "source_ref": "cargo fmt --all -- --check",
+      "note": "Formatting gate only; completed without differences."
+    },
+    {
+      "name": "Live Tauri dev compilation and relaunch",
+      "status": "passed",
+      "source_ref": "pnpm tauri dev watcher, target/debug/lovcode",
+      "note": "The existing development runtime compiled the Rust patch, launched the patched binary and served the patched React code."
+    },
+    {
+      "name": "Search index safety readback",
+      "status": "passed",
+      "source_ref": "two final live foreground reloads",
+      "note": "Index ready remained visible, the manifest was not rewritten and no build directory appeared."
+    },
+    {
+      "name": "Packaged release startup trial",
+      "status": "not_run",
+      "source_ref": "repository AGENTS.md build constraint",
+      "note": "The repository explicitly says not to run pnpm build or equivalent while pnpm tauri dev is active."
+    }
+  ],
+  "evidence_gaps": [
+    "No packaged release startup trace was collected; this prevents a verified terminal status for a desktop optimization.",
+    "The live chat corpus grew from 2200 to 2201 sessions during the work, so CPU figures are directional and are not reported as an exact A/B delta.",
+    "No direct input-latency distribution or field telemetry exists; the one-second visual readback is a lab observation, not RUM.",
+    "Development-mode Vite module serving and session/project streaming still create residual background CPU after first paint and require a separate workload if they remain user-visible in a packaged build."
+  ]
+}

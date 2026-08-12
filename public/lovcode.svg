@@ -1,7 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-127 -80 1240 1240">
-  <g fill="#D97757">
-    <path d="M281.73,892.18V281.73C281.73,126.13,155.6,0,0,0l0,0v610.44C0,766.04,126.13,892.18,281.73,892.18z"/>
-    <path d="M633.91,1080V469.56c0-155.6-126.13-281.73-281.73-281.73l0,0v610.44C352.14,953.87,478.31,1080,633.91,1080L633.91,1080z"/>
-    <path d="M704.32,91.16L704.32,91.16v563.47l0,0c155.6,0,281.73-126.13,281.73-281.73S859.92,91.16,704.32,91.16z"/>
+<!-- Legacy favicon path kept for existing installs; the mark is now Ataru. -->
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+  <!-- Keep the mark optically aligned with the Ataru/Yoda app icon at small sizes. -->
+  <g transform="translate(140 148) scale(3.1)">
+    <path fill="#17321f" fill-rule="evenodd" d="M120 18 226 216h-51l-26-51H91l-26 51H14L120 18Zm0 68-20 56h40l-20-56Z"/>
+    <circle cx="120" cy="112" r="42" fill="#5dc98f" fill-opacity=".18"/><circle cx="120" cy="112" r="13" fill="#5dc98f"/>
   </g>
 </svg>
