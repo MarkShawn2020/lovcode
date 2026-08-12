@@ -143,11 +143,29 @@ async function generateFromGitHub({ repo, tag, output, requiredPlatforms }) {
   if (!token) throw new Error("GITHUB_TOKEN is required");
 
   const apiBaseUrl = process.env.GITHUB_API_URL ?? "https://api.github.com";
-  const releaseResponse = await githubRequest(
-    `${apiBaseUrl}/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`,
-    token,
-  );
-  const release = await releaseResponse.json();
+  let release;
+  try {
+    const releaseResponse = await githubRequest(
+      `${apiBaseUrl}/repos/${repo}/releases/tags/${encodeURIComponent(tag)}`,
+      token,
+    );
+    release = await releaseResponse.json();
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes("(404)")) {
+      throw error;
+    }
+
+    // GitHub's tag endpoint omits draft releases. The authenticated list
+    // endpoint still exposes the draft created by create-release.
+    const releasesResponse = await githubRequest(
+      `${apiBaseUrl}/repos/${repo}/releases?per_page=100`,
+      token,
+    );
+    const releases = await releasesResponse.json();
+    release = releases.find((candidate) => candidate.tag_name === tag);
+    if (!release) throw error;
+  }
+
   const assetsResponse = await githubRequest(
     `${apiBaseUrl}/repos/${repo}/releases/${release.id}/assets?per_page=100`,
     token,
