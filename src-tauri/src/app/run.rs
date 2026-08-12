@@ -66,6 +66,8 @@ fn show_main_window(app: &tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    migrate_legacy_lovcode_storage();
+
     if let Some(exit_code) = run_cli_if_requested() {
         std::process::exit(exit_code);
     }

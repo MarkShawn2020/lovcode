@@ -407,7 +407,15 @@ Ataru 负责“过去聊过什么、答案和上下文在哪里”；Yoda 负责
 
 ### 为什么代码、CLI 或本地目录里仍然会出现 Lovcode？
 
-Ataru 从 Lovcode 演进而来。新安装和新脚本使用 `ataru`；为避免旧安装、历史索引、更新通道和外部映射失效，当前阶段保留 `lovcode` 可执行文件与旧 CLI 命令作为兼容入口，同时保留 `lovcode:*` 存储键、`LOVCODE_*` 环境变量和既有数据目录。这些是兼容层，不是新的产品定位。
+Ataru 从 Lovcode 演进而来。新安装和新脚本使用 `ataru`；为避免旧安装、历史索引、更新通道和外部映射失效，当前阶段保留 `lovcode` 可执行文件与旧 CLI 命令作为兼容入口，同时保留 `lovcode:*` 存储键和 `LOVCODE_*` 环境变量。这些是兼容层，不是新的产品定位。
+
+### Ataru 的本地数据目录在哪里？
+
+Ataru 的主数据目录是 `~/.lovstudio/ataru`。会话缓存、历史索引、全文搜索索引以及其他派生数据都会写入这个目录（macOS 的全文索引位于 `~/Library/Application Support/ataru/search-index`）。
+
+旧安装留下的 `~/.lovstudio/lovcode` 只作为迁移来源：Ataru 启动时会优先读取新目录，并把旧目录中缺少的文件复制到新目录；旧文件不会被删除。新用户不会创建 `~/.lovstudio/lovcode`。
+
+如果你说的是 Skills 的全局 profile，它仍然是独立的 `~/.lovstudio/skills/profile.json`，不属于 Ataru 的应用数据目录。
 
 ### Lovstudio 是什么？
 

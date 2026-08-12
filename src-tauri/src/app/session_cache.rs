@@ -37,7 +37,7 @@ pub(crate) fn cancel_session_stream(stream_id: String) -> Result<(), String> {
 // Sessions cache (B): persist computed Session list keyed by (path,size,mtime)
 // so cold reload doesn't re-read 1000+ jsonl files. Entries whose stat hasn't
 // changed are reused verbatim; only new/modified files run read_session_head.
-// Cache lives at ~/.lovstudio/lovcode/sessions-cache.json.
+// Cache lives at ~/.lovstudio/ataru/sessions-cache.json.
 // ============================================================================
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,12 +59,11 @@ pub(crate) struct SessionsCache {
 pub(crate) const SESSIONS_CACHE_VERSION: u32 = 6;
 
 pub(crate) fn sessions_cache_path() -> PathBuf {
-    get_lovstudio_dir().join("sessions-cache.json")
+    get_ataru_dir().join("sessions-cache.json")
 }
 
 pub(crate) fn load_sessions_cache() -> HashMap<String, SessionCacheEntry> {
-    let path = sessions_cache_path();
-    let Ok(bytes) = fs::read(&path) else {
+    let Some(bytes) = read_ataru_file_with_legacy_fallback("sessions-cache.json") else {
         return HashMap::new();
     };
     let Ok(cache) = serde_json::from_slice::<SessionsCache>(&bytes) else {

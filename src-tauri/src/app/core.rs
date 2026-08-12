@@ -167,6 +167,13 @@ pub(crate) struct SearchIndex {
 pub(crate) fn get_index_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
+        .join("ataru")
+        .join("search-index")
+}
+
+pub(crate) fn get_legacy_index_dir() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
         .join("lovcode")
         .join("search-index")
 }
@@ -404,11 +411,86 @@ pub(crate) fn get_codex_archived_sessions_dir() -> PathBuf {
     get_codex_dir().join("archived_sessions")
 }
 
-pub(crate) fn get_lovstudio_dir() -> PathBuf {
+pub(crate) fn get_ataru_dir() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".lovstudio")
+        .join("ataru")
+}
+
+pub(crate) fn get_legacy_lovcode_dir() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".lovstudio")
         .join("lovcode")
+}
+
+pub(crate) fn read_ataru_file_with_legacy_fallback(file_name: &str) -> Option<Vec<u8>> {
+    let current_path = get_ataru_dir().join(file_name);
+    if let Ok(bytes) = fs::read(&current_path) {
+        return Some(bytes);
+    }
+
+    let legacy_path = get_legacy_lovcode_dir().join(file_name);
+    let bytes = fs::read(&legacy_path).ok()?;
+
+    if let Some(parent) = current_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::copy(&legacy_path, &current_path);
+    Some(bytes)
+}
+
+fn copy_missing_tree(source: &Path, target: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(target)?;
+
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path)?;
+
+        // Do not follow symlinks while migrating application-owned data.
+        if metadata.file_type().is_symlink() {
+            continue;
+        }
+
+        if metadata.is_dir() {
+            copy_missing_tree(&source_path, &target_path)?;
+        } else if fs::symlink_metadata(&target_path).is_err() {
+            fs::copy(&source_path, &target_path)?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Copy the old Lovcode-owned data into the Ataru namespace without deleting
+/// or overwriting anything. This keeps existing sessions and derived indexes
+/// available while making Ataru the only write destination.
+pub(crate) fn migrate_legacy_lovcode_storage() {
+    let source = get_legacy_lovcode_dir();
+    if source.is_dir() {
+        if let Err(error) = copy_missing_tree(&source, &get_ataru_dir()) {
+            eprintln!(
+                "[Ataru] failed to migrate legacy Lovcode storage from {}: {error}",
+                source.display()
+            );
+        }
+    }
+
+    let legacy_index_parent = get_legacy_index_dir().parent().map(Path::to_path_buf);
+    let current_index_parent = get_index_dir().parent().map(Path::to_path_buf);
+    if let (Some(source), Some(target)) = (legacy_index_parent, current_index_parent) {
+        if source.is_dir() {
+            if let Err(error) = copy_missing_tree(&source, &target) {
+                eprintln!(
+                    "[Ataru] failed to migrate legacy Lovcode indexes from {}: {error}",
+                    source.display()
+                );
+            }
+        }
+    }
 }
 
 pub(crate) fn get_claude_settings_path() -> PathBuf {

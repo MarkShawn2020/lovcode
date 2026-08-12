@@ -331,9 +331,9 @@ pub(crate) fn build_session_index_from_history() -> HashMap<(String, String), (u
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
         .map(|value| value.as_secs())
         .unwrap_or(0);
-    let cache_path = get_lovstudio_dir().join("history-index.json");
+    let cache_path = get_ataru_dir().join("history-index.json");
 
-    if let Ok(bytes) = fs::read(&cache_path) {
+    if let Some(bytes) = read_ataru_file_with_legacy_fallback("history-index.json") {
         if let Ok(cache) = serde_json::from_slice::<HistoryIndexCache>(&bytes) {
             if cache.version == HISTORY_INDEX_CACHE_VERSION
                 && cache.history_size == history_size
