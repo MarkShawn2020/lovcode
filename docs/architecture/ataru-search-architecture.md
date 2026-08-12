@@ -2,7 +2,7 @@
 
 本文定义 Ataru v1 的产品边界、领域契约、模块结构、质量门槛和从 Lovcode 迁移的路径。它描述目标架构；阶段尚未通过验收前，不应把目标指标写成已经达成。
 
-> 实现快照（2026-08-10）：v1 facade、Turn/Session/Project 聚合、搜索主界面、关键词/语义降级、查询时限、项目预过滤与增量构建 single-flight 已落地；当前可视为 Phase 1 完成、Phase 2 功能切片可用。固定相关性评测、TTCR 埋点、热进程 p95 基准，以及“不在查询内重建”的增量向量链路尚未通过阶段门禁。
+> 实现快照（2026-08-10）：v1 facade、Turn/Session/Project 聚合、搜索主界面、关键词/语义降级、查询时限、项目预过滤与增量构建 single-flight 已落地；当前可视为 Phase 1 完成、Phase 2 功能切片可用。固定相关性评测、TTCR 埋点、热进程 p95 基准，以及“不在查询内重建”的增量向量链路尚未通过阶段门禁。Agent Skill 作为独立客户端边界，必须先完成索引初始化，再调用 v1 搜索契约。
 
 ## 1. 产品边界与成功标准
 
@@ -58,6 +58,8 @@ flowchart LR
     subgraph Client["Ataru 客户端"]
         UI["React 搜索、结果与阅读 UI"]
         TS["TypeScript SDK v1"]
+        SKILL["Agent Skill\nensure_index → search → inspect"]
+        CLI["JSON CLI / automation"]
     end
 
     subgraph Core["Tauri / Rust 模块化单体"]
@@ -76,6 +78,8 @@ flowchart LR
 
     UI --> TS
     TS -->|"invoke ataru_search"| API
+    SKILL --> API
+    CLI --> API
     API --> SDK
     API --> LEX
     API --> AI
@@ -97,11 +101,27 @@ flowchart LR
 | `sdk` | `SearchRequest/Response/Hit`、枚举、稳定 ID、错误码、召回/来源/索引端口 | Tauri 命令、文件访问、HTTP、具体索引或排序实现 |
 | `api` | 传输适配、参数校验、deadline、`auto` 决策编排、聚合、降级、响应版本与指标 | 解析供应商文件、实现 Embedding 算法 |
 | `ai` | 查询意图、语义召回、RRF/重排、语义健康检查 | UI、原始文件扫描、关键字查询语法 |
+| `agent skill` | 索引就绪检查、统一搜索动作、稳定 ID 回读和 Agent 友好错误 | 自建索引、重复解析来源文件、复制排序实现 |
+| `ingestion/indexing` | 来源规范化、全量/增量构建、manifest、single-flight、原子切换 | 面向用户的查询编排和 UI 展示 |
 | 兼容适配器 | 复用现有解析器、`search_chats`、`semantic_search_chats` 与索引清单 | 向调用方暴露旧数据形状 |
 
 允许的编译期方向是 `api -> sdk`、`api -> ai`、`ai -> sdk`。`sdk` 不得引用 `api` 或 `ai`；兼容代码通过 `sdk` 端口接入。耗时解析、建索引和远程请求必须离开 UI/IPC 主线程，并设置取消与资源上限。
 
 客户端继续遵循 Warm Academic 设计系统：使用语义颜色类、`font-serif` 标题与 shadcn/ui 组件；视觉效果不得阻塞查询输入或结果绘制。
+
+### Agent Skill 客户端边界
+
+Agent Skill 是搜索能力面向 Agent 的薄适配层。它与桌面 UI、JSON CLI 共享同一套 `sdk/api` 契约，不能直接读取 Claude/Codex 文件，也不能在外部再维护一份 Tantivy 或向量索引。
+
+最小工作流固定为：
+
+1. `get_search_index_status`：读取索引是否存在、是否过期、是否正在构建。
+2. `start_search_index_build({ force: false })`：状态不是 `ready` 时启动或合并一次构建请求。
+3. 监听 `search-index:build`：等待 `ready`，或把 `error` 转成可复制的诊断信息。
+4. `ataru_search({ request })`：按 `turn/session/project` 和 `auto/keyword/semantic/hybrid` 查询。
+5. 使用响应中的稳定 ID 和来源位置回读原始上下文，不从标题或展示路径推导实体。
+
+桌面搜索页已经在首次进入时自动完成第 1–3 步；无界面 Skill Runner 必须显式执行它们。CLI 兼容入口适合读取已有关键词索引，Skill 包装层应在 CLI 查询前复用同一套索引就绪协议。
 
 ## 5. v1 搜索 API 契约
 
