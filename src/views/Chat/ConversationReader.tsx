@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Check, Copy, Wrench } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -92,7 +92,7 @@ function CopyError({ error, projectId, sessionId }: { error: string; projectId: 
   );
 }
 
-export function ConversationReader({
+export const ConversationReader = memo(function ConversationReader({
   messages,
   loading,
   error,
@@ -172,4 +172,4 @@ export function ConversationReader({
       </div>
     </div>
   );
-}
+});

@@ -76,6 +76,10 @@ export default function WorkspacePage() {
     );
     return exact ?? filteredSessions[0] ?? sessions[0] ?? null;
   }, [filteredSessions, requestedProjectId, requestedSessionId, sessions]);
+  // The streamed session list replaces Session objects as cached/full snapshots arrive.
+  // Fetch transcripts by their durable identity, not by the snapshot object's reference.
+  const selectedProjectId = selectedSession?.project_id ?? null;
+  const selectedSessionId = selectedSession?.id ?? null;
 
   const rowVirtualizer = useVirtualizer({
     count: filteredSessions.length,
@@ -92,8 +96,9 @@ export default function WorkspacePage() {
   }, [setSearchParams]);
 
   useEffect(() => {
-    if (!selectedSession) {
+    if (!selectedProjectId || !selectedSessionId) {
       setMessages([]);
+      setMessageLoading(false);
       setMessageError(null);
       return;
     }
@@ -101,7 +106,7 @@ export default function WorkspacePage() {
     setMessageLoading(true);
     setMessageError(null);
     setCopied(false);
-    getSessionMessages(selectedSession.project_id, selectedSession.id)
+    getSessionMessages(selectedProjectId, selectedSessionId)
       .then((next) => {
         if (!cancelled) setMessages(next.filter((message) => !message.is_meta));
       })
@@ -117,7 +122,7 @@ export default function WorkspacePage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedSession]);
+  }, [selectedProjectId, selectedSessionId]);
 
   useEffect(() => {
     if (!selectedSession || requestedSessionId) return;
