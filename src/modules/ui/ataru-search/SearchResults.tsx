@@ -10,10 +10,10 @@ import {
 } from "@/modules/api/ataru";
 import { ErrorState, HighlightedText } from "./SearchFeedback";
 import {
-  cleanSearchExcerpt,
-  cleanSearchTitle,
   formatCount,
   formatTimestamp,
+  getSearchResultExcerpt,
+  getSearchResultTitle,
   projectName,
 } from "./utils";
 
@@ -123,25 +123,6 @@ function formatSearchDuration(value: number): string {
   return `${(value / 1_000).toFixed(1)} s`;
 }
 
-function resultExcerpt(hit: SearchHit, query: string): string {
-  return (
-    cleanSearchExcerpt(hit.snippet, query) ||
-    cleanSearchExcerpt(hit.turnPrompt ?? hit.sessionTitle ?? hit.title, query) ||
-    "查看原始会话上下文"
-  );
-}
-
-function resultTitle(hit: SearchHit, query: string): string {
-  const source = hit.level === "turn"
-    ? hit.turnPrompt ?? hit.title
-    : hit.sessionTitle ?? hit.title;
-  return cleanSearchTitle(
-    source,
-    query,
-    hit.level === "project" ? "未命名项目" : "未命名对话",
-  );
-}
-
 function ResultCard({
   hit,
   rank,
@@ -157,9 +138,12 @@ function ResultCard({
   onSelect: () => void;
   onOpenContext: () => void;
 }) {
-  const title = resultTitle(hit, query);
-  const excerpt = resultExcerpt(hit, query);
+  const title = getSearchResultTitle(hit, query);
+  const excerpt = getSearchResultExcerpt(hit, query, title);
   const levelLabel = RESULT_LEVEL_LABELS[hit.level];
+  const matchLocation = hit.level === "turn"
+    ? hit.role === "assistant" ? "AI 回复" : hit.role === "user" ? "用户输入" : "命中片段"
+    : "命中片段";
 
   return (
     <article
@@ -174,7 +158,7 @@ function ResultCard({
         type="button"
         onClick={onSelect}
         aria-pressed={selected}
-        aria-label={`查看第 ${rank} 条结果：${title}`}
+        aria-label={`查看第 ${rank} 条结果：${title}。${excerpt}`}
         className={cn(
           "group block w-full rounded-xl px-2.5 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:px-3 sm:py-5",
           !selected && "hover:bg-card/70",
@@ -207,11 +191,16 @@ function ResultCard({
               </span>
             )}
           </span>
-          <span className="mt-1.5 block line-clamp-2 font-sans text-[15px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
+          <span className="mt-1.5 block line-clamp-2 font-serif text-[17px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
             <HighlightedText text={title} query={query} />
           </span>
-          <span className="mt-1 block line-clamp-2 text-[13px] leading-6 text-foreground/80">
-            <HighlightedText text={excerpt} query={query} />
+          <span className="mt-1.5 flex items-start gap-2 text-[13px] leading-6 text-foreground/80">
+            <span className="mt-0.5 shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-primary/70">
+              {matchLocation}
+            </span>
+            <span className="line-clamp-3 min-w-0">
+              <HighlightedText text={excerpt} query={query} />
+            </span>
           </span>
         </span>
       </button>

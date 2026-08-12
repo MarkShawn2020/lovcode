@@ -1,3 +1,5 @@
+import type { SearchHit } from "@/modules/sdk/search";
+
 export function formatCount(value: number): string {
   return new Intl.NumberFormat().format(value);
 }
@@ -96,18 +98,52 @@ export function cleanMessageText(value: string): string {
     .trim();
 }
 
+const SEARCH_FIELD_PREFIX = /\b(?:title|project|turn|session|assistant|user|summary|prompt|content|path):/gi;
+
+/** Keep query parsing consistent between snippet extraction and <mark> rendering. */
+export function searchTerms(query: string): string[] {
+  return [...new Set(
+    query
+      .replace(SEARCH_FIELD_PREFIX, " ")
+      .replace(/[()\"']/g, " ")
+      .split(/\s+/)
+      .map((term) => term.trim())
+      .filter((term) => term.length > 0 && !/^(?:and|or|not)$/i.test(term)),
+  )]
+    .sort((left, right) => right.length - left.length)
+    .slice(0, 12);
+}
+
+export function isUntitledTurn(value: string | null | undefined): boolean {
+  const normalized = cleanMessageText(value ?? "")
+    .replace(/[.…]+$/g, "")
+    .trim()
+    .toLocaleLowerCase();
+  return ["untitled turn", "untitled", "未命名回合", "未命名对话"].includes(normalized);
+}
+
+function firstSearchMatch(value: string, query: string): { index: number; length: number } | null {
+  const normalized = value.toLocaleLowerCase();
+  return searchTerms(query)
+    .map((term) => ({
+      index: normalized.indexOf(term.toLocaleLowerCase()),
+      length: term.length,
+    }))
+    .filter((match) => match.index >= 0)
+    .sort((left, right) => left.index - right.index || right.length - left.length)[0] ?? null;
+}
+
 /** Keep the result card useful by centering a longer snippet on the query. */
 export function cleanSearchExcerpt(value: string, query: string, maxChars = 420): string {
   const raw = cleanMessageText(value);
   const cleaned = (hasPathQuery(query) ? raw : hidePathNoise(raw)).replace(/\s+/g, " ").trim();
   if (cleaned.length <= maxChars) return cleaned;
 
-  const needle = query.trim().toLocaleLowerCase();
-  const matchIndex = needle ? cleaned.toLocaleLowerCase().indexOf(needle) : -1;
-  if (matchIndex < 0) return `${cleaned.slice(0, maxChars - 1).trimEnd()}…`;
+  const match = firstSearchMatch(cleaned, query);
+  if (!match) return `${cleaned.slice(0, maxChars - 1).trimEnd()}…`;
 
-  const contextPadding = Math.max(40, Math.floor((maxChars - needle.length) / 2));
-  const start = Math.max(0, matchIndex - contextPadding);
+  const contextPadding = Math.max(56, Math.floor((maxChars - match.length) / 2));
+  const start = Math.max(0, match.index - contextPadding);
   const end = Math.min(cleaned.length, start + maxChars);
   const prefix = start > 0 ? "…" : "";
   const suffix = end < cleaned.length ? "…" : "";
@@ -122,6 +158,42 @@ export function cleanSearchExcerpt(value: string, query: string, maxChars = 420)
 export function cleanSearchTitle(value: string, query: string, fallback = "未命名对话", maxChars = 120): string {
   const cleaned = cleanSearchExcerpt(value, query, maxChars);
   return cleaned || fallback;
+}
+
+export function getSearchResultTitle(hit: SearchHit, query: string): string {
+  if (hit.level === "turn") {
+    const prompt = cleanSearchTitle(hit.turnPrompt ?? "", query, "");
+    if (prompt && !isUntitledTurn(prompt)) return prompt;
+    return "未命名回合";
+  }
+
+  return cleanSearchTitle(
+    hit.sessionTitle ?? hit.title,
+    query,
+    hit.level === "project" ? "未命名项目" : "未命名会话",
+  );
+}
+
+export function getSearchResultExcerpt(
+  hit: SearchHit,
+  query: string,
+  title = getSearchResultTitle(hit, query),
+): string {
+  const candidates = hit.level === "turn"
+    ? [hit.snippet, hit.turnPrompt]
+    : [hit.snippet, hit.turnPrompt, hit.sessionTitle, hit.title];
+  const normalizedTitle = title.trim().toLocaleLowerCase();
+  const excerpt = candidates
+    .map((value) => cleanSearchExcerpt(value ?? "", query))
+    .find((value) => {
+      if (!value || isUntitledTurn(value)) return false;
+      return value.trim().toLocaleLowerCase() !== normalizedTitle;
+    });
+  return excerpt || (
+    hit.level === "turn"
+      ? "打开上下文查看这一轮对话"
+      : "打开上下文查看命中内容"
+  );
 }
 
 /** Preserve intentional code indentation while removing transcript-wide padding. */

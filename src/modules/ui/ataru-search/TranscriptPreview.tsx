@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { copyText, getSessionMessages, type SearchHit } from "@/modules/api/ataru";
 import type { Message } from "@/types";
 import { ConversationReader } from "@/views/Chat/ConversationReader";
-import { cleanSearchExcerpt, cleanSearchTitle, projectName, readableError } from "./utils";
+import { getSearchResultExcerpt, getSearchResultTitle, projectName, readableError } from "./utils";
 
 export function TranscriptPreview({
   hit,
@@ -69,12 +69,8 @@ export function TranscriptPreview({
   // must enter the layout only after the user explicitly opens it.
   if (!hit || !open) return null;
 
-  const title = cleanSearchTitle(
-    hit.level === "turn" ? hit.turnPrompt ?? hit.title : hit.sessionTitle ?? hit.title,
-    query,
-    hit.level === "project" ? "未命名项目" : "未命名对话",
-  );
-  const snippet = cleanSearchExcerpt(hit.snippet, query) || title;
+  const title = getSearchResultTitle(hit, query);
+  const snippet = getSearchResultExcerpt(hit, query, title);
 
   return (
     <section

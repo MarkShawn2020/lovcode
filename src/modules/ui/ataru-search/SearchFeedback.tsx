@@ -2,22 +2,17 @@ import { Check, Copy, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { copyText } from "@/modules/api/ataru";
+import { searchTerms } from "./utils";
 
 export function HighlightedText({ text, query }: { text: string; query: string }) {
-  const terms = query
-    .replace(/\b(?:title|project|turn|assistant|user|summary):/gi, " ")
-    .replace(/[()\"']/g, " ")
-    .split(/\s+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length >= 2 && !/^(?:and|or|not)$/i.test(term))
-    .slice(0, 8);
+  const terms = searchTerms(query);
   if (terms.length === 0) return text;
   const escaped = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
   const matches = new Set(terms.map((term) => term.toLocaleLowerCase()));
   return text.split(pattern).map((part, index) => (
     matches.has(part.toLocaleLowerCase())
-      ? <mark key={`${part}:${index}`} className="rounded-sm bg-primary/15 px-0.5 text-foreground">{part}</mark>
+      ? <mark key={`${part}:${index}`} className="rounded-sm bg-primary/20 px-0.5 font-semibold text-foreground underline decoration-primary/40 decoration-1 underline-offset-2">{part}</mark>
       : part
   ));
 }
