@@ -407,7 +407,7 @@ Ataru 负责“过去聊过什么、答案和上下文在哪里”；Yoda 负责
 
 ### 为什么代码、CLI 或本地目录里仍然会出现 Lovcode？
 
-Ataru 从 Lovcode 演进而来。为避免旧安装、历史索引、更新通道和外部映射失效，当前阶段保留 `lovcode` 可执行文件、旧 CLI 命令、`lovcode:*` 存储键、`LOVCODE_*` 环境变量和既有数据目录；这些是兼容层，不是新的产品定位。
+Ataru 从 Lovcode 演进而来。新安装和新脚本使用 `ataru`；为避免旧安装、历史索引、更新通道和外部映射失效，当前阶段保留 `lovcode` 可执行文件与旧 CLI 命令作为兼容入口，同时保留 `lovcode:*` 存储键、`LOVCODE_*` 环境变量和既有数据目录。这些是兼容层，不是新的产品定位。
 
 ### Lovstudio 是什么？
 
@@ -423,12 +423,14 @@ Lovstudio（中文：手工川工作室，英文：Lovstudio.AI）是 Ataru 的�
 
 ### 如何从脚本调用 JSON CLI？
 
-当前发行物保留兼容命令名，具体调用方式如下：
+新安装的 CLI 主入口是 `ataru`：
 
 ```bash
-lovcode search "索引没有更新" --json --limit 20
-lovcode search "索引没有更新" --json --level turn --limit 20
+ataru search "索引没有更新" --json --limit 20
+ataru search "索引没有更新" --json --level turn --limit 20
 ```
+
+旧脚本仍可继续使用 `lovcode search ...`，它会进入同一套 Ataru 实现。
 
 无界面调用方应在首次查询前完成索引初始化；桌面端会自动执行，独立 Skill Runner 需要显式调用 `get_search_index_status` 和 `start_search_index_build`。
 

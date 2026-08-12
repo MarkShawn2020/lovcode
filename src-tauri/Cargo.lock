@@ -403,6 +403,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "ataru"
+version = "0.40.0"
+dependencies = [
+ "arboard",
+ "arrow-array",
+ "arrow-schema",
+ "chrono",
+ "cocoa",
+ "dirs",
+ "futures",
+ "jieba-rs 0.7.4",
+ "lancedb",
+ "lazy_static",
+ "notify",
+ "objc",
+ "rayon",
+ "regex",
+ "reqwest 0.12.25",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tantivy",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-global-shortcut",
+ "tokio",
+]
+
+[[package]]
 name = "atk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4505,35 +4534,6 @@ dependencies = [
  "scoped-tls",
  "tracing",
  "tracing-subscriber",
-]
-
-[[package]]
-name = "lovcode"
-version = "0.40.0"
-dependencies = [
- "arboard",
- "arrow-array",
- "arrow-schema",
- "chrono",
- "cocoa",
- "dirs",
- "futures",
- "jieba-rs 0.7.4",
- "lancedb",
- "lazy_static",
- "notify",
- "objc",
- "rayon",
- "regex",
- "reqwest 0.12.25",
- "rusqlite",
- "serde",
- "serde_json",
- "tantivy",
- "tauri",
- "tauri-build",
- "tauri-plugin-global-shortcut",
- "tokio",
 ]
 
 [[package]]

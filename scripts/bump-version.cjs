@@ -55,7 +55,7 @@ fs.writeFileSync(cargoTomlPath, cargoToml);
 console.log(`✓ Cargo.toml: ${currentVersion} → ${newVersion}`);
 
 // 更新 Cargo.lock
-execSync('cargo update -p lovcode --quiet', { cwd: path.join(root, 'src-tauri'), stdio: 'pipe' });
+execSync('cargo update -p ataru --quiet', { cwd: path.join(root, 'src-tauri'), stdio: 'pipe' });
 console.log(`✓ Cargo.lock: 已同步`);
 
 // 更新 tauri.conf.json

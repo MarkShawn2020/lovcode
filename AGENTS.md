@@ -28,7 +28,7 @@ Reference complete design guide: file:///Users/mark/@lovstudio/design/design-gui
 
 ## Project Overview
 
-Ataru is a local-first AI conversation recall desktop app built with Tauri 2 + React 19 + TypeScript. It focuses on searching and recovering useful context from AI coding tool histories while retaining the legacy Lovcode CLI and storage contracts.
+Ataru is a local-first AI conversation recall desktop app built with Tauri 2 + React 19 + TypeScript. It focuses on searching and recovering useful context from AI coding tool histories while retaining the legacy Lovcode CLI as a compatibility alias and preserving storage contracts.
 
 ## Commands
 
