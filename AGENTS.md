@@ -63,3 +63,14 @@ pnpm tauri build
 - No dynamic imports or setTimeout unless necessary
 - Extract shared components when patterns repeat across multiple components
 - 不要执行pnpm build等，因为本地在运行 pnpm tauri dev
+
+## Path Migration Recovery
+
+- 移动项目根目录后，Cargo/Tauri 的 `src-tauri/target` 可能继续保存旧绝对路径。
+- `pnpm install` 只更新前端依赖，不会刷新 Rust 构建产物；若启动错误引用旧目录下的权限文件或 build 输出，先退出当前 dev 进程，再执行：
+
+  ```bash
+  cargo clean --manifest-path src-tauri/Cargo.toml
+  ```
+
+- 清理后使用原来的 `npx lovstudio app ataru tauri dev` 或 `pnpm tauri dev` 重新启动；该操作只清理可重建的本地构建缓存，不涉及源码和用户会话数据。
