@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" fill="none">
+  <title>Ataru local index path</title>
+  <desc>Warm academic architecture diagram showing local conversation sources flowing into the Ataru index and back to stable context.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#181818" flood-opacity="0.08"/>
+    </filter>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" stroke="#E8E6DC" stroke-width="1" opacity="0.65"/>
+    </pattern>
+  </defs>
+
+  <rect width="1600" height="900" rx="38" fill="#F9F9F7"/>
+  <rect x="48" y="48" width="1504" height="804" rx="30" fill="url(#grid)" opacity="0.4"/>
+  <text x="92" y="124" fill="#181818" font-family="Georgia, serif" font-size="34" font-weight="700">Local transcripts → usable memory</text>
+  <text x="92" y="160" fill="#87867F" font-family="Arial, sans-serif" font-size="16" letter-spacing="2">NORMALIZE · INDEX · READ BACK</text>
+
+  <text x="92" y="246" fill="#87867F" font-family="Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3">SOURCES</text>
+  <g filter="url(#shadow)">
+    <rect x="92" y="276" width="320" height="112" rx="24" fill="#FFFFFF" stroke="#E8E6DC" stroke-width="2"/>
+    <rect x="92" y="422" width="320" height="112" rx="24" fill="#FFFFFF" stroke="#E8E6DC" stroke-width="2"/>
+    <rect x="92" y="568" width="320" height="112" rx="24" fill="#FFFFFF" stroke="#E8E6DC" stroke-width="2"/>
+  </g>
+  <circle cx="138" cy="332" r="20" fill="#F0EEE6"/>
+  <path d="M128 332H148M138 322V342" stroke="#CC785C" stroke-width="4" stroke-linecap="round"/>
+  <text x="178" y="327" fill="#181818" font-family="Georgia, serif" font-size="22" font-weight="700">Claude</text>
+  <text x="178" y="356" fill="#87867F" font-family="Arial, sans-serif" font-size="15">local sessions · app / CLI</text>
+  <circle cx="138" cy="478" r="20" fill="#F0EEE6"/>
+  <path d="M128 478H148M138 468V488" stroke="#3EA866" stroke-width="4" stroke-linecap="round"/>
+  <text x="178" y="473" fill="#181818" font-family="Georgia, serif" font-size="22" font-weight="700">Codex</text>
+  <text x="178" y="502" fill="#87867F" font-family="Arial, sans-serif" font-size="15">local transcripts · JSONL</text>
+  <circle cx="138" cy="624" r="20" fill="#F0EEE6"/>
+  <path d="M126 624H150M138 612V636" stroke="#181818" stroke-width="4" stroke-linecap="round"/>
+  <text x="178" y="619" fill="#181818" font-family="Georgia, serif" font-size="22" font-weight="700">Local files</text>
+  <text x="178" y="648" fill="#87867F" font-family="Arial, sans-serif" font-size="15">projects · messages · metadata</text>
+
+  <path d="M438 332H536M438 478H536M438 624H536" stroke="#CC785C" stroke-width="4" stroke-linecap="round"/>
+  <path d="M526 322L538 332L526 342M526 468L538 478L526 488M526 614L538 624L526 634" stroke="#CC785C" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <g filter="url(#shadow)">
+    <rect x="568" y="238" width="452" height="490" rx="32" fill="#181818"/>
+  </g>
+  <circle cx="636" cy="310" r="24" fill="#3EA866"/>
+  <path d="M610 310L632 266L680 310L632 354L610 310Z" fill="#5DC98F"/>
+  <text x="700" y="314" fill="#FFFFFF" font-family="Georgia, serif" font-size="28" font-weight="700">Ataru index</text>
+  <text x="626" y="414" fill="#F0EEE6" font-family="Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3">ONE CONTRACT</text>
+  <rect x="626" y="442" width="334" height="64" rx="20" fill="#F0EEE6"/>
+  <text x="658" y="482" fill="#181818" font-family="Arial, sans-serif" font-size="18" font-weight="700">normalize → incremental</text>
+  <rect x="626" y="528" width="334" height="64" rx="20" fill="#CC785C"/>
+  <text x="658" y="568" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="18" font-weight="700">keyword + semantic recall</text>
+  <rect x="626" y="614" width="334" height="64" rx="20" fill="#3EA866"/>
+  <text x="658" y="654" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="18" font-weight="700">stable IDs + context</text>
+
+  <path d="M1046 332H1122M1046 478H1122M1046 624H1122" stroke="#181818" stroke-width="4" stroke-linecap="round"/>
+  <path d="M1112 322L1124 332L1112 342M1112 468L1124 478L1112 488M1112 614L1124 624L1112 634" stroke="#181818" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <text x="1168" y="246" fill="#87867F" font-family="Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="3">READ BACK</text>
+  <g filter="url(#shadow)">
+    <rect x="1168" y="276" width="336" height="112" rx="24" fill="#FFFFFF" stroke="#E8E6DC" stroke-width="2"/>
+    <rect x="1168" y="422" width="336" height="112" rx="24" fill="#FFFFFF" stroke="#E8E6DC" stroke-width="2"/>
+    <rect x="1168" y="568" width="336" height="112" rx="24" fill="#FFFFFF" stroke="#E8E6DC" stroke-width="2"/>
+  </g>
+  <rect x="1208" y="312" width="76" height="32" rx="16" fill="#CC785C"/>
+  <text x="1230" y="333" fill="#FFFFFF" font-family="Arial, sans-serif" font-size="13" font-weight="700">TURN</text>
+  <text x="1308" y="331" fill="#181818" font-family="Georgia, serif" font-size="20" font-weight="700">the exact answer</text>
+  <text x="1208" y="477" fill="#181818" font-family="Georgia, serif" font-size="20" font-weight="700">the full session</text>
+  <text x="1208" y="506" fill="#87867F" font-family="Arial, sans-serif" font-size="15">stable sessionId · line number</text>
+  <text x="1208" y="623" fill="#181818" font-family="Georgia, serif" font-size="20" font-weight="700">the project context</text>
+  <text x="1208" y="652" fill="#87867F" font-family="Arial, sans-serif" font-size="15">projectId · deep link · source</text>
+</svg>

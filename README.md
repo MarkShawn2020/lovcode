@@ -22,7 +22,7 @@
 
 <p align="center">
   <a href="#why-ataru">为什么是 Ataru</a> ·
-  <a href="#product-demo">产品演示</a> ·
+  <a href="#product-path">产品路径</a> ·
   <a href="#quick-start">快速开始</a> ·
   <a href="#agent-skill">Agent Skill</a> ·
   <a href="#architecture">架构</a> ·
@@ -56,21 +56,21 @@ Ataru 的目标不是管理正在运行的 Agent，而是让过去的工作重�
 | 上下文回读 | 保留稳定的 Project/Session/Turn/Message 标识、片段、角色、时间和行号。 |
 | Agent 接入 | GUI、CLI 和 Agent Skill 共用同一套搜索契约，不把检索逻辑复制到各个客户端。 |
 
-## Product demo
+## Product path
 
-下面的素材来自仓库中已经提交的真实产品界面。Ataru 的搜索主路径和品牌正在持续收敛，因此其中一部分仍保留早期界面名称；它们用于说明当前可工作的能力，不代表最终视觉稿。
+Ataru 的主路径只有两步：把本地会话整理成可检索的记忆，再从命中结果回到原始上下文。
 
-### 会话历史与导入
+### 搜索召回
 
-<img src="docs/images/claude-ai-import.png" alt="会话历史与 Claude 数据导入界面" width="100%">
+<img src="docs/images/search-recall.png" alt="Ataru 搜索召回路径示意图" width="100%">
 
-<p align="center"><sub>实际界面素材：会话历史、项目范围和本地会话导入入口。</sub></p>
+<p align="center"><sub>从一句自然语言问题，定位到 Turn、Session 或 Project，再回读原始上下文。</sub></p>
 
-### 能力全景
+### 本地索引
 
-<img src="docs/assets/gallery.png" alt="历史产品能力全景" width="100%">
+<img src="docs/images/local-index.png" alt="Ataru 本地索引路径示意图" width="100%">
 
-<p align="center"><sub>历史能力全景素材：项目、会话、搜索、Skill、Hook 与配置入口；当前 Ataru 主路径已聚焦于对话召回。</sub></p>
+<p align="center"><sub>Claude、Codex 等本地会话统一进入 Ataru 索引，并通过稳定 ID 回到具体来源。</sub></p>
 
 ## Quick start
 
@@ -383,7 +383,7 @@ src-tauri/src/app/ataru/     Rust sdk/api/ai boundary
 src-tauri/src/app/search.rs  Source parsing, indexing and legacy adapters
 src-tauri/src/app/cli.rs     JSON CLI entry
 docs/architecture/           Architecture decisions and detailed contracts
-docs/images/                 README and product evidence images
+docs/images/                 README cover and current product path visuals
 ```
 
 ### Tech stack

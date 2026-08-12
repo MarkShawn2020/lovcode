@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1575" height="700" viewBox="0 0 1575 700" fill="none">
+  <title>Ataru abstract cover</title>
+  <desc>Warm academic abstract composition of local conversation memory paths and the Ataru mark.</desc>
+  <defs>
+    <pattern id="paper-grid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <path d="M28 0H0V28" stroke="#E8E6DC" stroke-width="1" opacity="0.55"/>
+    </pattern>
+    <filter id="paper-noise" x="-10%" y="-10%" width="120%" height="120%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="19" result="noise"/>
+      <feColorMatrix in="noise" type="saturate" values="0" result="gray"/>
+      <feComponentTransfer in="gray" result="soft-noise">
+        <feFuncA type="table" tableValues="0 0.045"/>
+      </feComponentTransfer>
+      <feBlend in="SourceGraphic" in2="soft-noise" mode="multiply"/>
+    </filter>
+    <linearGradient id="warm-fade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F9F9F7"/>
+      <stop offset="1" stop-color="#F0EEE6"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1575" height="700" fill="url(#warm-fade)"/>
+  <rect width="1575" height="700" fill="#F9F9F7" filter="url(#paper-noise)"/>
+  <rect x="62" y="54" width="360" height="236" rx="28" fill="url(#paper-grid)" opacity="0.7"/>
+  <rect x="1194" y="448" width="320" height="190" rx="28" fill="url(#paper-grid)" opacity="0.66"/>
+
+  <g opacity="0.88">
+    <rect x="90" y="126" width="350" height="222" rx="24" fill="#FFFFFF" stroke="#E8E6DC" stroke-width="2"/>
+    <rect x="128" y="166" width="172" height="13" rx="6.5" fill="#181818" opacity="0.78"/>
+    <rect x="128" y="201" width="250" height="9" rx="4.5" fill="#87867F" opacity="0.5"/>
+    <rect x="128" y="225" width="216" height="9" rx="4.5" fill="#87867F" opacity="0.35"/>
+    <rect x="128" y="276" width="112" height="28" rx="14" fill="#F0EEE6"/>
+    <rect x="254" y="276" width="88" height="28" rx="14" fill="#CC785C" opacity="0.88"/>
+  </g>
+
+  <g opacity="0.75">
+    <rect x="178" y="388" width="270" height="166" rx="22" fill="#F0EEE6" stroke="#E8E6DC" stroke-width="2"/>
+    <path d="M218 438H390M218 466H350M218 494H376" stroke="#87867F" stroke-width="8" stroke-linecap="round" opacity="0.46"/>
+    <circle cx="226" cy="523" r="9" fill="#CC785C"/>
+    <path d="M248 523H342" stroke="#181818" stroke-width="7" stroke-linecap="round" opacity="0.55"/>
+  </g>
+
+  <path d="M0 555H305C341 555 351 534 376 509L625 260" stroke="#181818" stroke-width="14" stroke-linecap="round" opacity="0.93"/>
+  <path d="M260 700L684 276C710 250 727 238 759 238H1068C1100 238 1118 220 1140 198L1398 -60" stroke="#CC785C" stroke-width="24" stroke-linecap="round" opacity="0.9"/>
+  <path d="M322 700L710 312C737 285 753 274 786 274H1082C1121 274 1138 261 1160 239L1426 0" stroke="#CC785C" stroke-width="4" stroke-linecap="round" opacity="0.72"/>
+  <path d="M567 700L848 419C872 395 884 386 919 386H1246C1284 386 1301 370 1325 345L1575 95" stroke="#181818" stroke-width="6" stroke-linecap="round" opacity="0.76"/>
+
+  <g transform="translate(1088 360) rotate(-45)">
+    <polygon points="-236,0 -44,-44 236,0 44,44" fill="#5DC98F"/>
+    <polygon points="-208,0 -32,-24 208,0 32,24" fill="#F0EEE6"/>
+    <circle cx="0" cy="0" r="69" fill="#3EA866"/>
+  </g>
+
+  <g opacity="0.92">
+    <rect x="1248" y="82" width="218" height="132" rx="24" fill="#FFFFFF" stroke="#E8E6DC" stroke-width="2"/>
+    <circle cx="1284" cy="124" r="8" fill="#CC785C"/>
+    <path d="M1308 124H1406M1284 156H1422M1284 180H1372" stroke="#181818" stroke-width="8" stroke-linecap="round" opacity="0.58"/>
+  </g>
+
+  <path d="M1002 64V176M1002 120H1114" stroke="#E8E6DC" stroke-width="2" opacity="0.85"/>
+  <path d="M1030 64V176M1030 120H1142" stroke="#E8E6DC" stroke-width="2" opacity="0.45"/>
+</svg>
