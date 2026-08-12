@@ -114,13 +114,12 @@ export default function WorkspacePage() {
   const requestedProjectId = searchParams.get("projectId");
   const requestedSessionId = searchParams.get("sessionId");
   const selectedSession = useMemo(() => {
-    const exact = sessions.find(
+    return sessions.find(
       (session) =>
         session.id === requestedSessionId &&
         (!requestedProjectId || session.project_id === requestedProjectId),
-    );
-    return exact ?? filteredSessions[0] ?? sessions[0] ?? null;
-  }, [filteredSessions, requestedProjectId, requestedSessionId, sessions]);
+    ) ?? null;
+  }, [requestedProjectId, requestedSessionId, sessions]);
   // The streamed session list replaces Session objects as cached/full snapshots arrive.
   // Fetch transcripts by their durable identity, not by the snapshot object's reference.
   const selectedProjectId = selectedSession?.project_id ?? null;
@@ -145,13 +144,13 @@ export default function WorkspacePage() {
     }
     return Array.from(groups.values()).sort((a, b) => b.lastModified - a.lastModified);
   }, [filteredSessions]);
-  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(() => selectedSession?.project_id ?? null);
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
 
   useEffect(() => {
     if (archiveView !== "project") return;
     setExpandedProjectId((current) => {
       if (current && projectGroups.some((group) => group.projectId === current)) return current;
-      return selectedSession?.project_id ?? projectGroups[0]?.projectId ?? null;
+      return selectedSession?.project_id ?? null;
     });
   }, [archiveView, projectGroups, selectedSession?.project_id]);
 
@@ -205,14 +204,6 @@ export default function WorkspacePage() {
       cancelled = true;
     };
   }, [selectedProjectId, selectedSessionId]);
-
-  useEffect(() => {
-    if (!selectedSession || requestedSessionId) return;
-    const next = new URLSearchParams(searchParams);
-    next.set("projectId", selectedSession.project_id);
-    next.set("sessionId", selectedSession.id);
-    setSearchParams(next, { replace: true });
-  }, [requestedSessionId, searchParams, selectedSession, setSearchParams]);
 
   const copyTranscript = async () => {
     if (!selectedSession) return;
@@ -373,8 +364,8 @@ export default function WorkspacePage() {
           <div className="flex flex-1 items-center justify-center p-8 text-center">
             <div>
               <BookOpenText className="mx-auto h-8 w-8 text-primary" />
-              <h2 className="mt-4 font-serif text-xl font-semibold">还没有可读的会话</h2>
-              <p className="mt-2 text-sm text-muted-foreground">Ataru 会在这里展示本机已有的 AI 对话记录。</p>
+              <h2 className="mt-4 font-serif text-xl font-semibold">请选择一个会话</h2>
+              <p className="mt-2 text-sm text-muted-foreground">从左侧档案中选择一条会话，这里会展示完整内容。</p>
             </div>
           </div>
         )}
