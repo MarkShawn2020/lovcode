@@ -36,6 +36,20 @@ export function getSessionMessages(
   return invoke<Message[]>("get_session_messages", { projectId, sessionId });
 }
 
+export function getSessionSourcePath(
+  projectId: string,
+  sessionId: string,
+): Promise<string> {
+  return invoke<string>("get_session_source_path", { projectId, sessionId });
+}
+
+export function revealSessionInFinder(
+  projectId: string,
+  sessionId: string,
+): Promise<void> {
+  return invoke<void>("reveal_session_in_finder", { projectId, sessionId });
+}
+
 export function copyText(text: string): Promise<void> {
   return invoke<void>("copy_to_clipboard", { text });
 }

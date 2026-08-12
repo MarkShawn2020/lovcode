@@ -8,6 +8,10 @@ enum CliRequest {
         limit: usize,
         level: Option<ataru::sdk::SearchLevel>,
     },
+    ReadSession {
+        project_id: String,
+        session_id: String,
+    },
 }
 
 pub(crate) fn run_cli_if_requested() -> Option<i32> {
@@ -51,6 +55,31 @@ pub(crate) fn run_cli_if_requested() -> Option<i32> {
                 }
             }
         }
+        Ok(CliRequest::ReadSession {
+            project_id,
+            session_id,
+        }) => {
+            let result = read_session_messages(&project_id, &session_id)
+                .map(|messages| {
+                    messages
+                        .into_iter()
+                        .filter(|message| !message.is_meta)
+                        .collect::<Vec<_>>()
+                })
+                .and_then(|messages| {
+                    serde_json::to_string(&messages).map_err(|error| error.to_string())
+                });
+            match result {
+                Ok(json) => {
+                    println!("{json}");
+                    0
+                }
+                Err(error) => {
+                    eprintln!("Ataru session read failed: {error}");
+                    1
+                }
+            }
+        }
         Err(error) => {
             eprintln!("{error}");
             2
@@ -64,6 +93,9 @@ fn parse_cli_request(args: &[String]) -> Option<Result<CliRequest, String>> {
         return Some(Ok(CliRequest::Version));
     }
     if command != "search" {
+        if command == "session" {
+            return Some(parse_session_request(args));
+        }
         return None;
     }
 
@@ -139,6 +171,63 @@ fn parse_cli_request(args: &[String]) -> Option<Result<CliRequest, String>> {
     }))
 }
 
+fn parse_session_request(args: &[String]) -> Result<CliRequest, String> {
+    if args.get(1).map(String::as_str) != Some("read") {
+        return Err(
+            "Usage: ataru session read --project-id PROJECT_ID --session-id SESSION_ID --json"
+                .to_string(),
+        );
+    }
+
+    let mut project_id = None;
+    let mut session_id = None;
+    let mut index = 2usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--json" => index += 1,
+            "--project-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(
+                        "Usage: ataru session read --project-id PROJECT_ID --session-id SESSION_ID --json"
+                            .to_string(),
+                    );
+                };
+                if value.is_empty() {
+                    return Err("Ataru session project id must not be empty.".to_string());
+                }
+                project_id = Some(value.clone());
+                index += 2;
+            }
+            "--session-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Err(
+                        "Usage: ataru session read --project-id PROJECT_ID --session-id SESSION_ID --json"
+                            .to_string(),
+                    );
+                };
+                if value.is_empty() {
+                    return Err("Ataru session id must not be empty.".to_string());
+                }
+                session_id = Some(value.clone());
+                index += 2;
+            }
+            value => return Err(format!("Unknown Ataru session read option: {value}")),
+        }
+    }
+
+    let Some(project_id) = project_id else {
+        return Err("Ataru session read requires --project-id PROJECT_ID.".to_string());
+    };
+    let Some(session_id) = session_id else {
+        return Err("Ataru session read requires --session-id SESSION_ID.".to_string());
+    };
+
+    Ok(CliRequest::ReadSession {
+        project_id,
+        session_id,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +262,21 @@ mod tests {
                 level: Some(ataru::sdk::SearchLevel::Project),
             }))
         );
+        assert_eq!(
+            parse_cli_request(&args(&[
+                "session",
+                "read",
+                "--project-id",
+                "-Users-mark-projects-ataru",
+                "--session-id",
+                "session-123",
+                "--json",
+            ])),
+            Some(Ok(CliRequest::ReadSession {
+                project_id: "-Users-mark-projects-ataru".to_string(),
+                session_id: "session-123".to_string(),
+            }))
+        );
     }
 
     #[test]
@@ -195,6 +299,10 @@ mod tests {
         assert!(matches!(
             parse_cli_request(&args(&["search", "query", "--limit", "200"])),
             Some(Ok(CliRequest::Search { level: None, .. }))
+        ));
+        assert!(matches!(
+            parse_cli_request(&args(&["session", "read", "--project-id", "project"])),
+            Some(Err(_))
         ));
     }
 }

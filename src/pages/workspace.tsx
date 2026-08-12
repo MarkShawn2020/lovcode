@@ -1,10 +1,36 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookOpenText, ChevronDown, ChevronRight, Copy, Folder, FolderOpen, Search, X } from "lucide-react";
+import {
+  BookOpenText,
+  Bot,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FileText,
+  Folder,
+  FolderOpen,
+  MoreHorizontal,
+  Search,
+  X,
+  type LucideIcon,
+} from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useStreamedSessions } from "@/hooks/useStreamedSessions";
-import { getSessionMessages, copyText } from "@/modules/api/ataru";
+import {
+  copyText,
+  getSessionMessages,
+  getSessionSourcePath,
+  revealSessionInFinder,
+} from "@/modules/api/ataru";
 import type { Message, Session } from "@/types";
 import { ConversationReader } from "@/views/Chat/ConversationReader";
 import { restoreSlashCommand } from "@/views/Chat/utils";
@@ -87,6 +113,196 @@ function transcriptAsMarkdown(session: Session, messages: Message[]) {
   return `# ${sessionTitle(session)}\n\n${body}`;
 }
 
+type ArchiveAction =
+  | "copy-path"
+  | "copy-transcript"
+  | "copy-agent-context"
+  | "reveal-in-finder";
+
+interface ReaderActionFeedback {
+  kind: "success" | "error";
+  message: string;
+  debug?: string;
+}
+
+function agentContextAsJson(
+  session: Session,
+  messages: Message[],
+  sourcePath: string,
+) {
+  return JSON.stringify(
+    {
+      schema: "ataru-agent-context/v1",
+      operation: "read_exact_session",
+      target: {
+        projectId: session.project_id,
+        sessionId: session.id,
+        source: session.source,
+        sourcePath,
+        format: session.source === "codex" ? "codex-rollout-jsonl" : "claude-jsonl",
+      },
+      read: {
+        cli: {
+          executable: "ataru",
+          args: [
+            "session",
+            "read",
+            "--project-id",
+            session.project_id,
+            "--session-id",
+            session.id,
+            "--json",
+          ],
+        },
+        tauriCommand: "get_session_messages",
+        arguments: {
+          projectId: session.project_id,
+          sessionId: session.id,
+        },
+        order: "source-order",
+        excludeMeta: true,
+      },
+      messages: messages.map((message, order) => ({
+        order,
+        uuid: message.uuid,
+        lineNumber: message.line_number,
+        timestamp: message.timestamp,
+        role: message.role,
+        isTool: message.is_tool,
+        content: restoreSlashCommand(message.content),
+      })),
+    },
+    null,
+    2,
+  );
+}
+
+function ArchiveActionsMenu({
+  busy,
+  copyDisabled,
+  onAction,
+}: {
+  busy: boolean;
+  copyDisabled: boolean;
+  onAction: (action: ArchiveAction) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const menuId = "archive-reader-actions-menu";
+  const triggerId = "archive-reader-actions-trigger";
+  const items: Array<{
+    action: ArchiveAction;
+    label: string;
+    icon: LucideIcon;
+    disabled: boolean;
+  }> = [
+    { action: "copy-path", label: "复制目标路径", icon: FileText, disabled: busy },
+    { action: "copy-transcript", label: "复制全文", icon: Copy, disabled: busy || copyDisabled },
+    { action: "copy-agent-context", label: "复制给 Agent", icon: Bot, disabled: busy || copyDisabled },
+    { action: "reveal-in-finder", label: "在 Finder 中打开", icon: FolderOpen, disabled: busy },
+  ];
+
+  useEffect(() => {
+    if (!open) return;
+    const firstEnabledItem = menuItemRefs.current.find((item) => item && !item.disabled);
+    firstEnabledItem?.focus();
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && !menuRef.current?.contains(target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [open]);
+
+  const closeMenu = useCallback(() => {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }, []);
+
+  const handleMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMenu();
+      return;
+    }
+
+    if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+    const enabledItems = menuItemRefs.current.filter(
+      (item): item is HTMLButtonElement => Boolean(item && !item.disabled),
+    );
+    if (enabledItems.length === 0) return;
+    const currentIndex = enabledItems.indexOf(document.activeElement as HTMLButtonElement);
+    let nextIndex = currentIndex;
+    if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % enabledItems.length;
+    if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + enabledItems.length) % enabledItems.length;
+    if (event.key === "Home") nextIndex = 0;
+    if (event.key === "End") nextIndex = enabledItems.length - 1;
+    event.preventDefault();
+    enabledItems[nextIndex]?.focus();
+  };
+
+  return (
+    <div ref={menuRef} className="relative">
+      <Button
+        ref={triggerRef}
+        id={triggerId}
+        type="button"
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9 rounded-lg text-muted-foreground hover:text-foreground"
+        onClick={() => setOpen((current) => !current)}
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls={menuId}
+        title="更多操作"
+        disabled={busy}
+      >
+        <MoreHorizontal className="h-4 w-4" />
+      </Button>
+      {open && (
+        <div
+          id={menuId}
+          role="menu"
+          aria-labelledby={triggerId}
+          onKeyDown={handleMenuKeyDown}
+          className="absolute right-0 top-full z-30 mt-2 w-56 overflow-hidden rounded-xl border border-border bg-popover p-1.5 text-popover-foreground shadow-lg shadow-foreground/10"
+        >
+          <div className="px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground">更多操作</div>
+          {items.map((item, index) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.action}
+                ref={(element) => {
+                  menuItemRefs.current[index] = element;
+                }}
+                type="button"
+                role="menuitem"
+                disabled={item.disabled}
+                className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:bg-muted focus-visible:outline-none disabled:pointer-events-none disabled:opacity-45"
+                onClick={() => {
+                  if (item.disabled) return;
+                  closeMenu();
+                  onAction(item.action);
+                }}
+              >
+                <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { sessions, initialLoading } = useStreamedSessions();
@@ -94,7 +310,9 @@ export default function WorkspacePage() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [messageError, setMessageError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionFeedback, setActionFeedback] = useState<ReaderActionFeedback | null>(null);
+  const [diagnosticCopied, setDiagnosticCopied] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
   const filteredSessions = useMemo(() => {
@@ -196,7 +414,8 @@ export default function WorkspacePage() {
     let cancelled = false;
     setMessageLoading(true);
     setMessageError(null);
-    setCopied(false);
+    setActionFeedback(null);
+    setDiagnosticCopied(false);
     getSessionMessages(selectedProjectId, selectedSessionId)
       .then((next) => {
         if (!cancelled) setMessages(next.filter((message) => !message.is_meta));
@@ -215,11 +434,52 @@ export default function WorkspacePage() {
     };
   }, [selectedProjectId, selectedSessionId]);
 
-  const copyTranscript = async () => {
-    if (!selectedSession) return;
-    await copyText(transcriptAsMarkdown(selectedSession, messages));
-    setCopied(true);
-  };
+  const handleArchiveAction = useCallback(async (action: ArchiveAction) => {
+    if (!selectedSession || !selectedProjectId || !selectedSessionId) return;
+    setActionBusy(true);
+    setDiagnosticCopied(false);
+    try {
+      if (action === "copy-path") {
+        const sourcePath = await getSessionSourcePath(selectedProjectId, selectedSessionId);
+        await copyText(sourcePath);
+        setActionFeedback({ kind: "success", message: "已复制目标路径" });
+      } else if (action === "copy-transcript") {
+        await copyText(transcriptAsMarkdown(selectedSession, messages));
+        setActionFeedback({ kind: "success", message: "已复制全文" });
+      } else if (action === "copy-agent-context") {
+        const sourcePath = await getSessionSourcePath(selectedProjectId, selectedSessionId);
+        await copyText(agentContextAsJson(selectedSession, messages, sourcePath));
+        setActionFeedback({ kind: "success", message: "已复制 Agent 上下文" });
+      } else {
+        await revealSessionInFinder(selectedProjectId, selectedSessionId);
+        setActionFeedback({ kind: "success", message: "已在 Finder 中显示会话文件" });
+      }
+    } catch (error: unknown) {
+      const detail = error instanceof Error ? error.message : String(error);
+      setActionFeedback({
+        kind: "error",
+        message: "操作未完成",
+        debug: [
+          `action=${action}`,
+          `projectId=${selectedProjectId}`,
+          `sessionId=${selectedSessionId}`,
+          `error=${detail}`,
+        ].join("\n"),
+      });
+    } finally {
+      setActionBusy(false);
+    }
+  }, [messages, selectedProjectId, selectedSession, selectedSessionId]);
+
+  const copyDiagnostic = useCallback(async () => {
+    if (!actionFeedback?.debug) return;
+    try {
+      await copyText(actionFeedback.debug);
+      setDiagnosticCopied(true);
+    } catch {
+      setDiagnosticCopied(false);
+    }
+  }, [actionFeedback?.debug]);
 
   return (
     <div className="flex h-full min-h-0 bg-background text-foreground">
@@ -349,17 +609,11 @@ export default function WorkspacePage() {
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="rounded-lg"
-                  onClick={() => void copyTranscript()}
-                  disabled={messageLoading || messages.length === 0}
-                >
-                  <Copy className="mr-2 h-4 w-4" />
-                  {copied ? "已复制" : "复制全文"}
-                </Button>
+                <ArchiveActionsMenu
+                  busy={actionBusy}
+                  copyDisabled={messageLoading || messages.length === 0}
+                  onAction={(action) => void handleArchiveAction(action)}
+                />
                 <Button
                   type="button"
                   variant="ghost"
@@ -373,6 +627,30 @@ export default function WorkspacePage() {
                 </Button>
               </div>
             </header>
+            {actionFeedback && (
+              <div
+                className={`flex min-h-9 items-center gap-3 border-b px-5 py-1.5 text-xs ${
+                  actionFeedback.kind === "error"
+                    ? "border-destructive/20 bg-destructive/5 text-destructive"
+                    : "border-primary/15 bg-primary/5 text-primary"
+                }`}
+                role={actionFeedback.kind === "error" ? "alert" : "status"}
+                aria-live="polite"
+              >
+                <span className="min-w-0 flex-1 truncate">{actionFeedback.message}</span>
+                {actionFeedback.debug && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 shrink-0 rounded-md px-2 text-xs"
+                    onClick={() => void copyDiagnostic()}
+                  >
+                    {diagnosticCopied ? "已复制诊断信息" : "复制诊断信息"}
+                  </Button>
+                )}
+              </div>
+            )}
             <ConversationReader
               messages={messages}
               loading={messageLoading}

@@ -292,7 +292,17 @@ flowchart TB
 **代码：** `src-tauri/src/app/cli.rs`、`src-tauri/src/app/run.rs`
 
 CLI 在 Tauri 初始化之前处理 `search` 请求，适合 Agent wrapper、脚本和 CI。它支持
-`search <query> --json [--limit N] [--level turn|session|project]`。
+`search <query> --json [--limit N] [--level turn|session|project]`，以及按稳定身份读取完整会话：
+
+```bash
+ataru session read \
+  --project-id PROJECT_ID \
+  --session-id SESSION_ID \
+  --json
+```
+
+`session read` 输出当前页面可见的消息 JSON，并按源文件顺序保留 `uuid`、`line_number`、角色和正文。
+档案阅读器的“复制给 Agent”还会复制 `ataru-agent-context/v1`，其中包含同一组稳定 ID、真实源文件路径、CLI 参数、Tauri command 和当前页面消息快照。
 
 新的聚合查询使用 Ataru v1 response。无界面调用方应先完成 `ensure_index`，不要在索引缺失时重复提交相同查询。
 
