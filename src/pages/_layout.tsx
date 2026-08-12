@@ -6,10 +6,12 @@ export default function RootLayout() {
   const navigate = useNavigate();
   const activeRoute: PrimaryRoute = location.pathname.startsWith("/workbench") || location.pathname.startsWith("/workspace") || location.pathname.startsWith("/history")
     ? "library"
-    : "search";
+    : location.pathname.startsWith("/settings")
+      ? "settings"
+      : "search";
 
   const navigatePrimary = (route: PrimaryRoute) => {
-    navigate(route === "search" ? "/search" : "/workbench");
+    navigate({ search: "/search", library: "/workbench", settings: "/settings" }[route]);
   };
 
   return (

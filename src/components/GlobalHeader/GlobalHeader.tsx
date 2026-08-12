@@ -1,8 +1,8 @@
-import { BookOpenText, ChevronLeft, ChevronRight, Search } from "lucide-react";
+import { BookOpenText, ChevronLeft, ChevronRight, Search, Settings2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
 
-export type PrimaryRoute = "search" | "library";
+export type PrimaryRoute = "search" | "library" | "settings";
 
 export function GlobalHeader({
   activeRoute,
@@ -36,7 +36,10 @@ export function GlobalHeader({
           <Search className="h-4 w-4" />搜索
         </NavButton>
         <NavButton active={activeRoute === "library"} onClick={() => onNavigate("library")}>
-          <BookOpenText className="h-4 w-4" />资料库
+          <BookOpenText className="h-4 w-4" />档案
+        </NavButton>
+        <NavButton active={activeRoute === "settings"} onClick={() => onNavigate("settings")}>
+          <Settings2 className="h-4 w-4" />设置
         </NavButton>
       </nav>
       <div className="min-w-[240px]" />
