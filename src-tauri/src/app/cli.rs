@@ -127,17 +127,19 @@ fn parse_cli_request(args: &[String]) -> Option<Result<CliRequest, String>> {
             "--level" => {
                 let Some(value) = args.get(index + 1) else {
                     return Some(Err(
-                        "Usage: ataru search <query> --json [--limit N] [--level turn|session|project]"
+                        "Usage: ataru search <query> --json [--limit N] [--level turn|run|session|project]"
                             .to_string(),
                     ));
                 };
                 level = match value.as_str() {
                     "turn" => Some(ataru::sdk::SearchLevel::Turn),
+                    "run" | "round" => Some(ataru::sdk::SearchLevel::Run),
                     "session" => Some(ataru::sdk::SearchLevel::Session),
                     "project" => Some(ataru::sdk::SearchLevel::Project),
                     _ => {
                         return Some(Err(
-                            "Ataru search level must be turn, session, or project.".to_string()
+                            "Ataru search level must be turn, run, session, or project."
+                                .to_string(),
                         ));
                     }
                 };

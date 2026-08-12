@@ -12,15 +12,17 @@ import { ErrorState, HighlightedText } from "./SearchFeedback";
 import {
   formatCount,
   formatTimestamp,
+  getSearchResultContextLabel,
   getSearchResultExcerpt,
   getSearchResultTitle,
   projectName,
 } from "./utils";
 
 const RESULT_LEVEL_LABELS: Record<SearchHit["level"], string> = {
-  turn: "对话回合",
-  session: "会话",
-  project: "项目",
+  turn: "Turn",
+  run: "Run",
+  session: "Session",
+  project: "Project",
 };
 
 export function SearchResults({
@@ -139,11 +141,15 @@ function ResultCard({
   onOpenContext: () => void;
 }) {
   const title = getSearchResultTitle(hit, query);
+  const heading = title || getSearchResultContextLabel(hit);
   const excerpt = getSearchResultExcerpt(hit, query, title);
   const levelLabel = RESULT_LEVEL_LABELS[hit.level];
-  const matchLocation = hit.level === "turn"
-    ? hit.role === "assistant" ? "AI 回复" : hit.role === "user" ? "用户输入" : "命中片段"
-    : "命中片段";
+  const matchLocation = hit.level === "turn" ? "命中内容" : hit.level === "run" ? "命中 Turn" : "命中上下文";
+  const matchSummary = hit.level === "run" && hit.matchCount > 1
+    ? `${hit.matchCount} 条 Turn 命中`
+    : hit.matchCount > 1
+      ? `${hit.matchCount} 处命中`
+      : null;
 
   return (
     <article
@@ -158,7 +164,7 @@ function ResultCard({
         type="button"
         onClick={onSelect}
         aria-pressed={selected}
-        aria-label={`查看第 ${rank} 条结果：${title}。${excerpt}`}
+        aria-label={`查看第 ${rank} 条结果：${heading}。${excerpt}`}
         className={cn(
           "group block w-full rounded-xl px-2.5 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:px-3 sm:py-5",
           !selected && "hover:bg-card/70",
@@ -181,10 +187,10 @@ function ResultCard({
                 </>
               )}
             </span>
-            {(hit.matchCount > 1 || hit.sessionCount > 1) && (
+            {(matchSummary || hit.sessionCount > 1) && (
               <span className="flex shrink-0 items-center gap-1.5 font-medium text-muted-foreground/80">
-                {hit.matchCount > 1 && <span>{hit.matchCount} 处命中</span>}
-                {hit.matchCount > 1 && hit.sessionCount > 1 && (
+                {matchSummary && <span>{matchSummary}</span>}
+                {matchSummary && hit.sessionCount > 1 && (
                   <span aria-hidden="true" className="text-foreground/30">·</span>
                 )}
                 {hit.sessionCount > 1 && <span>{hit.sessionCount} 个会话</span>}
@@ -192,7 +198,7 @@ function ResultCard({
             )}
           </span>
           <span className="mt-1.5 block line-clamp-2 font-serif text-[17px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
-            <HighlightedText text={title} query={query} />
+            {title ? <HighlightedText text={title} query={query} /> : heading}
           </span>
           <span className="mt-1.5 flex items-start gap-2 text-[13px] leading-6 text-foreground/80">
             <span className="mt-0.5 shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-primary/70">

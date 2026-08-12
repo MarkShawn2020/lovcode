@@ -1,8 +1,8 @@
 # Ataru 搜索架构
 
-本文定义 Ataru v1 的产品边界、领域契约、模块结构、质量门槛和从 Lovcode 迁移的路径。它描述目标架构；阶段尚未通过验收前，不应把目标指标写成已经达成。
+本文定义 Ataru v2 的产品边界、领域契约、模块结构、质量门槛和从 Lovcode 迁移的路径。它描述目标架构；阶段尚未通过验收前，不应把目标指标写成已经达成。
 
-> 实现快照（2026-08-10）：v1 facade、Turn/Session/Project 聚合、搜索主界面、关键词/语义降级、查询时限、项目预过滤与增量构建 single-flight 已落地；当前可视为 Phase 1 完成、Phase 2 功能切片可用。固定相关性评测、TTCR 埋点、热进程 p95 基准，以及“不在查询内重建”的增量向量链路尚未通过阶段门禁。Agent Skill 作为独立客户端边界，必须先完成索引初始化，再调用 v1 搜索契约。
+> 实现快照（2026-08-12）：v2 facade、Turn/Run/Session/Project 聚合、搜索主界面、关键词/语义降级、查询时限、项目预过滤与增量构建 single-flight 已落地；当前可视为 Phase 1 完成、Phase 2 功能切片可用。固定相关性评测、TTCR 埋点、热进程 p95 基准，以及“不在查询内重建”的增量向量链路尚未通过阶段门禁。Agent Skill 作为独立客户端边界，必须先完成索引初始化，再调用 v2 搜索契约。
 
 ## 1. 产品边界与成功标准
 
@@ -44,10 +44,8 @@ Ataru 可以把命中的项目、会话或回合作为显式 handoff 交给 Yoda
 
 - **Project**：规范化工作目录及其历史集合。主键为 `projectId`；路径用于展示和兼容兜底，不作为唯一业务标识。
 - **Session**：某个来源的一条完整对话记录。主键为 `(projectId, sessionId)`；`source` 区分 Claude、Codex 等来源。
-- **Turn**：一个用户提示，加上直到下一个用户提示前产生的 Assistant 与工具消息。主键为 `(projectId, sessionId, turnIndex)`，`turnIndex` 从来源解析出的稳定回合序号。
-- **Message**：最小证据单元，包含角色、时间和来源位置。它支持高亮与深链，但不是 v1 的独立搜索层级。
-
-旧记录无法恢复回合边界时，`turn` 搜索可以退化为单条 Message 证据：`level` 仍为 `turn`，`turnIndex` 为空，ID 使用 `message:{projectIdOrPath}:{sessionId}:{messageId}:{lineNumber}`。这项兼容行为不得影响新记录的回合聚合。
+- **Run**：一次完整执行，从用户提出问题开始，到 AI 完成最终回应结束，包含多个 Turn。主键为 `(projectId, sessionId, runIndex)`；底层 `round_index` 是兼容存储字段。
+- **Turn**：最小原子 transcript item，代表一条用户消息、AI 回复、工具调用或工具结果。主键为 `(projectId, sessionId, messageId, lineNumber)`，不拥有标题。
 
 ## 4. 高层架构
 
@@ -57,14 +55,14 @@ flowchart LR
 
     subgraph Client["Ataru 客户端"]
         UI["React 搜索、结果与阅读 UI"]
-        TS["TypeScript SDK v1"]
+        TS["TypeScript SDK v2"]
         SKILL["Agent Skill\nensure_index → search → inspect"]
         CLI["JSON CLI / automation"]
     end
 
     subgraph Core["Tauri / Rust 模块化单体"]
         API["api：校验、编排、降级、观测"]
-        SDK["sdk：v1 契约、实体、错误与端口"]
+        SDK["sdk：v2 契约、实体、错误与端口"]
         AI["ai：意图、Embedding、融合与重排"]
         LEX["关键字召回适配器"]
         INGEST["采集、增量索引与对账"]
@@ -118,22 +116,22 @@ Agent Skill 是搜索能力面向 Agent 的薄适配层。它与桌面 UI、JSON
 1. `get_search_index_status`：读取索引是否存在、是否过期、是否正在构建。
 2. `start_search_index_build({ force: false })`：状态不是 `ready` 时启动或合并一次构建请求。
 3. 监听 `search-index:build`：等待 `ready`，或把 `error` 转成可复制的诊断信息。
-4. `ataru_search({ request })`：按 `turn/session/project` 和 `auto/keyword/semantic/hybrid` 查询。
+4. `ataru_search({ request })`：按 `turn/run/session/project` 和 `auto/keyword/semantic/hybrid` 查询。
 5. 使用响应中的稳定 ID 和来源位置回读原始上下文，不从标题或展示路径推导实体。
 
 桌面搜索页已经在首次进入时自动完成第 1–3 步；无界面 Skill Runner 必须显式执行它们。CLI 兼容入口适合读取已有关键词索引，Skill 包装层应在 CLI 查询前复用同一套索引就绪协议。
 
-## 5. v1 搜索 API 契约
+## 5. v2 搜索 API 契约
 
 Tauri 调用形式为 `invoke("ataru_search", { request })`。传输字段统一使用 camelCase；响应中的 `version` 是契约主版本。
 
 ### 请求
 
 ```ts
-type SearchLevel = "turn" | "session" | "project";
+type SearchLevel = "turn" | "run" | "session" | "project";
 type SearchMode = "auto" | "keyword" | "semantic" | "hybrid";
 
-interface SearchRequestV1 {
+interface SearchRequestV2 {
   query: string;
   level?: SearchLevel;        // 默认 turn
   mode?: SearchMode;          // 默认 auto
@@ -147,8 +145,8 @@ interface SearchRequestV1 {
 ### 响应
 
 ```ts
-interface SearchResponseV1 {
-  version: 1;
+interface SearchResponseV2 {
+  version: 2;
   query: string;                 // 规范化后的实际查询
   level: SearchLevel;
   requestedMode: SearchMode;
@@ -156,11 +154,11 @@ interface SearchResponseV1 {
   semanticAvailable: boolean;
   tookMs: number;
   total: number;                 // 本次返回的聚合结果数，不是全库命中总数
-  hits: SearchHitV1[];
+  hits: SearchHitV2[];
   warnings?: string[];
 }
 
-interface SearchHitV1 {
+interface SearchHitV2 {
   id: string;
   level: SearchLevel;
   title: string;
@@ -169,8 +167,8 @@ interface SearchHitV1 {
   projectPath: string;
   sessionId?: string;
   sessionTitle?: string;
-  turnIndex?: number;
-  turnPrompt?: string;
+  runIndex?: number;
+  runPrompt?: string;
   messageId?: string;
   lineNumber?: number;
   role?: string;
@@ -188,12 +186,13 @@ interface SearchHitV1 {
 
 `score` 及各 signal 不保证跨查询、跨模式或跨索引版本可比较。`matchCount` 与 `sessionCount` 来自本次候选池聚合，是排序证据而非全库精确统计。
 
-### 三种层级的返回语义
+### 四种层级的返回语义
 
 | `level` | 聚合键 | `id` 规则 | 代表证据 |
 | --- | --- | --- | --- |
-| `turn` | `projectId + sessionId + turnIndex` | `turn:{projectIdOrPath}:{sessionId}:{turnIndex}` | 该回合最高分 Message；保留行号、角色、片段 |
-| `session` | `projectId + sessionId` | `session:{projectIdOrPath}:{sessionId}` | 会话内最高分回合/Message；`matchCount` 汇总候选 |
+| `turn` | `projectId + sessionId + messageId + lineNumber` | `message:{projectIdOrPath}:{sessionId}:{messageId}:{lineNumber}` | 单条原子消息或工具记录；保留角色、行号和片段 |
+| `run` | `projectId + sessionId + runIndex` | `run:{projectIdOrPath}:{sessionId}:{runIndex}` | 一次完整执行中最高分 Turn；`matchCount` 汇总命中 Turn |
+| `session` | `projectId + sessionId` | `session:{projectIdOrPath}:{sessionId}` | 会话内最高分 Turn；`matchCount` 汇总候选 |
 | `project` | `projectId`，缺失时使用规范化路径 | `project:{projectIdOrNormalizedPath}` | 项目内最高分会话证据；`sessionCount` 表示候选涉及的会话数 |
 
 客户端打开结果时必须使用返回的实体标识和代表证据定位，不得从展示标题或路径重新推导 ID。
@@ -201,9 +200,9 @@ interface SearchHitV1 {
 ### 模式、警告与错误
 
 - `requestedMode` 保留用户意图，`mode` 表示实际结果来源。
-- 混合排序默认使用 RRF 合并关键字与语义名次；具体权重属于实现细节，不进入 v1 契约。
+- 混合排序默认使用 RRF 合并关键字与语义名次；具体权重属于实现细节，不进入 v2 契约。
 - 可恢复问题放入 `warnings`，格式为 `ATARU_CODE: message`；客户端只依赖冒号前的代码。
-- 请求失败返回同格式稳定错误码。v1 至少定义：`ATARU_EMPTY_QUERY`、`ATARU_BAD_REQUEST`、`ATARU_INDEX_UNAVAILABLE`、`ATARU_TIMEOUT`、`ATARU_INTERNAL`。
+- 请求失败返回同格式稳定错误码。v2 至少定义：`ATARU_EMPTY_QUERY`、`ATARU_BAD_REQUEST`、`ATARU_INDEX_UNAVAILABLE`、`ATARU_TIMEOUT`、`ATARU_INTERNAL`。
 - 至少定义以下降级警告：`ATARU_SEMANTIC_FALLBACK`、`ATARU_KEYWORD_FALLBACK`、`ATARU_STALE_INDEX`、`ATARU_PARTIAL_SOURCE`。
 - 结果为空且执行成功必须返回 `hits: []`；索引损坏、超时或解析失败不得伪装为空结果。
 
@@ -234,7 +233,7 @@ interface SearchHitV1 {
 - **来源兼容**：Claude CLI、Claude App/Web 与 Codex 解析器继续读取原文件；用 fixture 契约测试固定各来源的回合边界、时间戳和 ID。
 - **命令兼容**：`list_projects`、`list_sessions`、`get_session_messages`、`search_chats`、`semantic_search_chats` 在迁移期保留。新 UI/CLI 只依赖 `ataru_search`，旧命令逐步收为内部适配器。
 - **数据兼容**：不改写原始 transcript。旧索引仅作为派生缓存；schema 或 manifest 不兼容时后台重建。
-- **客户端兼容**：v1 允许增加可选字段和新 warning code；客户端必须忽略未知字段/警告。破坏性语义变更发布 v2，并与 v1 并行至少两个稳定版本。
+- **客户端兼容**：v2 允许增加可选字段和新 warning code；客户端必须忽略未知字段/警告。破坏性语义变更发布后续主版本，并保留兼容适配。
 - **标识兼容**：Project/Session 的来源 ID 能稳定沿用时必须沿用；路径搬迁通过别名映射，不批量改写深链。
 - **切换兼容**：新 UI 先走 feature flag 和影子查询。影子结果只记录匿名名次差异，不记录查询或正文。
 
@@ -280,7 +279,7 @@ interface SearchHitV1 {
 | 阶段 | 工作 | 退出条件 |
 | --- | --- | --- |
 | Phase 0：基线 | 冻结旧行为 fixture；建立 TTCR、性能、freshness 与相关性评测 | 基线可重复，指标口径和数据规模已记录 |
-| Phase 1：契约外壳 | 建立 `sdk/api/ai` 边界；`ataru_search` v1 包装旧索引；旧命令不变 | v1 合同测试通过，关键字路径功能等价且可离线工作 |
+| Phase 1：契约外壳 | 建立 `sdk/api/ai` 边界；`ataru_search` v2 包装旧索引；旧命令不变 | v2 合同测试通过，关键字路径功能等价且可离线工作 |
 | Phase 2：Ataru 主路径 | UI 切到 Turn/Session/Project；输入与深链优化；影子比较旧结果 | 输入 p95、关键字 p95 达标；关键召回 fixture 无未解释回归 |
 | Phase 3：增量与混合 | 单写者增量索引、对账、语义 opt-in、并行召回、RRF 与 deadline 降级 | freshness、混合延迟、Recall@10、MRR@10 全部达标；故障演练通过 |
 | Phase 4：收口 | 新 UI/CLI 全量；旧入口只做代理；观察至少两个稳定版本 | 旧命令调用量归零，TTCR 与成功率不退化，可回滚方案验证完成 |

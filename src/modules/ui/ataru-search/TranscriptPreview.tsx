@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { copyText, getSessionMessages, type SearchHit } from "@/modules/api/ataru";
 import type { Message } from "@/types";
 import { ConversationReader } from "@/views/Chat/ConversationReader";
-import { getSearchResultExcerpt, getSearchResultTitle, projectName, readableError } from "./utils";
+import { getSearchResultContextLabel, getSearchResultExcerpt, getSearchResultTitle, projectName, readableError } from "./utils";
 
 export function TranscriptPreview({
   hit,
@@ -70,6 +70,7 @@ export function TranscriptPreview({
   if (!hit || !open) return null;
 
   const title = getSearchResultTitle(hit, query);
+  const contextLabel = getSearchResultContextLabel(hit);
   const snippet = getSearchResultExcerpt(hit, query, title);
 
   return (
@@ -82,8 +83,10 @@ export function TranscriptPreview({
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
           <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-primary">命中上下文</p>
-          <h2 className="mt-1 line-clamp-2 font-serif text-base font-semibold">{title}</h2>
-          <p className="mt-1 truncate text-[11px] text-muted-foreground">{projectName(hit.projectPath)}</p>
+          <h2 className="mt-1 line-clamp-2 font-serif text-base font-semibold">{title || contextLabel}</h2>
+          <p className="mt-1 truncate text-[11px] text-muted-foreground">
+            {title ? `${contextLabel} · ` : ""}{projectName(hit.projectPath)}
+          </p>
         </div>
         <Button type="button" variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={onClose} aria-label="关闭上下文预览">
           <X className="h-4 w-4" />

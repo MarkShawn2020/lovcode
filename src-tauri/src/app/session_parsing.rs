@@ -411,17 +411,42 @@ pub(crate) fn parse_codex_rollout_messages_from_offset(
                     } else if is_codex_no_response_placeholder(&text) {
                         continue;
                     }
-                    let content_blocks = extract_content_blocks(&payload.get("content").cloned());
-                    messages.push(Message {
-                        uuid: format!("{}:{}", path.display(), line_number),
-                        role,
-                        content: text,
-                        timestamp,
-                        is_meta: false,
-                        is_tool: false,
-                        line_number,
-                        content_blocks,
-                    });
+                    let base_uuid = format!("{}:{}", path.display(), line_number);
+                    if let Some(blocks) = extract_content_blocks(&payload.get("content").cloned()) {
+                        let multiple = blocks.len() > 1;
+                        for (block_index, block) in blocks.into_iter().enumerate() {
+                            let content = content_blocks_to_text(std::slice::from_ref(&block));
+                            if content.trim().is_empty() {
+                                continue;
+                            }
+                            let uuid = if multiple {
+                                format!("{base_uuid}:block:{block_index}")
+                            } else {
+                                base_uuid.clone()
+                            };
+                            messages.push(Message {
+                                uuid,
+                                role: role.clone(),
+                                content,
+                                timestamp: timestamp.clone(),
+                                is_meta: false,
+                                is_tool: false,
+                                line_number,
+                                content_blocks: Some(vec![block]),
+                            });
+                        }
+                    } else {
+                        messages.push(Message {
+                            uuid: base_uuid,
+                            role,
+                            content: text,
+                            timestamp,
+                            is_meta: false,
+                            is_tool: false,
+                            line_number,
+                            content_blocks: None,
+                        });
+                    }
                 }
                 Some("function_call") => {
                     let Some(block) = codex_tool_use_block(&payload) else {
@@ -515,35 +540,54 @@ pub(crate) fn parse_claude_session_messages(path: &Path) -> Result<Vec<Message>,
                 if role != "user" && role != "assistant" {
                     continue;
                 }
-                let (content, is_tool) = extract_content_with_meta(&msg.content);
-                let content_blocks = extract_content_blocks(&msg.content);
-                let has_content_blocks = content_blocks
-                    .as_ref()
-                    .map(|blocks| !blocks.is_empty())
-                    .unwrap_or(false);
-                let display_content = if content.is_empty() {
-                    content_blocks
-                        .as_deref()
-                        .map(content_blocks_to_text)
-                        .unwrap_or_default()
-                } else {
-                    content
-                };
-                if role == "assistant" && is_no_response_placeholder(&display_content) {
-                    continue;
-                }
                 let is_meta = parsed.is_meta.unwrap_or(false);
-
-                if !display_content.is_empty() || has_content_blocks {
+                let timestamp = parsed.timestamp.unwrap_or_default();
+                let base_uuid = parsed.uuid.unwrap_or_default();
+                if let Some(blocks) = extract_content_blocks(&msg.content) {
+                    let multiple = blocks.len() > 1;
+                    for (block_index, block) in blocks.into_iter().enumerate() {
+                        let content = content_blocks_to_text(std::slice::from_ref(&block));
+                        if content.trim().is_empty()
+                            || (role == "assistant" && is_no_response_placeholder(&content))
+                        {
+                            continue;
+                        }
+                        let is_tool = matches!(
+                            block,
+                            ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. }
+                        );
+                        let uuid = if multiple {
+                            format!("{base_uuid}:block:{block_index}")
+                        } else {
+                            base_uuid.clone()
+                        };
+                        messages.push(Message {
+                            uuid,
+                            role: role.clone(),
+                            content,
+                            timestamp: timestamp.clone(),
+                            is_meta,
+                            is_tool,
+                            line_number: idx + 1,
+                            content_blocks: Some(vec![block]),
+                        });
+                    }
+                } else {
+                    let (content, is_tool) = extract_content_with_meta(&msg.content);
+                    if content.trim().is_empty()
+                        || (role == "assistant" && is_no_response_placeholder(&content))
+                    {
+                        continue;
+                    }
                     messages.push(Message {
-                        uuid: parsed.uuid.unwrap_or_default(),
+                        uuid: base_uuid,
                         role,
-                        content: display_content,
-                        timestamp: parsed.timestamp.unwrap_or_default(),
+                        content,
+                        timestamp,
                         is_meta,
                         is_tool,
                         line_number: idx + 1,
-                        content_blocks,
+                        content_blocks: None,
                     });
                 }
             }

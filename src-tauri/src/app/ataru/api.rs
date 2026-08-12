@@ -3,7 +3,7 @@ use super::sdk::{aggregate_candidates, SearchMode, SearchRequest, SearchResponse
 use crate::app::{get_semantic_search_status, search_chats, semantic_search_chats, SearchResult};
 use std::time::{Duration, Instant};
 
-const ATARU_SEARCH_CONTRACT_VERSION: u32 = 1;
+const ATARU_SEARCH_CONTRACT_VERSION: u32 = 2;
 const SEMANTIC_STATUS_TIMEOUT: Duration = Duration::from_millis(100);
 const SEMANTIC_SEARCH_TIMEOUT: Duration = Duration::from_millis(650);
 

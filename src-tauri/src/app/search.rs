@@ -166,7 +166,10 @@ const SEARCH_INDEX_BUILD_PENDING: u8 = 2;
 static SEARCH_INDEX_BUILD_STATE: std::sync::atomic::AtomicU8 =
     std::sync::atomic::AtomicU8::new(SEARCH_INDEX_BUILD_IDLE);
 
-const SEARCH_INDEX_MANIFEST_VERSION: u32 = 5;
+// Bump the manifest when indexed Turn semantics change. The next startup will
+// rebuild once so atomic content blocks, tool roles, and block identities are
+// backfilled.
+const SEARCH_INDEX_MANIFEST_VERSION: u32 = 7;
 const SEARCH_INDEX_EVENT: &str = "search-index:build";
 const REQUIRED_SEARCH_INDEX_FIELDS: &[&str] = &[
     "title",
@@ -1078,77 +1081,86 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                     if let Some(msg) = &parsed.message {
                         let role = msg.role.clone().unwrap_or_default();
                         if role == "user" || role == "assistant" {
-                            let (text_content, is_tool) = extract_content_with_meta(&msg.content);
                             let is_meta = parsed.is_meta.unwrap_or(false);
-                            let is_user_prompt =
-                                is_user_prompt_content(&role, is_tool, &text_content);
-                            let display_role =
-                                if is_ai_authored_user_content(&role, is_tool, &text_content) {
-                                    "assistant".to_string()
-                                } else {
-                                    role.clone()
-                                };
-                            if !is_meta && is_user_prompt && !text_content.is_empty() {
-                                round_index += 1;
-                                round_prompt = text_content.clone();
-                                round_timestamp = parsed.timestamp.clone().unwrap_or_default();
-                            }
+                            let timestamp = parsed.timestamp.clone().unwrap_or_default();
+                            let base_uuid = parsed.uuid.clone().unwrap_or_default();
+                            let mut run_started_in_record = false;
+                            for unit in search_message_units(&base_uuid, &msg.content) {
+                                let text_content = unit.content;
+                                let is_tool = unit.is_tool;
+                                let is_user_prompt =
+                                    is_user_prompt_content(&role, is_tool, &text_content);
+                                let display_role =
+                                    search_display_role(&role, is_tool, &text_content);
+                                if !is_meta
+                                    && is_user_prompt
+                                    && !run_started_in_record
+                                    && !text_content.is_empty()
+                                {
+                                    run_started_in_record = true;
+                                    round_index += 1;
+                                    round_prompt = text_content.clone();
+                                    round_timestamp = timestamp.clone();
+                                }
 
-                            if !is_meta
-                                && !text_content.is_empty()
-                                && !(role == "assistant"
-                                    && is_no_response_placeholder(&text_content))
-                            {
-                                let prompt_text = if is_user_prompt {
-                                    text_content.clone()
-                                } else {
-                                    String::new()
-                                };
-                                let assistant_text = if display_role == "assistant" {
-                                    text_content.clone()
-                                } else {
-                                    String::new()
-                                };
-                                let summary_text = session_summary.clone().unwrap_or_default();
+                                if !is_meta
+                                    && !text_content.is_empty()
+                                    && !(role == "assistant"
+                                        && is_no_response_placeholder(&text_content))
+                                {
+                                    let prompt_text = if is_user_prompt {
+                                        text_content.clone()
+                                    } else {
+                                        String::new()
+                                    };
+                                    let assistant_text = if display_role == "assistant" {
+                                        text_content.clone()
+                                    } else {
+                                        String::new()
+                                    };
+                                    let summary_text = session_summary.clone().unwrap_or_default();
 
-                                index_writer.add_document(doc!(
-                                        uuid_field => parsed.uuid.clone().unwrap_or_default(),
-                                        content_field => text_content.clone(),
-                                        title_field => session_title.clone(),
-                                        summary_field => summary_text.clone(),
-                                        last_prompt_field => session_last_prompt.clone(),
-                                        prompt_field => prompt_text.clone(),
-                                        user_field => prompt_text,
-                                        assistant_field => assistant_text,
-                                        project_field => source.display_path.clone(),
-                                        role_field => display_role,
-                                        project_id_field => source.project_id.clone(),
-                                        project_path_field => source.display_path.clone(),
-                                        session_id_field => source.session_id.clone(),
-                                        source_path_field => source_path.clone(),
-                                        session_summary_field => summary_text,
-                                        timestamp_field => parsed.timestamp.clone().unwrap_or_default(),
-                                        line_number_field => line_count as u64,
-                                        round_index_field => round_index as u64,
-                                        round_prompt_field => round_prompt.clone(),
-                                        round_timestamp_field => round_timestamp.clone(),
-                                    )).map_err(|e| e.to_string())?;
+                                    index_writer
+                                        .add_document(doc!(
+                                            uuid_field => unit.uuid,
+                                            content_field => text_content.clone(),
+                                            title_field => session_title.clone(),
+                                            summary_field => summary_text.clone(),
+                                            last_prompt_field => session_last_prompt.clone(),
+                                            prompt_field => prompt_text.clone(),
+                                            user_field => prompt_text,
+                                            assistant_field => assistant_text,
+                                            project_field => source.display_path.clone(),
+                                            role_field => display_role,
+                                            project_id_field => source.project_id.clone(),
+                                            project_path_field => source.display_path.clone(),
+                                            session_id_field => source.session_id.clone(),
+                                            source_path_field => source_path.clone(),
+                                            session_summary_field => summary_text,
+                                            timestamp_field => timestamp.clone(),
+                                            line_number_field => line_count as u64,
+                                            round_index_field => round_index as u64,
+                                            round_prompt_field => round_prompt.clone(),
+                                            round_timestamp_field => round_timestamp.clone(),
+                                        ))
+                                        .map_err(|e| e.to_string())?;
 
-                                session_message_count += 1;
-                                status.processed_bytes = session_start_bytes + session_bytes_seen;
-                                update_search_index_message_progress(
-                                    app.as_ref(),
-                                    &mut status,
-                                    Some(source.session_id.clone()),
-                                    Some(session_title.clone()),
-                                    Some(source.display_path.clone()),
-                                    false,
-                                );
+                                    session_message_count += 1;
+                                    status.processed_bytes =
+                                        session_start_bytes + session_bytes_seen;
+                                    update_search_index_message_progress(
+                                        app.as_ref(),
+                                        &mut status,
+                                        Some(source.session_id.clone()),
+                                        Some(session_title.clone()),
+                                        Some(source.display_path.clone()),
+                                        false,
+                                    );
+                                }
                             }
                         }
                     }
                 }
-
             }
         }
         status.processed_bytes = session_start_bytes + session_work_bytes;
@@ -1258,6 +1270,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
             .unwrap_or_default();
         let parsed_message_total = messages.len().max(1) as u64;
 
+        let mut last_prompt_line = None;
         for message in messages {
             if message.is_meta || message.content.trim().is_empty() {
                 continue;
@@ -1265,12 +1278,9 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
             let is_user_prompt =
                 is_user_prompt_content(&message.role, message.is_tool, &message.content);
             let display_role =
-                if is_ai_authored_user_content(&message.role, message.is_tool, &message.content) {
-                    "assistant".to_string()
-                } else {
-                    message.role.clone()
-                };
-            if is_user_prompt && !message.is_meta {
+                search_display_role(&message.role, message.is_tool, &message.content);
+            if is_user_prompt && !message.is_meta && last_prompt_line != Some(message.line_number) {
+                last_prompt_line = Some(message.line_number);
                 round_index += 1;
                 round_prompt = message.content.clone();
                 round_timestamp = message.timestamp.clone();
@@ -1483,11 +1493,11 @@ fn normalize_scope_name(scope: &str) -> String {
 
 fn canonical_search_field(scope: &str, schema: &Schema) -> Option<&'static str> {
     let field = match normalize_scope_name(scope).as_str() {
-        "content" | "body" | "message" | "messages" | "text" => "content",
+        "content" | "body" | "message" | "messages" | "text" | "turn" => "content",
         "title" | "name" => "title",
         "summary" => "summary",
         "lastprompt" | "latestprompt" => "last_prompt",
-        "round" | "roundprompt" | "turn" | "turnprompt" => "round_prompt",
+        "run" | "runprompt" | "round" | "roundprompt" => "round_prompt",
         "prompt" | "prompts" | "user" | "userprompt" | "userprompts" | "question" => "prompt",
         "ai" | "assistant" | "answer" | "response" | "reply" => "assistant",
         "project" | "projectpath" | "path" | "cwd" | "directory" => "project",
@@ -2099,7 +2109,7 @@ pub(crate) struct SemanticSearchStatus {
     pub(crate) error: Option<String>,
 }
 
-const EMBEDDING_SEARCH_INDEX_VERSION: u32 = 2;
+const EMBEDDING_SEARCH_INDEX_VERSION: u32 = 3;
 const DEFAULT_EMBEDDING_SEARCH_STORE_KIND: SemanticSearchStoreKind =
     SemanticSearchStoreKind::LanceDb;
 const LANCEDB_SEMANTIC_ENTRIES_TABLE: &str = "semantic_entries";
@@ -3363,82 +3373,83 @@ fn collect_claude_embedding_candidates(
             continue;
         }
 
-        let (text_content, is_tool) = extract_content_with_meta(&msg.content);
         let is_meta = parsed.is_meta.unwrap_or(false);
-        let is_user_prompt = is_user_prompt_content(&role, is_tool, &text_content);
-        let display_role = if is_ai_authored_user_content(&role, is_tool, &text_content) {
-            "assistant".to_string()
-        } else {
-            role.clone()
-        };
-
-        if !is_meta && is_user_prompt && !text_content.is_empty() {
-            round_index += 1;
-            round_prompt = text_content.clone();
-            round_timestamp = parsed.timestamp.clone().unwrap_or_default();
-        }
-
-        if is_meta
-            || text_content.trim().is_empty()
-            || (role == "assistant" && is_no_response_placeholder(&text_content))
-        {
-            continue;
-        }
-
-        let chunk_text = join_embedding_fields(&[
-            ("title", session_title.clone()),
-            ("summary", summary_text.clone()),
-            ("last prompt", session_last_prompt.clone()),
-            ("project", source.display_path.clone()),
-            ("round prompt", round_prompt.clone()),
-            (display_role.as_str(), text_content.clone()),
-        ]);
         let timestamp = parsed.timestamp.clone().unwrap_or_default();
-        push_embedding_candidate(
-            &mut candidates,
-            &mut seen_texts,
-            EmbeddingSearchCandidate {
-                source_path: source_path.clone(),
-                source_kind: SearchIndexSourceKind::Claude.as_str().to_string(),
-                source_size: source.size,
-                source_mtime: source.mtime,
-                text: chunk_text,
-                result: SearchResult {
-                    uuid: parsed.uuid.clone().unwrap_or_default(),
-                    content: text_content,
-                    role: display_role,
-                    line_number: line_idx + 1,
-                    project_id: source.project_id.clone(),
-                    project_path: source.display_path.clone(),
-                    session_id: source.session_id.clone(),
-                    session_summary: session_summary.clone(),
-                    title: if session_title.is_empty() {
-                        None
-                    } else {
-                        Some(session_title.clone())
+        let base_uuid = parsed.uuid.clone().unwrap_or_default();
+        let mut run_started_in_record = false;
+        for unit in search_message_units(&base_uuid, &msg.content) {
+            let text_content = unit.content;
+            let is_user_prompt = is_user_prompt_content(&role, unit.is_tool, &text_content);
+            let display_role = search_display_role(&role, unit.is_tool, &text_content);
+
+            if !is_meta && is_user_prompt && !run_started_in_record && !text_content.is_empty() {
+                run_started_in_record = true;
+                round_index += 1;
+                round_prompt = text_content.clone();
+                round_timestamp = timestamp.clone();
+            }
+
+            if is_meta
+                || text_content.trim().is_empty()
+                || (role == "assistant" && is_no_response_placeholder(&text_content))
+            {
+                continue;
+            }
+
+            let chunk_text = join_embedding_fields(&[
+                ("title", session_title.clone()),
+                ("summary", summary_text.clone()),
+                ("last prompt", session_last_prompt.clone()),
+                ("project", source.display_path.clone()),
+                ("run prompt", round_prompt.clone()),
+                (display_role.as_str(), text_content.clone()),
+            ]);
+            push_embedding_candidate(
+                &mut candidates,
+                &mut seen_texts,
+                EmbeddingSearchCandidate {
+                    source_path: source_path.clone(),
+                    source_kind: SearchIndexSourceKind::Claude.as_str().to_string(),
+                    source_size: source.size,
+                    source_mtime: source.mtime,
+                    text: chunk_text,
+                    result: SearchResult {
+                        uuid: unit.uuid,
+                        content: text_content,
+                        role: display_role,
+                        line_number: line_idx + 1,
+                        project_id: source.project_id.clone(),
+                        project_path: source.display_path.clone(),
+                        session_id: source.session_id.clone(),
+                        session_summary: session_summary.clone(),
+                        title: if session_title.is_empty() {
+                            None
+                        } else {
+                            Some(session_title.clone())
+                        },
+                        summary: session_summary.clone(),
+                        last_prompt: if session_last_prompt.is_empty() {
+                            None
+                        } else {
+                            Some(session_last_prompt.clone())
+                        },
+                        round_index,
+                        round_prompt: if round_prompt.is_empty() {
+                            None
+                        } else {
+                            Some(round_prompt.clone())
+                        },
+                        round_timestamp: if round_timestamp.is_empty() {
+                            None
+                        } else {
+                            Some(round_timestamp.clone())
+                        },
+                        timestamp: timestamp.clone(),
+                        score: 0.0,
                     },
-                    summary: session_summary.clone(),
-                    last_prompt: if session_last_prompt.is_empty() {
-                        None
-                    } else {
-                        Some(session_last_prompt.clone())
-                    },
-                    round_index,
-                    round_prompt: if round_prompt.is_empty() {
-                        None
-                    } else {
-                        Some(round_prompt.clone())
-                    },
-                    round_timestamp: if round_timestamp.is_empty() {
-                        None
-                    } else {
-                        Some(round_timestamp.clone())
-                    },
-                    timestamp,
-                    score: 0.0,
                 },
-            },
-        );
+            );
+        }
     }
 
     candidates
@@ -3502,6 +3513,7 @@ fn collect_codex_embedding_candidates(source: &CodexSearchSource) -> Vec<Embeddi
         );
     }
 
+    let mut last_prompt_line = None;
     for message in messages {
         if candidates.len() >= EMBEDDING_SEARCH_MAX_CHUNKS_PER_SESSION {
             break;
@@ -3511,13 +3523,9 @@ fn collect_codex_embedding_candidates(source: &CodexSearchSource) -> Vec<Embeddi
         }
         let is_user_prompt =
             is_user_prompt_content(&message.role, message.is_tool, &message.content);
-        let display_role =
-            if is_ai_authored_user_content(&message.role, message.is_tool, &message.content) {
-                "assistant".to_string()
-            } else {
-                message.role.clone()
-            };
-        if is_user_prompt {
+        let display_role = search_display_role(&message.role, message.is_tool, &message.content);
+        if is_user_prompt && last_prompt_line != Some(message.line_number) {
+            last_prompt_line = Some(message.line_number);
             round_index += 1;
             round_prompt = message.content.clone();
             round_timestamp = message.timestamp.clone();
@@ -4256,5 +4264,128 @@ pub(crate) fn extract_content_with_meta(value: &Option<serde_json::Value>) -> (S
             (text, has_tool)
         }
         _ => (String::new(), false),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SearchMessageUnit {
+    uuid: String,
+    content: String,
+    is_tool: bool,
+}
+
+/// Split one provider transcript record into the smallest searchable units.
+/// A Claude content array may contain ordinary text, tool calls, tool results,
+/// and thinking in one JSONL line; keeping those blocks together makes a Turn
+/// look like a whole response again. Each block therefore receives its own
+/// stable index identity while retaining the source line for context lookup.
+fn search_message_units(
+    base_uuid: &str,
+    value: &Option<serde_json::Value>,
+) -> Vec<SearchMessageUnit> {
+    let Some(blocks) = extract_content_blocks(value) else {
+        let (content, is_tool) = extract_content_with_meta(value);
+        return if content.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![SearchMessageUnit {
+                uuid: base_uuid.to_string(),
+                content,
+                is_tool,
+            }]
+        };
+    };
+
+    let multiple = blocks.len() > 1;
+    let units = blocks
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let content = content_blocks_to_text(std::slice::from_ref(&block));
+            let is_tool = matches!(
+                block,
+                ContentBlock::ToolUse { .. } | ContentBlock::ToolResult { .. }
+            );
+            if content.trim().is_empty() {
+                return None;
+            }
+            let uuid = if multiple {
+                format!("{base_uuid}:block:{index}")
+            } else {
+                base_uuid.to_string()
+            };
+            Some(SearchMessageUnit {
+                uuid,
+                content,
+                is_tool,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if units.is_empty() {
+        let (content, is_tool) = extract_content_with_meta(value);
+        if content.trim().is_empty() {
+            Vec::new()
+        } else {
+            vec![SearchMessageUnit {
+                uuid: base_uuid.to_string(),
+                content,
+                is_tool,
+            }]
+        }
+    } else {
+        units
+    }
+}
+
+pub(crate) fn search_display_role(role: &str, is_tool: bool, text: &str) -> String {
+    if is_tool {
+        "tool".to_string()
+    } else if is_ai_authored_user_content(role, is_tool, text) {
+        "assistant".to_string()
+    } else {
+        role.to_string()
+    }
+}
+
+#[cfg(test)]
+mod search_message_units_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn splits_mixed_content_blocks_into_atomic_turns() {
+        let value = Some(json!([
+            {"type": "text", "text": "先查看项目"},
+            {"type": "tool_use", "id": "tool-1", "name": "Read", "input": {"file_path": "src/main.ts"}},
+            {"type": "tool_result", "tool_use_id": "tool-1", "content": "文件内容"}
+        ]));
+
+        let units = search_message_units("message-1", &value);
+
+        assert_eq!(units.len(), 3);
+        assert_eq!(units[0].uuid, "message-1:block:0");
+        assert_eq!(units[0].content, "先查看项目");
+        assert!(!units[0].is_tool);
+        assert_eq!(units[1].uuid, "message-1:block:1");
+        assert!(units[1].is_tool);
+        assert_eq!(units[2].uuid, "message-1:block:2");
+        assert!(units[2].is_tool);
+    }
+
+    #[test]
+    fn keeps_single_text_block_identity_compatible() {
+        let value = Some(json!([{"type": "text", "text": "一条消息"}]));
+
+        let units = search_message_units("message-1", &value);
+
+        assert_eq!(
+            units,
+            vec![SearchMessageUnit {
+                uuid: "message-1".to_string(),
+                content: "一条消息".to_string(),
+                is_tool: false,
+            }]
+        );
     }
 }

@@ -9,6 +9,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   BookOpenText,
   FolderKanban,
+  GitBranch,
   Layers3,
   MessageSquareText,
   Search,
@@ -39,7 +40,7 @@ const RECENT_QUERY_KEY = "ataru:recentQueries";
 const LEGACY_RECENT_QUERY_KEY = "lovcode:search-overlay:recent-searches";
 const IME_ENTER_GUARD_MS = 160;
 const RESULT_LIMIT = 40;
-const ALL_LEVELS: SearchLevel[] = ["project", "session", "turn"];
+const ALL_LEVELS: SearchLevel[] = ["project", "session", "run", "turn"];
 
 type SearchScope = SearchLevel | "all";
 
@@ -49,16 +50,17 @@ const SCOPES: Array<{
   description: string;
   icon: typeof MessageSquareText;
 }> = [
-  { value: "all", label: "ALL", description: "依次召回项目、会话与对话回合", icon: Layers3 },
+  { value: "all", label: "ALL", description: "依次召回项目、会话、执行与原子消息", icon: Layers3 },
   { value: "project", label: "Project", description: "跨会话归并项目", icon: FolderKanban },
-  { value: "session", label: "Session", description: "汇总整段会话", icon: BookOpenText },
-  { value: "turn", label: "Turn", description: "直接命中一轮问答", icon: MessageSquareText },
+  { value: "session", label: "Session", description: "汇总同一会话中的多次执行", icon: BookOpenText },
+  { value: "run", label: "Run", description: "聚合一次完整执行中的多个 Turn", icon: GitBranch },
+  { value: "turn", label: "Turn", description: "直接命中一条原子消息或工具记录", icon: MessageSquareText },
 ];
 
 const MODES: SearchMode[] = ["auto", "keyword", "hybrid", "semantic"];
 
 function isSearchScope(value: string | null): value is SearchScope {
-  return value === "all" || value === "turn" || value === "session" || value === "project";
+  return value === "all" || value === "turn" || value === "run" || value === "session" || value === "project";
 }
 
 function isSearchMode(value: string | null): value is SearchMode {
@@ -309,7 +311,7 @@ export function AtaruSearchPage() {
     const params = new URLSearchParams({ projectId: hit.projectId, sessionId: hit.sessionId });
     if (hit.messageId) params.set("messageId", hit.messageId);
     if (hit.lineNumber) params.set("lineNumber", String(hit.lineNumber));
-    if (hit.turnIndex) params.set("roundIndex", String(hit.turnIndex));
+    if (hit.runIndex) params.set("roundIndex", String(hit.runIndex));
     params.set("q", response?.query ?? query);
     navigate(`/workbench?${params.toString()}`);
   }, [navigate, query, response?.query]);

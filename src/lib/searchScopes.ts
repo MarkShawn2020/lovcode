@@ -4,7 +4,7 @@ export type SearchScope =
   | "content"
   | "title"
   | "summary"
-  | "round"
+  | "run"
   | "prompt"
   | "assistant"
   | "project"
@@ -40,10 +40,12 @@ const SEARCH_SCOPE_ALIASES: Record<string, SearchScope> = {
   name: "title",
   title: "title",
   summary: "summary",
-  round: "round",
-  roundprompt: "round",
-  turn: "round",
-  turnprompt: "round",
+  run: "run",
+  runprompt: "run",
+  round: "run",
+  roundprompt: "run",
+  turn: "content",
+  turnprompt: "run",
   latestprompt: "prompt",
   lastprompt: "prompt",
   prompt: "prompt",
@@ -383,7 +385,7 @@ function scopedSessionValues(session: Session, scope: SearchScope) {
     case "source":
       return [session.source];
     case "content":
-    case "round":
+    case "run":
     case "assistant":
       return [];
   }
@@ -437,11 +439,11 @@ function termMatchesMetadata(
 
   const canMatchContent = term.scope === null
     ? parsed.defaultScopes.length === 0
-      || parsed.defaultScopes.some((scope) => scope === "content" || scope === "round" || scope === "assistant")
-    : term.scope === "content" || term.scope === "round" || term.scope === "assistant";
+      || parsed.defaultScopes.some((scope) => scope === "content" || scope === "run" || scope === "assistant")
+    : term.scope === "content" || term.scope === "run" || term.scope === "assistant";
 
   const matched = scopes.some((scope) => {
-    if (scope === "content" || scope === "round" || scope === "assistant") return false;
+    if (scope === "content" || scope === "run" || scope === "assistant") return false;
     return termMatchesScope(session, scope, term.text);
   });
 

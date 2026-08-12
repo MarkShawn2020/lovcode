@@ -38,7 +38,7 @@ Ataru 把这些已经发生过的对话变成本地可检索的记忆层：
 
 - 从 Claude、Codex 等本地会话来源建立统一索引。
 - 用关键词、字段、短语或自然语言描述找回相关上下文。
-- 在 `Turn`、`Session`、`Project` 三种粒度之间切换。
+- 在 `Turn`、`Run`、`Session`、`Project` 四种粒度之间切换。
 - 从命中片段回到原始会话、消息和行号，而不是只展示一段截断摘要。
 - 默认离线运行；语义检索是可选增强，未配置或超时会清晰降级到关键词检索。
 
@@ -52,8 +52,8 @@ Ataru 的目标不是管理正在运行的 Agent，而是让过去的工作重�
 | 增量索引 | 新消息写入后自动追赶索引，不需要每次从头扫描全部历史。 |
 | 中文友好全文检索 | Tantivy + Jieba 同时覆盖中文、代码、域名、包名和错误串。 |
 | 混合召回 | 关键词适合精确匹配，自然语言问题可在语义索引可用时使用混合召回。 |
-| 层级聚合 | 同一命中可以按回合、会话或项目汇总，减少重复结果。 |
-| 上下文回读 | 保留稳定的 Project/Session/Turn/Message 标识、片段、角色、时间和行号。 |
+| 层级聚合 | 同一命中可以按 Turn、Run、Session 或 Project 汇总，减少重复结果。 |
+| 上下文回读 | 保留稳定的 Project/Session/Run/Turn 标识、片段、角色、时间和行号。 |
 | Agent 接入 | GUI、CLI 和 Agent Skill 共用同一套搜索契约，不把检索逻辑复制到各个客户端。 |
 
 ## Product path
@@ -64,7 +64,7 @@ Ataru 的主路径只有两步：把本地会话整理成可检索的记忆，�
 
 <img src="docs/images/search-recall.png" alt="Ataru 搜索召回路径示意图" width="100%">
 
-<p align="center"><sub>从一句自然语言问题，定位到 Turn、Session 或 Project，再回读原始上下文。</sub></p>
+<p align="center"><sub>从一句自然语言问题，定位到 Turn、Run、Session 或 Project，再回读原始上下文。</sub></p>
 
 ### 本地索引
 
@@ -159,8 +159,8 @@ flowchart TB
 
     subgraph PUBLIC["Ataru public boundary"]
         API["api\nvalidation · orchestration · fallback"]
-        SDK["sdk\nv1 request/response · stable IDs"]
-        AGG["Turn / Session / Project\naggregation"]
+        SDK["sdk\nv2 request/response · stable IDs"]
+        AGG["Turn / Run / Session / Project\naggregation"]
     end
 
     subgraph CORE["Local search core"]
@@ -211,10 +211,10 @@ flowchart TB
 **负责：**
 
 - `SearchRequest` / `SearchResponse` / `SearchHit`。
-- `SearchLevel = turn | session | project`。
+- `SearchLevel = turn | run | session | project`。
 - `SearchMode = auto | keyword | semantic | hybrid`。
 - 稳定实体 ID、排序信号、warnings 和错误边界。
-- Turn/Session/Project 聚合规则。
+- Turn/Run/Session/Project 聚合规则。
 
 **不负责：** Tauri 命令、文件系统、HTTP、具体索引实现或 UI 状态。`sdk` 是依赖图中最底层的公开语言层，不能反向引用 `api` 或 `ai`。
 
@@ -292,7 +292,7 @@ flowchart TB
 **代码：** `src-tauri/src/app/cli.rs`、`src-tauri/src/app/run.rs`
 
 CLI 在 Tauri 初始化之前处理 `search` 请求，适合 Agent wrapper、脚本和 CI。它支持
-`search <query> --json [--limit N] [--level turn|session|project]`，以及按稳定身份读取完整会话：
+`search <query> --json [--limit N] [--level turn|run|session|project]`，以及按稳定身份读取完整会话：
 
 ```bash
 ataru session read \
@@ -304,13 +304,13 @@ ataru session read \
 `session read` 输出当前页面可见的消息 JSON，并按源文件顺序保留 `uuid`、`line_number`、角色和正文。
 档案阅读器的“复制给 Agent”还会复制 `ataru-agent-context/v1`，其中包含同一组稳定 ID、真实源文件路径、CLI 参数、Tauri command 和当前页面消息快照。
 
-新的聚合查询使用 Ataru v1 response。无界面调用方应先完成 `ensure_index`，不要在索引缺失时重复提交相同查询。
+新的聚合查询使用 Ataru v2 response。无界面调用方应先完成 `ensure_index`，不要在索引缺失时重复提交相同查询。
 
 ### 10. Observability & compatibility
 
 **可观测性：** 记录本地 request ID、阶段耗时、候选数、结果数、索引版本和 fallback code，不记录原始查询、会话正文、完整路径或密钥。
 
-**兼容性：** 原始数据格式、既有 Tauri commands、JSON 字段和稳定映射 ID 通过 adapter 保留；v1 允许增加可选字段和 warning，不随意改变已有实体 ID。
+**兼容性：** 原始数据格式、既有 Tauri commands、JSON 字段和稳定映射 ID 通过 adapter 保留；v2 允许增加可选字段和 warning，不随意改变已有实体 ID。
 
 ## Search and indexing lifecycle
 
@@ -319,7 +319,7 @@ ataru session read \
 ```text
 transcript write
   → source adapter
-  → normalized Project / Session / Turn / Message
+  → normalized Project / Session / Run / Turn
   → single-writer queue
   → Tantivy commit + manifest update
   → optional vector index catch-up
@@ -334,7 +334,7 @@ Skill / CLI / UI
   → api validates request and deadline
   → keyword and/or semantic recall
   → RRF fusion
-  → Turn / Session / Project aggregation
+  → Turn / Run / Session / Project aggregation
   → stable hit + snippet + source location
 ```
 
@@ -342,7 +342,8 @@ Skill / CLI / UI
 
 | 粒度 | 聚合键 | 最适合 |
 | --- | --- | --- |
-| `turn` | `project + session + turn` | 找到“当时具体怎么解决的” |
+| `turn` | `project + session + message` | 找到“当时具体哪条消息或工具记录” |
+| `run` | `project + session + run` | 找到“当次完整执行如何完成” |
 | `session` | `project + session` | 回看一次完整讨论 |
 | `project` | `project` | 了解一个项目的历史决策与演进 |
 

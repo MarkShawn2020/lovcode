@@ -98,7 +98,7 @@ export function cleanMessageText(value: string): string {
     .trim();
 }
 
-const SEARCH_FIELD_PREFIX = /\b(?:title|project|turn|session|assistant|user|summary|prompt|content|path):/gi;
+const SEARCH_FIELD_PREFIX = /\b(?:title|project|turn|run|round|session|assistant|user|summary|prompt|content|path):/gi;
 
 /** Keep query parsing consistent between snippet extraction and <mark> rendering. */
 export function searchTerms(query: string): string[] {
@@ -112,14 +112,6 @@ export function searchTerms(query: string): string[] {
   )]
     .sort((left, right) => right.length - left.length)
     .slice(0, 12);
-}
-
-export function isUntitledTurn(value: string | null | undefined): boolean {
-  const normalized = cleanMessageText(value ?? "")
-    .replace(/[.…]+$/g, "")
-    .trim()
-    .toLocaleLowerCase();
-  return ["untitled turn", "untitled", "未命名回合", "未命名对话"].includes(normalized);
 }
 
 function firstSearchMatch(value: string, query: string): { index: number; length: number } | null {
@@ -151,7 +143,8 @@ export function cleanSearchExcerpt(value: string, query: string, maxChars = 420)
 }
 
 /**
- * Titles should identify the turn, not repeat an attachment or workspace path.
+ * Titles identify Run/Session/Project results. Turn is an atomic record and
+ * intentionally has no title.
  * Keep path searches intact, but hide path-shaped noise for normal language
  * queries and fall back to a short, explicit label when nothing remains.
  */
@@ -162,15 +155,23 @@ export function cleanSearchTitle(value: string, query: string, fallback = "未�
 
 export function getSearchResultTitle(hit: SearchHit, query: string): string {
   if (hit.level === "turn") {
-    const prompt = cleanSearchTitle(hit.turnPrompt ?? "", query, "");
-    if (prompt && !isUntitledTurn(prompt)) return prompt;
-    return "未命名回合";
+    return "";
+  }
+
+  if (hit.level === "run") {
+    return cleanSearchTitle(
+      hit.runPrompt ?? hit.title,
+      query,
+      `Run ${hit.runIndex ?? ""}`.trim(),
+    );
   }
 
   return cleanSearchTitle(
     hit.sessionTitle ?? hit.title,
     query,
-    hit.level === "project" ? "未命名项目" : "未命名会话",
+    hit.level === "project"
+      ? "Project"
+      : `Session ${hit.sessionId?.slice(0, 8) ?? ""}`.trim(),
   );
 }
 
@@ -180,20 +181,41 @@ export function getSearchResultExcerpt(
   title = getSearchResultTitle(hit, query),
 ): string {
   const candidates = hit.level === "turn"
-    ? [hit.snippet, hit.turnPrompt]
-    : [hit.snippet, hit.turnPrompt, hit.sessionTitle, hit.title];
+    ? [hit.snippet]
+    : hit.level === "run"
+      ? [hit.snippet, hit.runPrompt]
+      : [hit.snippet, hit.runPrompt, hit.sessionTitle, hit.title];
   const normalizedTitle = title.trim().toLocaleLowerCase();
   const excerpt = candidates
     .map((value) => cleanSearchExcerpt(value ?? "", query))
     .find((value) => {
-      if (!value || isUntitledTurn(value)) return false;
+      if (!value) return false;
       return value.trim().toLocaleLowerCase() !== normalizedTitle;
     });
   return excerpt || (
     hit.level === "turn"
-      ? "打开上下文查看这一轮对话"
-      : "打开上下文查看命中内容"
+      ? "这条 Turn 没有可显示的正文"
+      : hit.level === "run"
+        ? "打开上下文查看这次 Run"
+        : "打开上下文查看命中内容"
   );
+}
+
+export function getSearchResultRoleLabel(role: string | null | undefined): string {
+  if (role === "user") return "用户消息";
+  if (role === "assistant") return "AI 回复";
+  if (role === "tool") return "工具调用";
+  return "原子消息";
+}
+
+export function getSearchResultContextLabel(hit: SearchHit): string {
+  if (hit.level === "turn") {
+    const run = hit.runIndex ? ` · Run ${hit.runIndex}` : "";
+    return `Turn · ${getSearchResultRoleLabel(hit.role)}${run}`;
+  }
+  if (hit.level === "run") return `Run ${hit.runIndex ?? ""}`.trim();
+  if (hit.level === "session") return "Session";
+  return "Project";
 }
 
 /** Preserve intentional code indentation while removing transcript-wide padding. */

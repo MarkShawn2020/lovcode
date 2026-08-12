@@ -15,6 +15,7 @@ pub(crate) struct RankedSearchCandidate {
 pub(crate) enum SearchLevel {
     #[default]
     Turn,
+    Run,
     Session,
     Project,
 }
@@ -71,9 +72,9 @@ pub(crate) struct SearchHit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_index: Option<usize>,
+    pub run_index: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub turn_prompt: Option<String>,
+    pub run_prompt: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,6 +119,14 @@ pub(crate) fn aggregate_candidates(
 
     for candidate in candidates {
         let result = &candidate.result;
+        // Session-level semantic candidates use line 0 and round 0. They are
+        // useful evidence for Session/Project recall, but are not atomic Turn
+        // or Run records and must not appear at either level.
+        if (level == SearchLevel::Turn && result.line_number == 0)
+            || (level == SearchLevel::Run && result.round_index == 0)
+        {
+            continue;
+        }
         let key = aggregation_key(
             level,
             candidate.result.session_id.as_str(),
@@ -138,8 +147,8 @@ pub(crate) fn aggregate_candidates(
                     group.hit.snippet = next_hit.snippet.clone();
                     group.hit.session_id = next_hit.session_id.clone();
                     group.hit.session_title = next_hit.session_title.clone();
-                    group.hit.turn_index = next_hit.turn_index;
-                    group.hit.turn_prompt = next_hit.turn_prompt.clone();
+                    group.hit.run_index = next_hit.run_index;
+                    group.hit.run_prompt = next_hit.run_prompt.clone();
                     group.hit.message_id = next_hit.message_id.clone();
                     group.hit.line_number = next_hit.line_number;
                     group.hit.role = next_hit.role.clone();
@@ -197,13 +206,11 @@ fn aggregation_key(
         result.project_id.as_str()
     };
     match level {
-        SearchLevel::Turn if round_index > 0 => {
-            format!("turn:{project_scope}:{session_id}:{round_index}")
-        }
         SearchLevel::Turn => format!(
             "message:{project_scope}:{session_id}:{}:{}",
             result.uuid, result.line_number
         ),
+        SearchLevel::Run => format!("run:{project_scope}:{session_id}:{round_index}"),
         SearchLevel::Session => format!("session:{project_scope}:{session_id}"),
         SearchLevel::Project => format!("project:{project_scope}"),
     }
@@ -223,13 +230,13 @@ fn search_hit_from_candidate(
         .or_else(|| result.last_prompt.clone())
         .filter(|value| !value.trim().is_empty());
     let title = match level {
-        SearchLevel::Turn => result
+        SearchLevel::Turn => String::new(),
+        SearchLevel::Run => result
             .round_prompt
             .as_deref()
             .map(|value| truncate_text(value, 128))
             .filter(|value| !value.is_empty())
-            .or_else(|| session_title.clone())
-            .unwrap_or_else(|| "Untitled turn".to_string()),
+            .unwrap_or_else(|| format!("Run {}", result.round_index)),
         SearchLevel::Session => session_title
             .clone()
             .unwrap_or_else(|| format!("Session {}", short_id(&result.session_id))),
@@ -237,7 +244,7 @@ fn search_hit_from_candidate(
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "Unknown project".to_string()),
     };
-    let snippet = if result.content.trim().is_empty() {
+    let snippet = if result.content.trim().is_empty() && level != SearchLevel::Turn {
         result
             .round_prompt
             .as_deref()
@@ -258,8 +265,8 @@ fn search_hit_from_candidate(
         project_path: result.project_path.clone(),
         session_id: Some(result.session_id.clone()).filter(|value| !value.is_empty()),
         session_title,
-        turn_index: (result.round_index > 0).then_some(result.round_index),
-        turn_prompt: result
+        run_index: (result.round_index > 0).then_some(result.round_index),
+        run_prompt: result
             .round_prompt
             .clone()
             .filter(|value| !value.trim().is_empty()),
@@ -343,7 +350,7 @@ mod tests {
     }
 
     #[test]
-    fn aggregates_message_candidates_at_each_recall_level() {
+    fn aggregates_atomic_turns_and_runs_at_each_recall_level() {
         let candidates = vec![
             candidate(result("s1", 1, "m1", "p1"), 0.9),
             candidate(result("s1", 1, "m2", "p1"), 0.8),
@@ -351,8 +358,18 @@ mod tests {
         ];
 
         let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20);
-        assert_eq!(turns.len(), 2);
-        assert_eq!(turns[0].match_count, 2);
+        assert_eq!(turns.len(), 3);
+        assert!(turns.iter().all(|hit| hit.match_count == 1));
+
+        let runs = aggregate_candidates(candidates.clone(), SearchLevel::Run, 20);
+        assert_eq!(runs.len(), 2);
+        assert_eq!(
+            runs.iter()
+                .find(|hit| hit.run_index == Some(1))
+                .unwrap()
+                .match_count,
+            2
+        );
 
         let sessions = aggregate_candidates(candidates.clone(), SearchLevel::Session, 20);
         assert_eq!(sessions.len(), 2);
@@ -373,7 +390,22 @@ mod tests {
         let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20);
         assert_eq!(turns.len(), 2);
 
+        let runs = aggregate_candidates(candidates.clone(), SearchLevel::Run, 20);
+        assert_eq!(runs.len(), 2);
+
         let sessions = aggregate_candidates(candidates, SearchLevel::Session, 20);
         assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn run_level_skips_candidates_without_a_user_prompt() {
+        let candidates = vec![candidate(result("s1", 0, "m0", "p1"), 0.9)];
+
+        let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].run_index, None);
+
+        let runs = aggregate_candidates(candidates, SearchLevel::Run, 20);
+        assert!(runs.is_empty());
     }
 }

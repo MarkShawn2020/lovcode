@@ -30,6 +30,17 @@ Reference complete design guide: file:///Users/mark/@lovstudio/design/design-gui
 
 Ataru is a local-first AI conversation recall desktop app built with Tauri 2 + React 19 + TypeScript. It focuses on searching and recovering useful context from AI coding tool histories while retaining the legacy Lovcode CLI as a compatibility alias and preserving storage contracts.
 
+## Search Domain Model
+
+Ataru 的公开搜索层级固定为 `turn → run → session → project`：
+
+- `Turn`：最小原子 transcript item，例如一条用户消息、AI 回复、工具调用或工具结果；Turn 不拥有标题。
+- `Run`：一次完整执行，从用户提出问题开始，到 AI 完成最终回应结束，包含多个 Turn。底层索引继续使用兼容字段 `round_index` / `round_prompt`，公开 API 使用 `runIndex` / `runPrompt`。
+- `Session`：同一来源的一段连续对话，包含多个 Run。
+- `Project`：一个工作目录及其历史 Session 集合。
+
+UI 和搜索契约不得把 `Turn` 展示成“用户问题 + AI 完整回复”；那是 `Run` 的语义。Turn 结果应展示消息类型、正文、命中位置和所属 Run 上下文；Run 结果才可以使用用户首句作为标题。禁止为 Turn 或 Run 使用 `Untitled turn`、`未命名回合` 之类的标题占位。
+
 ## Commands
 
 ```bash

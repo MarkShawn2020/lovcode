@@ -1,4 +1,4 @@
-export const SEARCH_LEVELS = ["turn", "session", "project"] as const;
+export const SEARCH_LEVELS = ["turn", "run", "session", "project"] as const;
 
 export type SearchLevel = (typeof SEARCH_LEVELS)[number];
 
@@ -29,8 +29,8 @@ export interface SearchHit {
   projectPath: string;
   sessionId?: string;
   sessionTitle?: string;
-  turnIndex?: number;
-  turnPrompt?: string;
+  runIndex?: number;
+  runPrompt?: string;
   messageId?: string;
   lineNumber?: number;
   role?: string;
