@@ -146,8 +146,8 @@ input, button, a, select, textarea {
 }
 
 /* The result list owns the full width when the context pane is dismissed.
-   Keeping both tracks mounted lets the grid, border and content ease out
-   together instead of snapping the layout. */
+   The grid keeps a zero-width second track so opening the pane can still ease
+   the main result area between the two layouts. */
 .ataru-search-grid {
   transition: grid-template-columns 240ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }

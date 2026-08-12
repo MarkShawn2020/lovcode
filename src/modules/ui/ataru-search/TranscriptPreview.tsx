@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { BookOpenText, Check, Copy, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import { copyText, getSessionMessages, type SearchHit } from "@/modules/api/ataru";
 import type { Message } from "@/types";
 import { ConversationReader } from "@/views/Chat/ConversationReader";
@@ -66,7 +65,9 @@ export function TranscriptPreview({
     return messages.slice(Math.max(0, anchor - 4), Math.min(messages.length, anchor + 8));
   }, [hit, messages]);
 
-  if (!hit) return null;
+  // The first search hit is available for result rendering, but the context pane
+  // must enter the layout only after the user explicitly opens it.
+  if (!hit || !open) return null;
 
   const title = cleanSearchTitle(
     hit.level === "turn" ? hit.turnPrompt ?? hit.title : hit.sessionTitle ?? hit.title,
@@ -79,12 +80,8 @@ export function TranscriptPreview({
     <section
       data-ataru-preview="true"
       data-preview-open={open}
-      className={cn(
-        "hidden min-h-0 min-w-0 flex-col overflow-hidden border-l border-border bg-card transition-[opacity,transform] duration-200 md:flex",
-        !open && "pointer-events-none translate-x-3 opacity-0",
-      )}
+      className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-l border-border bg-card md:flex"
       aria-label="会话预览"
-      aria-hidden={!open}
     >
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">

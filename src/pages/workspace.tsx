@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { BookOpenText, Copy, Search } from "lucide-react";
+import { BookOpenText, ChevronDown, ChevronRight, Copy, Folder, FolderOpen, Search } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useStreamedSessions } from "@/hooks/useStreamedSessions";
@@ -29,6 +29,51 @@ function formatSessionTime(timestamp: number) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(timestamp * 1000));
+}
+
+type ArchiveView = "session" | "project";
+
+interface ProjectGroup {
+  projectId: string;
+  projectPath: string | null;
+  label: string;
+  sessions: Session[];
+  lastModified: number;
+}
+
+function SessionRow({
+  session,
+  active,
+  onSelect,
+  nested = false,
+  style,
+}: {
+  session: Session;
+  active: boolean;
+  onSelect: (session: Session) => void;
+  nested?: boolean;
+  style?: CSSProperties;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(session)}
+      aria-current={active ? "page" : undefined}
+      className={`flex w-full flex-col border-b border-border/60 py-2 text-left transition-colors ${
+        nested ? "pl-8 pr-4" : "absolute left-0 top-0 px-4"
+      } ${active ? "bg-primary/10" : "hover:bg-muted/60"}`}
+      style={style}
+    >
+      <span className="truncate text-sm font-medium">{sessionTitle(session)}</span>
+      <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+        <span className="truncate">{projectLabel(session)}</span>
+        <span aria-hidden="true">·</span>
+        <span className="shrink-0 uppercase">{session.source}</span>
+        <span aria-hidden="true">·</span>
+        <time className="shrink-0">{formatSessionTime(session.last_modified)}</time>
+      </span>
+    </button>
+  );
 }
 
 function transcriptAsMarkdown(session: Session, messages: Message[]) {
@@ -80,20 +125,57 @@ export default function WorkspacePage() {
   // Fetch transcripts by their durable identity, not by the snapshot object's reference.
   const selectedProjectId = selectedSession?.project_id ?? null;
   const selectedSessionId = selectedSession?.id ?? null;
+  const archiveView: ArchiveView = searchParams.get("group") === "project" ? "project" : "session";
+  const projectGroups = useMemo(() => {
+    const groups = new Map<string, ProjectGroup>();
+    for (const session of filteredSessions) {
+      const existing = groups.get(session.project_id);
+      if (existing) {
+        existing.sessions.push(session);
+        existing.lastModified = Math.max(existing.lastModified, session.last_modified);
+        continue;
+      }
+      groups.set(session.project_id, {
+        projectId: session.project_id,
+        projectPath: session.project_path,
+        label: projectLabel(session),
+        sessions: [session],
+        lastModified: session.last_modified,
+      });
+    }
+    return Array.from(groups.values()).sort((a, b) => b.lastModified - a.lastModified);
+  }, [filteredSessions]);
+  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(() => selectedSession?.project_id ?? null);
+
+  useEffect(() => {
+    if (archiveView !== "project") return;
+    setExpandedProjectId((current) => {
+      if (current && projectGroups.some((group) => group.projectId === current)) return current;
+      return selectedSession?.project_id ?? projectGroups[0]?.projectId ?? null;
+    });
+  }, [archiveView, projectGroups, selectedSession?.project_id]);
 
   const rowVirtualizer = useVirtualizer({
-    count: filteredSessions.length,
+    count: archiveView === "session" ? filteredSessions.length : 0,
     getScrollElement: () => listRef.current,
     estimateSize: () => 60,
     overscan: 12,
   });
 
+  const setArchiveView = useCallback((nextView: ArchiveView) => {
+    const next = new URLSearchParams(searchParams);
+    if (nextView === "project") next.set("group", "project");
+    else next.delete("group");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   const selectSession = useCallback((session: Session) => {
     const next = new URLSearchParams();
     next.set("projectId", session.project_id);
     next.set("sessionId", session.id);
+    if (archiveView === "project") next.set("group", "project");
     setSearchParams(next);
-  }, [setSearchParams]);
+  }, [archiveView, setSearchParams]);
 
   useEffect(() => {
     if (!selectedProjectId || !selectedSessionId) {
@@ -146,10 +228,38 @@ export default function WorkspacePage() {
             <div>
               <h1 className="font-serif text-lg font-semibold">AI 对话资料库</h1>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                {initialLoading ? "正在读取本地记录" : `${sessions.length.toLocaleString("zh-CN")} 个会话`}
+                {initialLoading
+                  ? "正在读取本地记录"
+                  : archiveView === "project"
+                    ? `${projectGroups.length.toLocaleString("zh-CN")} 个项目 · ${filteredSessions.length.toLocaleString("zh-CN")} 个会话`
+                    : `${sessions.length.toLocaleString("zh-CN")} 个会话`}
               </p>
             </div>
-            <BookOpenText className="h-5 w-5 text-primary" aria-hidden="true" />
+            <div className="flex shrink-0 items-center gap-2">
+              <div className="inline-flex rounded-lg border border-border bg-background p-0.5" role="group" aria-label="档案分组方式">
+                <button
+                  type="button"
+                  aria-pressed={archiveView === "session"}
+                  onClick={() => setArchiveView("session")}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    archiveView === "session" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  会话
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={archiveView === "project"}
+                  onClick={() => setArchiveView("project")}
+                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                    archiveView === "project" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  项目
+                </button>
+              </div>
+              <BookOpenText className="h-5 w-5 text-primary" aria-hidden="true" />
+            </div>
           </div>
           <label className="relative mt-3 block">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -166,31 +276,60 @@ export default function WorkspacePage() {
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto" aria-label="历史会话列表">
           {filteredSessions.length === 0 && !initialLoading ? (
             <div className="px-5 py-10 text-center text-sm text-muted-foreground">没有匹配的历史会话</div>
-          ) : (
+          ) : archiveView === "session" ? (
             <div className="relative w-full" style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
               {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                 const session = filteredSessions[virtualRow.index];
                 const active = selectedSession?.id === session.id && selectedSession.project_id === session.project_id;
+                return <SessionRow
+                  key={`${session.project_id}:${session.id}`}
+                  session={session}
+                  active={active}
+                  onSelect={selectSession}
+                  style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
+                />;
+              })}
+            </div>
+          ) : (
+            <div className="divide-y divide-border/60">
+              {projectGroups.map((group) => {
+                const expanded = expandedProjectId === group.projectId;
+                const active = selectedSession?.project_id === group.projectId;
                 return (
-                  <button
-                    key={`${session.project_id}:${session.id}`}
-                    type="button"
-                    onClick={() => selectSession(session)}
-                    aria-current={active ? "page" : undefined}
-                    className={`absolute left-0 top-0 flex w-full flex-col border-b border-border/60 px-4 py-2 text-left transition-colors ${
-                      active ? "bg-primary/10" : "hover:bg-muted/60"
-                    }`}
-                    style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
-                  >
-                    <span className="truncate text-sm font-medium">{sessionTitle(session)}</span>
-                    <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                      <span className="truncate">{projectLabel(session)}</span>
-                      <span aria-hidden="true">·</span>
-                      <span className="shrink-0 uppercase">{session.source}</span>
-                      <span aria-hidden="true">·</span>
-                      <time className="shrink-0">{formatSessionTime(session.last_modified)}</time>
-                    </span>
-                  </button>
+                  <div key={group.projectId}>
+                    <button
+                      type="button"
+                      onClick={() => setExpandedProjectId((current) => current === group.projectId ? null : group.projectId)}
+                      aria-expanded={expanded}
+                      className={`flex w-full items-center gap-2.5 px-4 py-3 text-left transition-colors ${
+                        active ? "bg-primary/5" : "hover:bg-muted/60"
+                      }`}
+                    >
+                      {expanded ? <ChevronDown className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                      {expanded ? <FolderOpen className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" /> : <Folder className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{group.label}</span>
+                        <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                          <span className="truncate">{group.projectPath || group.projectId}</span>
+                          <span aria-hidden="true">·</span>
+                          <span className="shrink-0">{group.sessions.length} 个会话</span>
+                        </span>
+                      </span>
+                    </button>
+                    {expanded && (
+                      <div className="bg-background/50">
+                        {group.sessions.map((session) => (
+                          <SessionRow
+                            key={`${session.project_id}:${session.id}`}
+                            session={session}
+                            active={selectedSession?.id === session.id && selectedSession.project_id === session.project_id}
+                            onSelect={selectSession}
+                            nested
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 );
               })}
             </div>
