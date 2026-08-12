@@ -2,6 +2,7 @@ import path from "path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { lovinspPlugin } from "lovinsp";
 import Pages from "vite-plugin-pages";
 import pkg from "./package.json";
 
@@ -14,6 +15,7 @@ export default defineConfig(async () => ({
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
   plugins: [
+    lovinspPlugin({ bundler: "vite" }),
     Pages({
       dirs: "src/pages",
       extensions: ["tsx"],

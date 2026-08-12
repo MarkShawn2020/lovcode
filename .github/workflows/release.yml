@@ -2,12 +2,14 @@ name: Release
 
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g., v0.1.0)'
+        description: 'Tag to build (e.g., v0.40.1)'
         required: true
+        type: string
       target:
         description: 'Target to build'
         required: false
@@ -20,117 +22,118 @@ on:
           - aarch64-apple-darwin
           - x86_64-pc-windows-msvc
 
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 env:
   CARGO_INCREMENTAL: 0
 
 jobs:
-  release:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+  create-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      pull-requests: write
     outputs:
-      tag: ${{ steps.push-tag.outputs.tag }}
+      tag: ${{ steps.tag.outputs.value }}
+      release_id: ${{ steps.create.outputs.id }}
     steps:
+      - name: Resolve tag
+        id: tag
+        shell: bash
+        run: echo "value=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
         with:
+          ref: ${{ steps.tag.outputs.value }}
           fetch-depth: 0
+          submodules: recursive
 
-      - uses: pnpm/action-setup@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-
-      - run: pnpm install
-
-      - name: Create Release Pull Request
-        id: changesets
-        uses: changesets/action@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Push tag if version changed
-        id: push-tag
-        if: steps.changesets.outputs.hasChangesets == 'false'
+      - name: Extract release notes
+        id: notes
         shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.value }}
         run: |
-          VERSION=$(node -p "require('./package.json').version")
-          TAG="v$VERSION"
-          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            TAG_COMMIT=$(git rev-list -n 1 "$TAG")
-            HEAD_COMMIT=$(git rev-parse HEAD)
-            if [ "$TAG_COMMIT" = "$HEAD_COMMIT" ]; then
-              echo "Tag $TAG already points to this commit"
-              echo "tag=$TAG" >> $GITHUB_OUTPUT
-            else
-              echo "Tag $TAG already points to $TAG_COMMIT; current commit is $HEAD_COMMIT"
-              echo "Skipping release build for this push"
-            fi
-          else
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git tag -f "$TAG"
-            if git push origin "$TAG"; then
-              echo "Pushed tag $TAG"
-            elif git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-              echo "Tag $TAG was created by another process"
-            else
-              exit 1
-            fi
-            echo "tag=$TAG" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          VERSION="${RELEASE_TAG#v}"
+          awk -v ver="$VERSION" '
+            /^## / { if (found) exit; if ($2 == ver) { found=1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md || true
+
+          if [ ! -s notes.md ]; then
+            printf 'Release %s\n' "$RELEASE_TAG" > notes.md
           fi
 
+          delimiter="EOF_notes_$(date +%s)"
+          {
+            printf 'content<<%s\n' "$delimiter"
+            cat notes.md
+            printf '%s\n' "$delimiter"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create draft release
+        id: create
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.tag.outputs.value }}
+          name: ${{ steps.tag.outputs.value }}
+          body: ${{ steps.notes.outputs.content }}
+          draft: true
+          prerelease: false
+
   prepare-build:
-    needs: [release]
-    if: always() && (needs.release.outputs.tag != '' || github.event_name == 'workflow_dispatch')
+    needs: create-release
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.matrix.outputs.matrix }}
+      matrix: ${{ steps.matrix.outputs.value }}
+      required: ${{ steps.matrix.outputs.required }}
     steps:
       - name: Select build matrix
         id: matrix
         shell: bash
+        env:
+          REQUESTED_TARGET: ${{ inputs.target || 'all' }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TARGET="${{ github.event.inputs.target }}"
-          else
-            TARGET="all"
-          fi
-
-          if [ -z "$TARGET" ]; then
-            TARGET="all"
-          fi
-
-          case "$TARGET" in
+          set -euo pipefail
+          case "$REQUESTED_TARGET" in
             all)
-              MATRIX='{"include":[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"},{"os":"macos-15-intel","target":"x86_64-apple-darwin"},{"os":"macos-latest","target":"aarch64-apple-darwin"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}]}'
+              MATRIX='{"include":[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","rustTargets":"x86_64-unknown-linux-gnu"},{"os":"macos-15-intel","target":"x86_64-apple-darwin","rustTargets":"aarch64-apple-darwin,x86_64-apple-darwin"},{"os":"macos-latest","target":"aarch64-apple-darwin","rustTargets":"aarch64-apple-darwin,x86_64-apple-darwin"},{"os":"windows-latest","target":"x86_64-pc-windows-msvc","rustTargets":"x86_64-pc-windows-msvc"}]}'
+              REQUIRED="darwin-aarch64,darwin-x86_64,linux-x86_64,windows-x86_64"
               ;;
             x86_64-unknown-linux-gnu)
-              MATRIX='{"include":[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu"}]}'
+              MATRIX='{"include":[{"os":"ubuntu-24.04","target":"x86_64-unknown-linux-gnu","rustTargets":"x86_64-unknown-linux-gnu"}]}'
+              REQUIRED="linux-x86_64"
               ;;
             x86_64-apple-darwin)
-              MATRIX='{"include":[{"os":"macos-15-intel","target":"x86_64-apple-darwin"}]}'
+              MATRIX='{"include":[{"os":"macos-15-intel","target":"x86_64-apple-darwin","rustTargets":"aarch64-apple-darwin,x86_64-apple-darwin"}]}'
+              REQUIRED="darwin-x86_64"
               ;;
             aarch64-apple-darwin)
-              MATRIX='{"include":[{"os":"macos-latest","target":"aarch64-apple-darwin"}]}'
+              MATRIX='{"include":[{"os":"macos-latest","target":"aarch64-apple-darwin","rustTargets":"aarch64-apple-darwin,x86_64-apple-darwin"}]}'
+              REQUIRED="darwin-aarch64"
               ;;
             x86_64-pc-windows-msvc)
-              MATRIX='{"include":[{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}]}'
+              MATRIX='{"include":[{"os":"windows-latest","target":"x86_64-pc-windows-msvc","rustTargets":"x86_64-pc-windows-msvc"}]}'
+              REQUIRED="windows-x86_64"
               ;;
             *)
-              echo "Unsupported target: $TARGET" >&2
+              echo "Unsupported target: $REQUESTED_TARGET" >&2
               exit 1
               ;;
           esac
 
-          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "value=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "required=$REQUIRED" >> "$GITHUB_OUTPUT"
 
   build:
-    needs: [release, prepare-build]
-    if: always() && needs.prepare-build.result == 'success'
+    needs: [create-release, prepare-build]
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.prepare-build.outputs.matrix) }}
@@ -138,19 +141,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Determine tag
-        id: get-tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ github.event.inputs.tag }}" >> $GITHUB_OUTPUT
-          else
-            echo "tag=${{ needs.release.outputs.tag }}" >> $GITHUB_OUTPUT
-          fi
-
       - uses: actions/checkout@v4
         with:
-          ref: ${{ steps.get-tag.outputs.tag }}
+          ref: ${{ needs.create-release.outputs.tag }}
+          fetch-depth: 0
           submodules: recursive
 
       - name: Install Linux dependencies
@@ -173,29 +167,24 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
         run: |
-          # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 32)"
 
-          # Create keychain
           security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          # Import certificate
-          echo "$APPLE_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
-          security import $RUNNER_TEMP/certificate.p12 \
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" \
             -P "$APPLE_CERTIFICATE_PASSWORD" \
             -A -t cert -f pkcs12 \
             -k "$KEYCHAIN_PATH"
 
-          # Set keychain as default
           security list-keychain -d user -s "$KEYCHAIN_PATH"
-
-          # Allow codesign to access keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Verify certificate
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
           security find-identity -v -p codesigning "$KEYCHAIN_PATH"
 
       - uses: pnpm/action-setup@v4
@@ -207,7 +196,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rustTargets }}
 
       - uses: arduino/setup-protoc@v3
         with:
@@ -216,152 +205,41 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
-          cache-bin: "false"
+          cache-bin: false
 
-      - run: pnpm install
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      - name: Extract changelog for current version
-        id: changelog
-        shell: bash
-        run: |
-          VERSION="${{ steps.get-tag.outputs.tag }}"
-          VERSION="${VERSION#v}"  # Remove 'v' prefix
-          # Extract content between current version header and next version header
-          CHANGELOG=$(awk -v ver="$VERSION" '
-            /^## / {
-              if (found) exit
-              if ($2 == ver) { found=1; next }
-            }
-            found { print }
-          ' CHANGELOG.md)
-          # Handle multi-line output
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Build targeted macOS x64 bundle
-        if: github.event_name == 'workflow_dispatch' && matrix.target == 'x86_64-apple-darwin'
-        shell: bash
-        env:
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build --target ${{ matrix.target }} --verbose
-
-      - name: Upload targeted macOS x64 assets
-        if: github.event_name == 'workflow_dispatch' && matrix.target == 'x86_64-apple-darwin'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TAG="${{ steps.get-tag.outputs.tag }}"
-          BUNDLE_DIR="src-tauri/target/${{ matrix.target }}/release/bundle"
-          MACOS_DIR="$BUNDLE_DIR/macos"
-          if [ -f "$MACOS_DIR/lovcode.app.tar.gz" ]; then
-            mv "$MACOS_DIR/lovcode.app.tar.gz" "$MACOS_DIR/lovcode_x64.app.tar.gz"
-          fi
-          if [ -f "$MACOS_DIR/lovcode.app.tar.gz.sig" ]; then
-            mv "$MACOS_DIR/lovcode.app.tar.gz.sig" "$MACOS_DIR/lovcode_x64.app.tar.gz.sig"
-          fi
-
-          assets=()
-          while IFS= read -r asset; do
-            assets+=("$asset")
-          done < <(
-            find "$BUNDLE_DIR" -type f \( \
-              -name '*.dmg' -o \
-              -name '*.app.tar.gz' -o \
-              -name '*.sig' \
-            \) -print
-          )
-
-          if [ "${#assets[@]}" -eq 0 ]; then
-            echo "No assets found in $BUNDLE_DIR" >&2
-            find "$BUNDLE_DIR" -type f -print >&2 || true
-            exit 1
-          fi
-
-          printf 'Uploading assets:\n'
-          printf '  %s\n' "${assets[@]}"
-          gh release upload "$TAG" "${assets[@]}" --clobber
-
-      - uses: tauri-apps/tauri-action@v0
-        if: github.event_name != 'workflow_dispatch' || matrix.target != 'x86_64-apple-darwin'
+      - name: Build Tauri bundles
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # macOS signing
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          # macOS notarization
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Tauri updater signing (empty password)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          tagName: ${{ steps.get-tag.outputs.tag }}
-          releaseName: ${{ steps.get-tag.outputs.tag }}
-          releaseBody: ${{ steps.changelog.outputs.content }}
-          releaseDraft: false
-          prerelease: false
-          # Matrix jobs race when each one read/merges/uploads latest.json.
-          # A single job below generates it after every platform asset exists.
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           includeUpdaterJson: false
           args: --target ${{ matrix.target }}
 
       - name: Cleanup keychain
         if: runner.os == 'macOS' && always()
-        run: |
-          security delete-keychain $RUNNER_TEMP/app-signing.keychain-db || true
+        run: security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" || true
 
   finalize-updater:
-    needs: [release, prepare-build, build]
-    if: always() && needs.build.result == 'success'
+    needs: [create-release, prepare-build, build]
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
-
-      - name: Determine tag and required updater platforms
-        id: updater
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG="${{ github.event.inputs.tag }}"
-            TARGET="${{ github.event.inputs.target }}"
-          else
-            TAG="${{ needs.release.outputs.tag }}"
-            TARGET="all"
-          fi
-
-          case "$TARGET" in
-            all)
-              REQUIRED="darwin-aarch64,darwin-x86_64,linux-x86_64,windows-x86_64"
-              ;;
-            aarch64-apple-darwin)
-              REQUIRED="darwin-aarch64"
-              ;;
-            x86_64-apple-darwin)
-              REQUIRED="darwin-x86_64"
-              ;;
-            x86_64-unknown-linux-gnu)
-              REQUIRED="linux-x86_64"
-              ;;
-            x86_64-pc-windows-msvc)
-              REQUIRED="windows-x86_64"
-              ;;
-            *)
-              echo "Unsupported target: $TARGET" >&2
-              exit 1
-              ;;
-          esac
-
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "required=$REQUIRED" >> "$GITHUB_OUTPUT"
+        with:
+          ref: ${{ needs.create-release.outputs.tag }}
+          fetch-depth: 1
 
       - name: Generate complete updater manifest
         env:
@@ -369,10 +247,26 @@ jobs:
         run: |
           node scripts/generate-updater-manifest.mjs \
             --repo "$GITHUB_REPOSITORY" \
-            --tag "${{ steps.updater.outputs.tag }}" \
-            --require "${{ steps.updater.outputs.required }}"
+            --tag "${{ needs.create-release.outputs.tag }}" \
+            --require "${{ needs.prepare-build.outputs.required }}"
 
       - name: Upload complete updater manifest
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${{ steps.updater.outputs.tag }}" latest.json --clobber
+        run: gh release upload "${{ needs.create-release.outputs.tag }}" latest.json --clobber
+
+  publish-release:
+    needs: [create-release, build, finalize-updater]
+    if: needs.build.result == 'success' && needs.finalize-updater.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release edit "${{ needs.create-release.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false \
+            --latest

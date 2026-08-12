@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.40.1
+
+### Patch Changes
+
+- Improve archive browsing actions and project grouping, preserve Ataru storage and CLI compatibility during the rename, and add Lovinsp Vite instrumentation to the release build.
+
 ## 0.40.0
 
 ### Minor Changes
