@@ -18,6 +18,7 @@ export function IndexStatus({
         <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
         <span className="hidden truncate sm:inline">更新记忆索引</span>
         <span className="tabular-nums">{Math.round(progress * 100)}%</span>
+        {status.searchAvailable && <span className="hidden text-muted-foreground/70 md:inline">· 可搜索</span>}
       </div>
     );
   }

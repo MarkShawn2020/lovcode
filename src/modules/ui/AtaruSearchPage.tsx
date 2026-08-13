@@ -196,7 +196,7 @@ export function AtaruSearchPage() {
         return;
       }
 
-      if (indexStatus?.state === "idle" || indexStatus?.state === "building") {
+      if (!indexStatus?.searchAvailable) {
         lastSearchKey.current = "";
         setIsSearching(true);
         setSearchError(null);
@@ -263,7 +263,7 @@ export function AtaruSearchPage() {
         if (requestSequence.current === sequence) setIsSearching(false);
       }
     },
-    [indexStatus?.state, level, mode, setSearchParams],
+    [indexStatus?.searchAvailable, indexStatus?.state, level, mode, setSearchParams],
   );
 
   useEffect(() => {

@@ -30,6 +30,7 @@ pub(crate) struct SearchResult {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SearchIndexBuildStatus {
     pub state: String,
+    pub search_available: bool,
     pub total_sessions: usize,
     pub processed_sessions: usize,
     pub total_messages: usize,
@@ -52,6 +53,7 @@ impl Default for SearchIndexBuildStatus {
     fn default() -> Self {
         Self {
             state: "idle".to_string(),
+            search_available: false,
             total_sessions: 0,
             processed_sessions: 0,
             total_messages: 0,
@@ -317,11 +319,9 @@ fn current_search_index_status() -> SearchIndexBuildStatus {
         .map(|guard| guard.clone())
         .unwrap_or_default();
     let current_manifest = load_search_index_manifest();
-    let index_ready = get_index_dir().exists()
-        && current_manifest.is_some()
-        && Index::open_in_dir(get_index_dir())
-            .map(|index| search_index_schema_is_current(&index.schema()))
-            .unwrap_or(false);
+    let search_available = search_index_is_available();
+    let index_ready = search_available && current_manifest.is_some();
+    status.search_available = search_available;
     let mut changed = false;
 
     if !build_running && index_ready && (status.state == "idle" || status.state == "building") {
@@ -334,6 +334,7 @@ fn current_search_index_status() -> SearchIndexBuildStatus {
                 status.total_bytes,
             ));
         status.state = "ready".to_string();
+        status.search_available = true;
         status.total_sessions = total_sessions;
         status.processed_sessions = total_sessions;
         status.total_messages = total_messages;
@@ -627,7 +628,15 @@ fn search_index_schema_is_current(schema: &Schema) -> bool {
 }
 
 fn search_index_on_disk_is_current() -> bool {
-    if !get_index_dir().exists() || load_search_index_manifest().is_none() {
+    if !search_index_is_available() || load_search_index_manifest().is_none() {
+        return false;
+    }
+
+    true
+}
+
+fn search_index_is_available() -> bool {
+    if !get_index_dir().exists() {
         return false;
     }
 
@@ -681,6 +690,7 @@ fn update_search_index_message_progress(
     current_title: Option<String>,
     current_project_path: Option<String>,
     force_emit: bool,
+    last_progress_emit_at: &mut std::time::Instant,
 ) {
     status.processed_messages += 1;
     status.indexed_messages += 1;
@@ -689,7 +699,11 @@ fn update_search_index_message_progress(
     status.current_project_path = current_project_path;
     status.updated_at = Some(now_secs());
 
-    if force_emit || status.processed_messages % 100 == 0 {
+    if force_emit
+        || status.processed_messages % 100 == 0
+        || last_progress_emit_at.elapsed() >= Duration::from_millis(750)
+    {
+        *last_progress_emit_at = std::time::Instant::now();
         emit_search_index_status(app, status.clone());
     }
 }
@@ -762,6 +776,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         .sum();
     let mut status = SearchIndexBuildStatus {
         state: "building".to_string(),
+        search_available: search_index_is_available(),
         total_sessions: discovered_sessions,
         processed_sessions: 0,
         total_messages: 0,
@@ -978,6 +993,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     let round_index_field = schema.get_field("round_index").unwrap();
     let round_prompt_field = schema.get_field("round_prompt").unwrap();
     let round_timestamp_field = schema.get_field("round_timestamp").unwrap();
+    let mut last_progress_emit_at = std::time::Instant::now();
 
     if !full_rebuild {
         for entry in deleted_entries.iter() {
@@ -1155,6 +1171,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                                         Some(session_title.clone()),
                                         Some(source.display_path.clone()),
                                         false,
+                                        &mut last_progress_emit_at,
                                     );
                                 }
                             }
@@ -1339,6 +1356,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                 session.title.clone(),
                 session.project_path.clone(),
                 false,
+                &mut last_progress_emit_at,
             );
         }
         status.processed_bytes = session_start_bytes + session_work_bytes;
@@ -1395,6 +1413,7 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     save_search_index_manifest(final_manifest_entries)?;
 
     status.state = "ready".to_string();
+    status.search_available = true;
     status.total_sessions = corpus_sessions;
     status.processed_sessions = corpus_sessions;
     status.total_messages = corpus_messages;

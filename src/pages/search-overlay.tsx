@@ -130,7 +130,7 @@ export default function SearchOverlay() {
       return;
     }
 
-    if (!indexStatus || indexStatus.state === "idle" || indexStatus.state === "building") {
+    if (!indexStatus || !indexStatus.searchAvailable) {
       setSearching(indexStatus?.state === "building");
       return;
     }
@@ -267,7 +267,7 @@ export default function SearchOverlay() {
   };
 
   const searchStateLabel = indexStatus?.state === "building"
-    ? `正在建立索引 ${Math.round((indexProgress ?? 0) * 100)}%`
+    ? `后台更新索引 ${Math.round((indexProgress ?? 0) * 100)}%${indexStatus.searchAvailable ? " · 可继续搜索" : ""}`
     : searching
       ? "正在搜索…"
       : response

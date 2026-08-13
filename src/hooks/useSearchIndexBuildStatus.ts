@@ -4,6 +4,7 @@ import { invoke, isTauri } from "@/lib/tauri";
 
 export interface SearchIndexBuildStatus {
   state: "idle" | "building" | "ready" | "error" | string;
+  searchAvailable: boolean;
   totalSessions: number;
   processedSessions: number;
   totalMessages?: number;
@@ -24,6 +25,7 @@ export interface SearchIndexBuildStatus {
 
 const unavailableStatus: SearchIndexBuildStatus = {
   state: "unavailable",
+  searchAvailable: false,
   totalSessions: 0,
   processedSessions: 0,
   indexedMessages: 0,
