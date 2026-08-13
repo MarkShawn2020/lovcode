@@ -54,6 +54,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/ataru/32x32.png",
       "icons/ataru/128x128.png",
@@ -61,5 +62,13 @@
       "icons/ataru/icon.icns",
       "icons/ataru/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/lovstudio/Ataru/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDE3RTU3RjBEQ0MyMDJGNzMKUldSekx5RE1EWC9sRjJPRFBGZmVoS05ZYmpoTHBwSnQraVhHZ3FDQW5ZRGdPc09MMmFwWDczUWMK"
+    }
   }
 }

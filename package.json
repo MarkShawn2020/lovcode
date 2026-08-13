@@ -25,6 +25,8 @@
     "@tanstack/react-query-persist-client": "^5.100.8",
     "@tanstack/react-virtual": "^3.13.13",
     "@tauri-apps/api": "^2.10.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.556.0",
     "react": "^19.1.0",

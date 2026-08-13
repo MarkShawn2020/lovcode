@@ -242,20 +242,16 @@ jobs:
           fetch-depth: 1
 
       - name: Detect signed updater assets
-        id: updater
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ASSET_NAMES=$(gh release view "${{ needs.create-release.outputs.tag }}" --json assets -q '.assets[].name')
-          if printf '%s\n' "$ASSET_NAMES" | grep -qE '\.sig$'; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "No signed Tauri updater assets found; skipping latest.json."
-          fi
+          printf '%s\n' "$ASSET_NAMES" | grep -qE '\.sig$' || {
+            echo "Signed Tauri updater assets are required before publishing." >&2
+            exit 1
+          }
 
       - name: Generate complete updater manifest
-        if: steps.updater.outputs.enabled == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -265,7 +261,6 @@ jobs:
             --require "${{ needs.prepare-build.outputs.required }}"
 
       - name: Upload complete updater manifest
-        if: steps.updater.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${{ needs.create-release.outputs.tag }}" latest.json --clobber

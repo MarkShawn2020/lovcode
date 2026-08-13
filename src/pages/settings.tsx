@@ -1,4 +1,5 @@
 import { Settings2 } from "lucide-react";
+import { AppUpdatePanel } from "@/components/AppUpdatePanel";
 
 export default function SettingsPage() {
   return (
@@ -18,6 +19,8 @@ export default function SettingsPage() {
             搜索索引、对话档案与应用偏好将在这里统一管理。
           </p>
         </section>
+
+        <AppUpdatePanel />
       </div>
     </div>
   );

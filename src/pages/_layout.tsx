@@ -1,5 +1,6 @@
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { GlobalHeader, type PrimaryRoute } from "@/components/GlobalHeader";
+import { AppUpdateNotice } from "@/components/AppUpdateNotice";
 
 export default function RootLayout() {
   const location = useLocation();
@@ -25,6 +26,7 @@ export default function RootLayout() {
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <Outlet />
       </main>
+      <AppUpdateNotice />
     </div>
   );
 }
