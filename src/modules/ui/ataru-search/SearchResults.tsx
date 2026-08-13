@@ -14,6 +14,7 @@ import {
   formatTimestamp,
   getSearchResultContextLabel,
   getSearchResultExcerpt,
+  getSearchResultMatchLabel,
   getSearchResultTitle,
   projectName,
 } from "./utils";
@@ -144,7 +145,7 @@ function ResultCard({
   const heading = title || getSearchResultContextLabel(hit);
   const excerpt = getSearchResultExcerpt(hit, query, title);
   const levelLabel = RESULT_LEVEL_LABELS[hit.level];
-  const matchLocation = hit.level === "turn" ? "命中内容" : hit.level === "run" ? "命中 Turn" : "命中上下文";
+  const matchLocation = getSearchResultMatchLabel(hit, query, excerpt);
   const matchSummary = hit.level === "run" && hit.matchCount > 1
     ? `${hit.matchCount} 条 Turn 命中`
     : hit.matchCount > 1

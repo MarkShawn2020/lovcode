@@ -61,10 +61,15 @@ function decodeBasicHtmlEntities(value: string): string {
   });
 }
 
-function hidePathNoise(value: string): string {
+function containsSearchTerm(value: string, query: string): boolean {
+  const normalized = value.toLocaleLowerCase();
+  return searchTerms(query).some((term) => normalized.includes(term.toLocaleLowerCase()));
+}
+
+function hidePathNoise(value: string, query: string): string {
   return value
-    .replace(QUOTED_PATH, " ")
-    .replace(ABSOLUTE_PATH, " ")
+    .replace(QUOTED_PATH, (path) => containsSearchTerm(path, query) ? path : " ")
+    .replace(ABSOLUTE_PATH, (path) => containsSearchTerm(path, query) ? path : " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -128,18 +133,19 @@ function firstSearchMatch(value: string, query: string): { index: number; length
 /** Keep the result card useful by centering a longer snippet on the query. */
 export function cleanSearchExcerpt(value: string, query: string, maxChars = 420): string {
   const raw = cleanMessageText(value);
-  const cleaned = (hasPathQuery(query) ? raw : hidePathNoise(raw)).replace(/\s+/g, " ").trim();
-  if (cleaned.length <= maxChars) return cleaned;
+  const cleaned = (hasPathQuery(query) ? raw : hidePathNoise(raw, query)).replace(/\s+/g, " ").trim();
+  const visible = cleaned || raw.replace(/\s+/g, " ").trim();
+  if (visible.length <= maxChars) return visible;
 
-  const match = firstSearchMatch(cleaned, query);
-  if (!match) return `${cleaned.slice(0, maxChars - 1).trimEnd()}…`;
+  const match = firstSearchMatch(visible, query);
+  if (!match) return `${visible.slice(0, maxChars - 1).trimEnd()}…`;
 
   const contextPadding = Math.max(56, Math.floor((maxChars - match.length) / 2));
   const start = Math.max(0, match.index - contextPadding);
-  const end = Math.min(cleaned.length, start + maxChars);
+  const end = Math.min(visible.length, start + maxChars);
   const prefix = start > 0 ? "…" : "";
-  const suffix = end < cleaned.length ? "…" : "";
-  return `${prefix}${cleaned.slice(start, end).trim()}${suffix}`;
+  const suffix = end < visible.length ? "…" : "";
+  return `${prefix}${visible.slice(start, end).trim()}${suffix}`;
 }
 
 /**
@@ -186,9 +192,15 @@ export function getSearchResultExcerpt(
       ? [hit.snippet, hit.runPrompt]
       : [hit.snippet, hit.runPrompt, hit.sessionTitle, hit.title];
   const normalizedTitle = title.trim().toLocaleLowerCase();
-  const excerpt = candidates
-    .map((value) => cleanSearchExcerpt(value ?? "", query))
-    .find((value) => {
+  const excerpts = candidates.map((value) => cleanSearchExcerpt(value ?? "", query));
+  const primaryExcerpt = excerpts[0];
+  const excerpt = primaryExcerpt && (
+    hit.level === "turn"
+      || hit.level === "run"
+      || hit.lineNumber != null
+  )
+    ? primaryExcerpt
+    : excerpts.find((value) => {
       if (!value) return false;
       return value.trim().toLocaleLowerCase() !== normalizedTitle;
     });
@@ -216,6 +228,18 @@ export function getSearchResultContextLabel(hit: SearchHit): string {
   if (hit.level === "run") return `Run ${hit.runIndex ?? ""}`.trim();
   if (hit.level === "session") return "Session";
   return "Project";
+}
+
+export function getSearchResultMatchLabel(
+  hit: SearchHit,
+  query: string,
+  excerpt: string,
+): string {
+  const semanticOnly = hit.signals.semantic != null && hit.signals.lexical == null;
+  if (semanticOnly && !containsSearchTerm(excerpt, query)) {
+    return hit.level === "turn" ? "语义命中" : "语义命中 Turn";
+  }
+  return hit.level === "turn" ? "命中内容" : "命中 Turn";
 }
 
 /** Preserve intentional code indentation while removing transcript-wide padding. */

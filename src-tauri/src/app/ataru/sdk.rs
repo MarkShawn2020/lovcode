@@ -108,6 +108,7 @@ pub(crate) struct SearchResponse {
 struct SearchHitAccumulator {
     hit: SearchHit,
     sessions: HashSet<String>,
+    evidence_score: Option<f32>,
 }
 
 pub(crate) fn aggregate_candidates(
@@ -119,9 +120,9 @@ pub(crate) fn aggregate_candidates(
 
     for candidate in candidates {
         let result = &candidate.result;
-        // Session-level semantic candidates use line 0 and round 0. They are
-        // useful evidence for Session/Project recall, but are not atomic Turn
-        // or Run records and must not appear at either level.
+        // Session-level semantic candidates use line 0 and round 0. They may
+        // contribute recall signals for Session/Project, but they are not
+        // atomic Turn evidence and must never become the visible excerpt.
         if (level == SearchLevel::Turn && result.line_number == 0)
             || (level == SearchLevel::Run && result.round_index == 0)
         {
@@ -133,13 +134,20 @@ pub(crate) fn aggregate_candidates(
             result.round_index,
             result,
         );
-        let next_hit = search_hit_from_candidate(&candidate, level, key.clone());
+        let has_message_evidence = candidate_has_message_evidence(&candidate);
+        let mut next_hit = search_hit_from_candidate(&candidate, level, key.clone());
+        next_hit.match_count = usize::from(has_message_evidence);
         let session_id = result.session_id.clone();
 
         match grouped.get_mut(&key) {
             Some(group) => {
-                let should_replace_evidence = next_hit.score > group.hit.score;
-                group.hit.match_count += 1;
+                let should_replace_evidence = should_replace_evidence(
+                    has_message_evidence,
+                    next_hit.score,
+                    group.evidence_score,
+                    group.hit.score,
+                );
+                group.hit.match_count += usize::from(has_message_evidence);
                 group.sessions.insert(session_id);
                 group.hit.session_count = group.sessions.len();
                 group.hit.score = group.hit.score.max(next_hit.score);
@@ -153,6 +161,7 @@ pub(crate) fn aggregate_candidates(
                     group.hit.line_number = next_hit.line_number;
                     group.hit.role = next_hit.role.clone();
                     group.hit.timestamp = next_hit.timestamp.clone();
+                    group.evidence_score = has_message_evidence.then_some(next_hit.score);
                 }
                 merge_signal(&mut group.hit.signals.lexical, next_hit.signals.lexical);
                 merge_signal(&mut group.hit.signals.semantic, next_hit.signals.semantic);
@@ -166,6 +175,7 @@ pub(crate) fn aggregate_candidates(
                     SearchHitAccumulator {
                         hit: next_hit,
                         sessions,
+                        evidence_score: has_message_evidence.then_some(candidate.fusion_score),
                     },
                 );
             }
@@ -174,6 +184,7 @@ pub(crate) fn aggregate_candidates(
 
     let mut hits = grouped
         .into_values()
+        .filter(|group| group.evidence_score.is_some())
         .map(|group| group.hit)
         .collect::<Vec<_>>();
     hits.sort_by(|left, right| {
@@ -186,6 +197,24 @@ pub(crate) fn aggregate_candidates(
     });
     hits.truncate(limit.clamp(1, 100));
     hits
+}
+
+fn candidate_has_message_evidence(candidate: &RankedSearchCandidate) -> bool {
+    candidate.result.line_number > 0 && !candidate.result.content.trim().is_empty()
+}
+
+fn should_replace_evidence(
+    next_has_message_evidence: bool,
+    next_score: f32,
+    current_evidence_score: Option<f32>,
+    current_group_score: f32,
+) -> bool {
+    match (next_has_message_evidence, current_evidence_score) {
+        (true, None) => true,
+        (true, Some(current_score)) => next_score > current_score,
+        (false, Some(_)) => false,
+        (false, None) => next_score > current_group_score,
+    }
 }
 
 fn merge_signal(target: &mut Option<f32>, next: Option<f32>) {
@@ -244,23 +273,11 @@ fn search_hit_from_candidate(
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| "Unknown project".to_string()),
     };
-    let snippet = if result.content.trim().is_empty() && level != SearchLevel::Turn {
-        result
-            .round_prompt
-            .as_deref()
-            .or(result.summary.as_deref())
-            .or(result.session_summary.as_deref())
-            .or(result.last_prompt.as_deref())
-            .unwrap_or("")
-    } else {
-        &result.content
-    };
-
     SearchHit {
         id,
         level,
         title: normalize_text(&title, 160),
-        snippet: normalize_text(snippet, 420),
+        snippet: normalize_text(&result.content, 420),
         project_id: result.project_id.clone(),
         project_path: result.project_path.clone(),
         session_id: Some(result.session_id.clone()).filter(|value| !value.is_empty()),
@@ -407,5 +424,26 @@ mod tests {
 
         let runs = aggregate_candidates(candidates, SearchLevel::Run, 20);
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn aggregate_prefers_message_evidence_over_higher_scoring_metadata() {
+        let mut metadata = result("s1", 0, "metadata", "p1");
+        metadata.content = "title: Yoda".to_string();
+        metadata.role = "session".to_string();
+        metadata.line_number = 0;
+        let message = result("s1", 1, "message", "p1");
+
+        let hits = aggregate_candidates(
+            vec![candidate(metadata, 0.99), candidate(message, 0.55)],
+            SearchLevel::Project,
+            20,
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id.as_deref(), Some("message"));
+        assert_eq!(hits[0].line_number, Some(11));
+        assert_eq!(hits[0].snippet, "matched content message");
+        assert_eq!(hits[0].match_count, 1);
     }
 }

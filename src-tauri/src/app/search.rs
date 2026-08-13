@@ -3732,6 +3732,12 @@ fn rank_embedding_sessions(
     let mut by_session: HashMap<String, SearchResult> = HashMap::new();
 
     for entry in entries {
+        // The session metadata entry helps build the embedding context, but
+        // it is not a Turn and cannot be shown as trustworthy hit evidence.
+        // Every semantic result must point back to an actual message body.
+        if entry.result.line_number == 0 || entry.result.content.trim().is_empty() {
+            continue;
+        }
         if entry.vector.len() != query_vector.len() {
             continue;
         }
@@ -3764,6 +3770,58 @@ fn rank_embedding_sessions(
     });
     results.truncate(limit);
     results
+}
+
+#[cfg(test)]
+mod semantic_search_tests {
+    use super::*;
+
+    fn semantic_entry(line_number: usize, content: &str, vector: Vec<f32>) -> EmbeddingSearchEntry {
+        EmbeddingSearchEntry {
+            source_path: "/tmp/session.jsonl".to_string(),
+            source_kind: "codex".to_string(),
+            source_size: 1,
+            source_mtime: 1,
+            text: content.to_string(),
+            result: SearchResult {
+                uuid: format!("message-{line_number}"),
+                content: content.to_string(),
+                role: if line_number == 0 {
+                    "session".to_string()
+                } else {
+                    "assistant".to_string()
+                },
+                line_number,
+                project_id: "project".to_string(),
+                project_path: "/tmp/project".to_string(),
+                session_id: "session".to_string(),
+                session_summary: Some("Yoda".to_string()),
+                title: Some("Yoda".to_string()),
+                summary: Some("Yoda".to_string()),
+                last_prompt: Some("find the browser tool".to_string()),
+                round_index: if line_number == 0 { 0 } else { 1 },
+                round_prompt: Some("find the browser tool".to_string()),
+                round_timestamp: None,
+                timestamp: "2026-08-11T13:55:00Z".to_string(),
+                score: 0.0,
+            },
+            vector,
+        }
+    }
+
+    #[test]
+    fn semantic_recall_returns_message_evidence_instead_of_session_metadata() {
+        let entries = vec![
+            semantic_entry(0, "title: Yoda", vec![1.0, 0.0]),
+            semantic_entry(12, "actual browser message", vec![0.8, 0.0]),
+        ];
+
+        let results = rank_embedding_sessions(&entries, &[1.0, 0.0], 10, None);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].line_number, 12);
+        assert_eq!(results[0].content, "actual browser message");
+    }
 }
 
 #[tauri::command]

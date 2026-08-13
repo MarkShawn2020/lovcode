@@ -19,6 +19,7 @@ import {
   formatTimestamp,
   getSearchResultContextLabel,
   getSearchResultExcerpt,
+  getSearchResultMatchLabel,
   getSearchResultTitle,
   projectName,
 } from "@/modules/ui/ataru-search/utils";
@@ -411,6 +412,7 @@ function OverlayResultCard({
   const title = getSearchResultTitle(hit, query);
   const heading = title || getSearchResultContextLabel(hit);
   const excerpt = getSearchResultExcerpt(hit, query, title);
+  const matchLocation = getSearchResultMatchLabel(hit, query, excerpt);
   const matchSummary = hit.level === "run" && hit.matchCount > 1
     ? `${hit.matchCount} 条 Turn 命中`
     : hit.matchCount > 1
@@ -440,7 +442,7 @@ function OverlayResultCard({
       </div>
       <div className="mt-1 flex gap-2 text-xs leading-5 text-foreground/75">
         <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.1em] text-primary/75">
-          {hit.level === "turn" ? "命中内容" : hit.level === "run" ? "命中 Turn" : "命中上下文"}
+          {matchLocation}
         </span>
         <span className="line-clamp-2 min-w-0"><HighlightedText text={excerpt} query={query} /></span>
       </div>
