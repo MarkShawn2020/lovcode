@@ -4,7 +4,12 @@ import { Button } from "@/components/ui/button";
 import type { SearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
 import { formatByteSize, getSearchIndexTiming } from "@/lib/searchIndexStatus";
 import { copyText } from "@/modules/api/ataru";
-import { formatCount } from "./utils";
+
+const countFormatter = new Intl.NumberFormat("zh-CN");
+
+function formatCount(value: number) {
+  return countFormatter.format(value);
+}
 
 function formatLastActivity(updatedAt: number | null | undefined) {
   if (!updatedAt) return "尚未收到进度";
@@ -52,7 +57,7 @@ function formatDiagnostic(status: SearchIndexBuildStatus, progress: number) {
   ].join("\n");
 }
 
-export function IndexStatus({
+export function SearchIndexStatus({
   status,
   progress,
   onRetry,
@@ -98,7 +103,7 @@ export function IndexStatus({
         <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
 
-      <div className="absolute right-0 z-50 mt-2 w-[min(24rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-border bg-card shadow-xl">
+      <div className="absolute right-0 top-full z-50 mt-2 max-h-[calc(100vh-4rem)] w-[min(24rem,calc(100vw-2rem))] overflow-y-auto rounded-xl border border-border bg-card shadow-xl">
         <div className="border-b border-border px-4 py-3.5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">

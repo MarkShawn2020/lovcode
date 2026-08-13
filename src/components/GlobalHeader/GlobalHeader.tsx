@@ -9,14 +9,16 @@ export function GlobalHeader({
   onNavigate,
   onGoBack,
   onGoForward,
+  rightSlot,
 }: {
   activeRoute: PrimaryRoute;
   onNavigate: (route: PrimaryRoute) => void;
   onGoBack: () => void;
   onGoForward: () => void;
+  rightSlot?: ReactNode;
 }) {
   return (
-    <header data-tauri-drag-region className="flex h-12 shrink-0 items-center border-b border-border bg-background px-3">
+    <header data-tauri-drag-region className="relative z-40 flex h-12 shrink-0 items-center overflow-visible border-b border-border bg-background px-3">
       <div className="flex min-w-[240px] items-center gap-1 pl-[70px]">
         <button
           type="button"
@@ -42,7 +44,7 @@ export function GlobalHeader({
           <Settings2 className="h-4 w-4" />设置
         </NavButton>
       </nav>
-      <div className="min-w-[240px]" />
+      <div className="flex min-w-[240px] items-center justify-end">{rightSlot}</div>
     </header>
   );
 }

@@ -30,7 +30,6 @@ import {
   type SearchResponse,
 } from "@/modules/api/ataru";
 import { getSearchModeCopy } from "@/modules/ai/query";
-import { IndexStatus } from "./ataru-search/IndexStatus";
 import { RecallHome } from "./ataru-search/RecallHome";
 import { SearchResults } from "./ataru-search/SearchResults";
 import { TranscriptPreview } from "./ataru-search/TranscriptPreview";
@@ -145,8 +144,7 @@ export function AtaruSearchPage() {
   const composingRef = useRef(false);
   const compositionEndAtRef = useRef(0);
 
-  const { status: indexStatus, progress: indexProgress, start: startIndexBuild } = useSearchIndexBuildStatus();
-  const indexStartAttempted = useRef(false);
+  const { status: indexStatus } = useSearchIndexBuildStatus();
 
   const handleCompositionStart = useCallback(() => {
     composingRef.current = true;
@@ -160,14 +158,6 @@ export function AtaruSearchPage() {
       composingRef.current = false;
     });
   }, []);
-
-  useEffect(() => {
-    if (indexStatus?.state !== "idle" || indexStartAttempted.current) return;
-    indexStartAttempted.current = true;
-    startIndexBuild(false).catch(() => {
-      indexStartAttempted.current = false;
-    });
-  }, [indexStatus?.state, startIndexBuild]);
 
   useEffect(() => {
     const handleShortcut = (event: globalThis.KeyboardEvent) => {
@@ -370,9 +360,6 @@ export function AtaruSearchPage() {
               })}
             </SelectContent>
           </Select>
-          <div className="shrink-0">
-            <IndexStatus status={indexStatus} progress={indexProgress} onRetry={() => void startIndexBuild(false)} />
-          </div>
         </div>
       </header>}
 
