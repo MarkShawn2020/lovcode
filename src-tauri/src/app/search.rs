@@ -169,7 +169,7 @@ static SEARCH_INDEX_BUILD_STATE: std::sync::atomic::AtomicU8 =
 // Bump the manifest when indexed Turn semantics change. The next startup will
 // rebuild once so atomic content blocks, tool roles, and block identities are
 // backfilled.
-const SEARCH_INDEX_MANIFEST_VERSION: u32 = 7;
+const SEARCH_INDEX_MANIFEST_VERSION: u32 = 8;
 const SEARCH_INDEX_EVENT: &str = "search-index:build";
 const REQUIRED_SEARCH_INDEX_FIELDS: &[&str] = &[
     "title",
@@ -2109,7 +2109,7 @@ pub(crate) struct SemanticSearchStatus {
     pub(crate) error: Option<String>,
 }
 
-const EMBEDDING_SEARCH_INDEX_VERSION: u32 = 3;
+const EMBEDDING_SEARCH_INDEX_VERSION: u32 = 4;
 const DEFAULT_EMBEDDING_SEARCH_STORE_KIND: SemanticSearchStoreKind =
     SemanticSearchStoreKind::LanceDb;
 const LANCEDB_SEMANTIC_ENTRIES_TABLE: &str = "semantic_entries";
@@ -4085,7 +4085,7 @@ pub(crate) fn content_blocks_to_text(blocks: &[ContentBlock]) -> String {
 pub(crate) fn summarize_tool_result_item(value: &serde_json::Value) -> Option<String> {
     let obj = value.as_object()?;
     match obj.get("type").and_then(|v| v.as_str()) {
-        Some("text") => obj
+        Some("text") | Some("input_text") | Some("output_text") => obj
             .get("text")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
@@ -4108,7 +4108,7 @@ pub(crate) fn tool_result_raw_preview(value: &serde_json::Value) -> Option<Strin
                 .filter_map(|item| {
                     let obj = item.as_object()?;
                     match obj.get("type").and_then(|v| v.as_str()) {
-                        Some("text") => None,
+                        Some("text") | Some("input_text") | Some("output_text") => None,
                         Some("image") => Some("[image result: base64 omitted]".to_string()),
                         _ => summarize_tool_result_item(item),
                     }
@@ -4191,6 +4191,97 @@ pub(crate) fn extract_tool_result_content(value: &serde_json::Value) -> String {
         serde_json::Value::Object(_) => json_preview(value, 1200),
         _ => String::new(),
     }
+}
+
+pub(crate) fn normalize_search_evidence(value: &str) -> String {
+    const MARKERS: [&str; 2] = ["input_text:", "output_text:"];
+    let mut texts = Vec::new();
+    if MARKERS.iter().any(|marker| value.contains(marker)) {
+        let mut marker_offsets = Vec::new();
+        for marker in MARKERS {
+            marker_offsets.extend(
+                value
+                    .match_indices(marker)
+                    .map(|(offset, _)| (offset, marker)),
+            );
+        }
+        marker_offsets.sort_by_key(|(offset, _)| *offset);
+        for (index, (offset, marker)) in marker_offsets.iter().enumerate() {
+            let start = offset + marker.len();
+            let end = marker_offsets
+                .get(index + 1)
+                .map(|(next_offset, _)| *next_offset)
+                .unwrap_or(value.len());
+            if let Some(text) = protocol_text_segment(&value[start..end]) {
+                if !text.trim().is_empty() {
+                    texts.push(text.trim().to_string());
+                }
+            }
+        }
+    }
+
+    let decoded = if texts.is_empty() {
+        value.trim().to_string()
+    } else {
+        texts.join("\n")
+    };
+    let trimmed = decoded.trim();
+    if let Some(after_header) = trimmed.strip_prefix("Script completed") {
+        if let Some(output_offset) = after_header.find("Output:") {
+            let output = after_header[output_offset + "Output:".len()..].trim();
+            if !output.is_empty() {
+                return output.to_string();
+            }
+        }
+    }
+    trimmed.to_string()
+}
+
+fn protocol_text_segment(segment: &str) -> Option<String> {
+    let source = segment.trim();
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(source) {
+        return parsed
+            .get("text")
+            .and_then(|text| text.as_str())
+            .map(String::from);
+    }
+
+    let text_key = source.find("\"text\"")?;
+    let after_key = &source[text_key + "\"text\"".len()..];
+    let colon = after_key.find(':')?;
+    let after_colon = after_key[colon + 1..].trim_start();
+    let raw = after_colon.strip_prefix('"')?;
+    let mut escaped = false;
+    let mut closing_quote = None;
+    for (offset, character) in raw.char_indices() {
+        if escaped {
+            escaped = false;
+        } else if character == '\\' {
+            escaped = true;
+        } else if character == '"' {
+            closing_quote = Some(offset);
+            break;
+        }
+    }
+
+    let raw_text = closing_quote
+        .map(|offset| &raw[..offset])
+        .unwrap_or(raw)
+        .split("\n... truncated ...")
+        .next()
+        .unwrap_or("")
+        .trim_end_matches('\\');
+    let quoted = format!("\"{raw_text}\"");
+    serde_json::from_str::<String>(&quoted).ok().or_else(|| {
+        Some(
+            raw_text
+                .replace("\\n", "\n")
+                .replace("\\r", "\r")
+                .replace("\\t", "\t")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\"),
+        )
+    })
 }
 
 pub(crate) fn extract_content_blocks(
@@ -4444,6 +4535,19 @@ mod search_message_units_tests {
                 content: "一条消息".to_string(),
                 is_tool: false,
             }]
+        );
+    }
+
+    #[test]
+    fn codex_text_output_arrays_keep_readable_text_instead_of_protocol_envelopes() {
+        let output = json!([
+            {"type": "input_text", "text": "Script completed\nWall time 0.8 seconds\nOutput:\n"},
+            {"type": "input_text", "text": "ego-browser\nUsage: ego-browser help [topic]"}
+        ]);
+
+        assert_eq!(
+            normalize_search_evidence(&codex_output_text(&output)),
+            "ego-browser\nUsage: ego-browser help [topic]"
         );
     }
 }

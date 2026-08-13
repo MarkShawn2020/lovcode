@@ -109,12 +109,14 @@ struct SearchHitAccumulator {
     hit: SearchHit,
     sessions: HashSet<String>,
     evidence_score: Option<f32>,
+    evidence_has_literal_match: bool,
 }
 
 pub(crate) fn aggregate_candidates(
     candidates: Vec<RankedSearchCandidate>,
     level: SearchLevel,
     limit: usize,
+    query: &str,
 ) -> Vec<SearchHit> {
     let mut grouped: HashMap<String, SearchHitAccumulator> = HashMap::new();
 
@@ -134,8 +136,14 @@ pub(crate) fn aggregate_candidates(
             result.round_index,
             result,
         );
-        let has_message_evidence = candidate_has_message_evidence(&candidate);
-        let mut next_hit = search_hit_from_candidate(&candidate, level, key.clone());
+        let mut next_hit = search_hit_from_candidate(&candidate, level, key.clone(), query);
+        let has_message_evidence = result.line_number > 0 && !next_hit.snippet.trim().is_empty();
+        let has_literal_match = has_message_evidence
+            && first_query_match(
+                &crate::app::normalize_search_evidence(&result.content),
+                query,
+            )
+            .is_some();
         next_hit.match_count = usize::from(has_message_evidence);
         let session_id = result.session_id.clone();
 
@@ -143,8 +151,10 @@ pub(crate) fn aggregate_candidates(
             Some(group) => {
                 let should_replace_evidence = should_replace_evidence(
                     has_message_evidence,
+                    has_literal_match,
                     next_hit.score,
                     group.evidence_score,
+                    group.evidence_has_literal_match,
                     group.hit.score,
                 );
                 group.hit.match_count += usize::from(has_message_evidence);
@@ -162,6 +172,7 @@ pub(crate) fn aggregate_candidates(
                     group.hit.role = next_hit.role.clone();
                     group.hit.timestamp = next_hit.timestamp.clone();
                     group.evidence_score = has_message_evidence.then_some(next_hit.score);
+                    group.evidence_has_literal_match = has_literal_match;
                 }
                 merge_signal(&mut group.hit.signals.lexical, next_hit.signals.lexical);
                 merge_signal(&mut group.hit.signals.semantic, next_hit.signals.semantic);
@@ -176,6 +187,7 @@ pub(crate) fn aggregate_candidates(
                         hit: next_hit,
                         sessions,
                         evidence_score: has_message_evidence.then_some(candidate.fusion_score),
+                        evidence_has_literal_match: has_literal_match,
                     },
                 );
             }
@@ -199,18 +211,19 @@ pub(crate) fn aggregate_candidates(
     hits
 }
 
-fn candidate_has_message_evidence(candidate: &RankedSearchCandidate) -> bool {
-    candidate.result.line_number > 0 && !candidate.result.content.trim().is_empty()
-}
-
 fn should_replace_evidence(
     next_has_message_evidence: bool,
+    next_has_literal_match: bool,
     next_score: f32,
     current_evidence_score: Option<f32>,
+    current_has_literal_match: bool,
     current_group_score: f32,
 ) -> bool {
     match (next_has_message_evidence, current_evidence_score) {
         (true, None) => true,
+        (true, Some(_)) if next_has_literal_match != current_has_literal_match => {
+            next_has_literal_match
+        }
         (true, Some(current_score)) => next_score > current_score,
         (false, Some(_)) => false,
         (false, None) => next_score > current_group_score,
@@ -249,6 +262,7 @@ fn search_hit_from_candidate(
     candidate: &RankedSearchCandidate,
     level: SearchLevel,
     id: String,
+    query: &str,
 ) -> SearchHit {
     let result = &candidate.result;
     let session_title = result
@@ -277,7 +291,7 @@ fn search_hit_from_candidate(
         id,
         level,
         title: normalize_text(&title, 160),
-        snippet: normalize_text(&result.content, 420),
+        snippet: search_evidence_excerpt(&result.content, query, 420),
         project_id: result.project_id.clone(),
         project_path: result.project_path.clone(),
         session_id: Some(result.session_id.clone()).filter(|value| !value.is_empty()),
@@ -307,6 +321,98 @@ fn normalize_text(value: &str, max_chars: usize) -> String {
         &value.split_whitespace().collect::<Vec<_>>().join(" "),
         max_chars,
     )
+}
+
+fn search_evidence_excerpt(value: &str, query: &str, max_chars: usize) -> String {
+    let normalized = crate::app::normalize_search_evidence(value)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+
+    let Some((match_byte, match_bytes)) = first_query_match(&normalized, query) else {
+        return truncate_text(&normalized, max_chars);
+    };
+    let match_start = normalized[..match_byte].chars().count();
+    let match_length = normalized[match_byte..match_byte + match_bytes]
+        .chars()
+        .count();
+    let total_chars = normalized.chars().count();
+    let context_padding = 56.max(max_chars.saturating_sub(match_length) / 2);
+    let mut start = match_start.saturating_sub(context_padding);
+    let end = (start + max_chars).min(total_chars);
+    if end - start < max_chars {
+        start = end.saturating_sub(max_chars);
+    }
+    let excerpt = normalized
+        .chars()
+        .skip(start)
+        .take(end - start)
+        .collect::<String>();
+    format!(
+        "{}{}{}",
+        if start > 0 { "…" } else { "" },
+        excerpt.trim(),
+        if end < total_chars { "…" } else { "" }
+    )
+}
+
+fn first_query_match(value: &str, query: &str) -> Option<(usize, usize)> {
+    let ascii_lower = value.to_ascii_lowercase();
+    search_terms(query)
+        .into_iter()
+        .filter_map(|term| {
+            value
+                .find(&term)
+                .or_else(|| ascii_lower.find(&term.to_ascii_lowercase()))
+                .map(|index| (index, term.len()))
+        })
+        .min_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)))
+}
+
+fn search_terms(query: &str) -> Vec<String> {
+    const FIELDS: [&str; 12] = [
+        "title",
+        "project",
+        "turn",
+        "run",
+        "round",
+        "session",
+        "assistant",
+        "user",
+        "summary",
+        "prompt",
+        "content",
+        "path",
+    ];
+    let prepared = query.replace(['(', ')', '"', '\''], " ");
+    let mut terms = Vec::new();
+    for raw_token in prepared.split_whitespace() {
+        let token = if let Some((field, value)) = raw_token.split_once(':') {
+            if FIELDS
+                .iter()
+                .any(|candidate| field.eq_ignore_ascii_case(candidate))
+            {
+                value
+            } else {
+                raw_token
+            }
+        } else {
+            raw_token
+        };
+        let token = token.trim();
+        if token.is_empty() || matches!(token.to_ascii_lowercase().as_str(), "and" | "or" | "not") {
+            continue;
+        }
+        if !terms.iter().any(|existing: &String| existing == token) {
+            terms.push(token.to_string());
+        }
+    }
+    terms.sort_by_key(|term| std::cmp::Reverse(term.chars().count()));
+    terms.truncate(12);
+    terms
 }
 
 fn truncate_text(value: &str, max_chars: usize) -> String {
@@ -374,11 +480,11 @@ mod tests {
             candidate(result("s2", 2, "m3", "p1"), 0.7),
         ];
 
-        let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20);
+        let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20, "matched");
         assert_eq!(turns.len(), 3);
         assert!(turns.iter().all(|hit| hit.match_count == 1));
 
-        let runs = aggregate_candidates(candidates.clone(), SearchLevel::Run, 20);
+        let runs = aggregate_candidates(candidates.clone(), SearchLevel::Run, 20, "matched");
         assert_eq!(runs.len(), 2);
         assert_eq!(
             runs.iter()
@@ -388,10 +494,11 @@ mod tests {
             2
         );
 
-        let sessions = aggregate_candidates(candidates.clone(), SearchLevel::Session, 20);
+        let sessions =
+            aggregate_candidates(candidates.clone(), SearchLevel::Session, 20, "matched");
         assert_eq!(sessions.len(), 2);
 
-        let projects = aggregate_candidates(candidates, SearchLevel::Project, 20);
+        let projects = aggregate_candidates(candidates, SearchLevel::Project, 20, "matched");
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].match_count, 3);
         assert_eq!(projects[0].session_count, 2);
@@ -404,13 +511,13 @@ mod tests {
             candidate(result("same", 1, "same-message", "p2"), 0.8),
         ];
 
-        let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20);
+        let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20, "matched");
         assert_eq!(turns.len(), 2);
 
-        let runs = aggregate_candidates(candidates.clone(), SearchLevel::Run, 20);
+        let runs = aggregate_candidates(candidates.clone(), SearchLevel::Run, 20, "matched");
         assert_eq!(runs.len(), 2);
 
-        let sessions = aggregate_candidates(candidates, SearchLevel::Session, 20);
+        let sessions = aggregate_candidates(candidates, SearchLevel::Session, 20, "matched");
         assert_eq!(sessions.len(), 2);
     }
 
@@ -418,11 +525,11 @@ mod tests {
     fn run_level_skips_candidates_without_a_user_prompt() {
         let candidates = vec![candidate(result("s1", 0, "m0", "p1"), 0.9)];
 
-        let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20);
+        let turns = aggregate_candidates(candidates.clone(), SearchLevel::Turn, 20, "matched");
         assert_eq!(turns.len(), 1);
         assert_eq!(turns[0].run_index, None);
 
-        let runs = aggregate_candidates(candidates, SearchLevel::Run, 20);
+        let runs = aggregate_candidates(candidates, SearchLevel::Run, 20, "matched");
         assert!(runs.is_empty());
     }
 
@@ -438,6 +545,7 @@ mod tests {
             vec![candidate(metadata, 0.99), candidate(message, 0.55)],
             SearchLevel::Project,
             20,
+            "matched",
         );
 
         assert_eq!(hits.len(), 1);
@@ -445,5 +553,89 @@ mod tests {
         assert_eq!(hits[0].line_number, Some(11));
         assert_eq!(hits[0].snippet, "matched content message");
         assert_eq!(hits[0].match_count, 1);
+    }
+
+    #[test]
+    fn decodes_protocol_text_blocks_before_truncating_hit_evidence() {
+        let mut tool_result = result("s1", 1, "tool-result", "p1");
+        tool_result.role = "tool".to_string();
+        tool_result.content = concat!(
+            "input_text: {\"text\":\"Script completed\\nWall time 0.8 seconds\\nOutput:\\n\",\"type\":\"input_text\"} ",
+            "input_text: {\"text\":\"ego-browser\\n\\nUsage: ego-browser help [topic] ",
+            "ego-browser onboarding ego-browser import list\",\"type\":\"input_text\"}"
+        )
+        .to_string();
+
+        let hits = aggregate_candidates(
+            vec![candidate(tool_result, 0.9)],
+            SearchLevel::Turn,
+            20,
+            "ego-browser",
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].snippet.starts_with("ego-browser Usage:"));
+        assert!(hits[0].snippet.contains("ego-browser onboarding"));
+        assert!(!hits[0].snippet.contains("input_text"));
+    }
+
+    #[test]
+    fn recovers_matching_text_from_a_truncated_protocol_block() {
+        let mut tool_result = result("s1", 1, "truncated-tool-result", "p1");
+        tool_result.role = "tool".to_string();
+        tool_result.content = concat!(
+            "input_text: {\"text\":\"Script completed\\nWall time 0.8 seconds\\nOutput:\\n\",\"type\":\"input_text\"} ",
+            "input_text: {\"text\":\"ego-browser\\nUsage: ego-browser help [topic]\\nego-browser onboarding",
+            "\n... truncated ..."
+        )
+        .to_string();
+
+        let hits = aggregate_candidates(
+            vec![candidate(tool_result, 0.9)],
+            SearchLevel::Turn,
+            20,
+            "ego-browser",
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].snippet.starts_with("ego-browser Usage:"));
+        assert!(hits[0].snippet.contains("ego-browser onboarding"));
+    }
+
+    #[test]
+    fn centers_long_hit_evidence_on_the_actual_query_match() {
+        let mut long_result = result("s1", 1, "long-result", "p1");
+        long_result.content = format!("{} ego-browser matched command", "preface ".repeat(100));
+
+        let hits = aggregate_candidates(
+            vec![candidate(long_result, 0.9)],
+            SearchLevel::Turn,
+            20,
+            "ego-browser",
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].snippet.starts_with('…'));
+        assert!(hits[0].snippet.contains("ego-browser"));
+        assert!(hits[0].snippet.chars().count() <= 422);
+    }
+
+    #[test]
+    fn grouped_results_prefer_literal_evidence_over_higher_scoring_semantic_evidence() {
+        let mut semantic = result("s1", 1, "semantic", "p1");
+        semantic.content = "browser automation concept".to_string();
+        let mut lexical = result("s2", 2, "lexical", "p1");
+        lexical.content = "actual ego-browser command".to_string();
+
+        let hits = aggregate_candidates(
+            vec![candidate(semantic, 0.95), candidate(lexical, 0.7)],
+            SearchLevel::Project,
+            20,
+            "ego-browser",
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].message_id.as_deref(), Some("lexical"));
+        assert!(hits[0].snippet.contains("ego-browser"));
     }
 }

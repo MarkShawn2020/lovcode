@@ -93,14 +93,15 @@ export function cleanMessageText(value: string): string {
       .filter((text) => text.trim().length > 0)
     : [];
   const source = structuredText.length > 0 ? structuredText.join("\n") : value;
-
-  return source
+  const clean = (candidate: string) => candidate
     .replace(/\r\n?/g, "\n")
     .replace(/^\s*Script completed\b[\s\S]*?\bOutput:\s*/i, "")
     .replace(/\b(?:input_text|output_text)\s*:\s*/gi, "")
     .replace(/<meta\b[^>]*>/gi, " ")
     .replace(/&(amp|lt|gt|quot|#39);/g, decodeBasicHtmlEntities)
     .trim();
+  const cleaned = clean(source);
+  return cleaned || clean(value) || value.trim();
 }
 
 const SEARCH_FIELD_PREFIX = /\b(?:title|project|turn|run|round|session|assistant|user|summary|prompt|content|path):/gi;

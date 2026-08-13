@@ -79,6 +79,7 @@ pub(crate) fn ataru_keyword_search(request: SearchRequest) -> Result<SearchRespo
         fuse_ranked_results(lexical, Vec::<SearchResult>::new()),
         request.level,
         limit,
+        &query,
     );
 
     Ok(SearchResponse {
@@ -242,7 +243,7 @@ pub(crate) async fn ataru_search(request: SearchRequest) -> Result<SearchRespons
             Vec::<SearchResult>::new()
         },
     );
-    let hits = aggregate_candidates(candidates, request.level, limit);
+    let hits = aggregate_candidates(candidates, request.level, limit, &query);
 
     Ok(SearchResponse {
         version: ATARU_SEARCH_CONTRACT_VERSION,
