@@ -72,6 +72,7 @@ export async function buildUpdaterManifest({
   assets,
   readSignature,
   requiredPlatforms = [],
+  downloadBaseUrl,
 }) {
   const assetsByName = new Map(assets.map((asset) => [asset.name, asset]));
   const platforms = {};
@@ -89,7 +90,12 @@ export async function buildUpdaterManifest({
 
     const entry = {
       signature: (await readSignature(signatureAsset)).trim(),
-      url: updaterAsset.browser_download_url,
+      // A draft GitHub Release reports an `untagged-...` download URL. That
+      // URL is invalid after publication, so manifests must be addressed by
+      // the immutable tag rather than copied from the draft asset response.
+      url: downloadBaseUrl
+        ? `${downloadBaseUrl}/${encodeURIComponent(updaterAsset.name)}`
+        : updaterAsset.browser_download_url,
     };
     const baseKey = `${target.os}-${target.arch}`;
     const installerKey = `${baseKey}-${target.installer}`;
@@ -176,6 +182,7 @@ async function generateFromGitHub({ repo, tag, output, requiredPlatforms }) {
     release,
     assets,
     requiredPlatforms,
+    downloadBaseUrl: `https://github.com/${repo}/releases/download/${encodeURIComponent(tag)}`,
     readSignature: async (asset) => {
       const response = await githubRequest(
         `${apiBaseUrl}/repos/${repo}/releases/assets/${asset.id}`,

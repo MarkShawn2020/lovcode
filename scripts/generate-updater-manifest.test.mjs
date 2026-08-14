@@ -79,6 +79,26 @@ test("builds one complete manifest after all release assets are available", asyn
   );
 });
 
+test("uses the immutable tag download path instead of a draft asset URL", async () => {
+  const draftAsset = {
+    id: 1,
+    name: "lovcode_aarch64.app.tar.gz",
+    browser_download_url:
+      "https://github.com/example/lovcode/releases/download/untagged-draft/lovcode_aarch64.app.tar.gz",
+  };
+  const manifest = await buildUpdaterManifest({
+    release: { ...release, tag_name: "v1.2.3" },
+    assets: [draftAsset, { ...draftAsset, id: 2, name: `${draftAsset.name}.sig` }],
+    readSignature: async () => "signature",
+    downloadBaseUrl: "https://github.com/example/lovcode/releases/download/v1.2.3",
+  });
+
+  assert.equal(
+    manifest.platforms["darwin-aarch64"].url,
+    "https://github.com/example/lovcode/releases/download/v1.2.3/lovcode_aarch64.app.tar.gz",
+  );
+});
+
 test("fails before upload when a required target is absent", async () => {
   const assets = signedAssetPair(1, "lovcode_aarch64.app.tar.gz");
 
