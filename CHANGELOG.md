@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.41.1
+
+### Patch Changes
+
+- 默认使用本地关键词检索；语义检索移入高级设置，只有在用户主动启用并初始化后才会调用 Embedding 服务并写入本机 SQLite 索引。
+- 新增语义初始化抽样预检与 `ataru semantic preview --json`，在发送任何对话内容前展示会话规模、文本片段与 Embedding 批次估算。
+- 修复自动更新 manifest 在草稿 Release 阶段写入临时下载地址的问题，正式发布后始终使用不可变 tag 下载地址。
+- 复用跨版本 Rust 依赖缓存，缩短后续发布构建中的重复编译。
+
 ## 0.41.0
 
 ### Minor Changes
