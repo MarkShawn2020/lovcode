@@ -3,15 +3,15 @@ name: Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to build (e.g., v0.40.1)'
+        description: "Tag to build (e.g., v0.40.1)"
         required: true
         type: string
       target:
-        description: 'Target to build'
+        description: "Target to build"
         required: false
         default: all
         type: choice
@@ -207,8 +207,8 @@ jobs:
           workspaces: src-tauri
           cache-bin: false
           # A release bump updates the root package entry in Cargo.lock, but it
-          # does not require recompiling Tantivy/LanceDB and the rest of the
-          # dependency graph. Keep one dependency cache per Rust host and let
+          # does not require recompiling the unchanged dependency graph. Keep
+          # one dependency cache per Rust host and let
           # Cargo's fingerprints rebuild only crates whose inputs changed.
           shared-key: ataru-release-dependencies
           add-rust-environment-hash-key: false
