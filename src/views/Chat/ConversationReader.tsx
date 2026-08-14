@@ -122,19 +122,23 @@ export const ConversationReader = memo(function ConversationReader({
     overscan: 6,
     measureElement: (element) => element.getBoundingClientRect().height + 12,
   });
+  const targetIndex = useMemo(() => {
+    if (targetMessageId) {
+      const messageIndex = visibleMessages.findIndex((message) => message.uuid === targetMessageId);
+      if (messageIndex >= 0) return messageIndex;
+    }
+    if (targetLineNumber) {
+      return visibleMessages.findIndex((message) => message.line_number === targetLineNumber);
+    }
+    return -1;
+  }, [targetLineNumber, targetMessageId, visibleMessages]);
 
   useEffect(() => {
-    if (loading || visibleMessages.length === 0) return;
-    const targetIndex = targetMessageId
-      ? visibleMessages.findIndex((message) => message.uuid === targetMessageId)
-      : targetLineNumber
-        ? visibleMessages.findIndex((message) => message.line_number === targetLineNumber)
-        : -1;
-    if (targetIndex < 0) return;
+    if (loading || targetIndex < 0) return;
     requestAnimationFrame(() => {
       rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
     });
-  }, [loading, rowVirtualizer, targetLineNumber, targetMessageId, visibleMessages]);
+  }, [loading, rowVirtualizer, targetIndex]);
 
   if (error) return <CopyError error={error} projectId={projectId} sessionId={sessionId} />;
   if (loading) return <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">正在读取会话内容…</div>;
@@ -146,6 +150,7 @@ export const ConversationReader = memo(function ConversationReader({
         {rowVirtualizer.getVirtualItems().map((virtualRow) => {
           const message = visibleMessages[virtualRow.index];
           const isUser = message.role === "user" && !message.is_tool;
+          const isTarget = virtualRow.index === targetIndex;
           const timestamp = formatTimestamp(message.timestamp);
           return (
             <article
@@ -154,14 +159,17 @@ export const ConversationReader = memo(function ConversationReader({
               data-index={virtualRow.index}
               data-message-id={message.uuid || undefined}
               data-line-number={message.line_number}
-              className={`group absolute left-0 top-0 w-full rounded-xl border border-border p-4 ${
-                isUser ? "bg-primary/5" : "bg-card"
+              className={`group absolute left-0 top-0 w-full rounded-xl border p-4 ${
+                isTarget
+                  ? "border-primary/45 bg-primary/5 ring-1 ring-primary/15"
+                  : `border-border ${isUser ? "bg-primary/5" : "bg-card"}`
               }`}
               style={{ transform: `translateY(${virtualRow.start}px)` }}
             >
               <header className="mb-3 flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2">
                   <span className={`text-xs font-semibold ${isUser ? "text-primary" : "text-foreground"}`}>{roleLabel(message)}</span>
+                  {isTarget && <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 text-[10px] font-semibold text-primary">命中</span>}
                   {timestamp && <time className="truncate text-[11px] text-muted-foreground">{timestamp}</time>}
                 </div>
                 <button

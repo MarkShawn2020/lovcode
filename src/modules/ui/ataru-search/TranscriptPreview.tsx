@@ -4,7 +4,15 @@ import { Button } from "@/components/ui/button";
 import { copyText, getSessionMessages, type SearchHit } from "@/modules/api/ataru";
 import type { Message } from "@/types";
 import { ConversationReader } from "@/views/Chat/ConversationReader";
-import { getSearchResultContextLabel, getSearchResultExcerpt, getSearchResultTitle, projectName, readableError } from "./utils";
+import { HighlightedText } from "./SearchFeedback";
+import {
+  getSearchResultContextLabel,
+  getSearchResultExcerpt,
+  getSearchResultMatchLabel,
+  getSearchResultTitle,
+  projectName,
+  readableError,
+} from "./utils";
 
 export function TranscriptPreview({
   hit,
@@ -72,6 +80,8 @@ export function TranscriptPreview({
   const title = getSearchResultTitle(hit, query);
   const contextLabel = getSearchResultContextLabel(hit);
   const snippet = getSearchResultExcerpt(hit, query, title);
+  const matchLabel = getSearchResultMatchLabel(hit, query, snippet);
+  const matchSummary = hit.matchCount > 1 ? `${hit.matchCount} 条 Turn 命中` : "1 条 Turn 命中";
 
   return (
     <section
@@ -83,7 +93,7 @@ export function TranscriptPreview({
     >
       <header className="flex shrink-0 items-start justify-between gap-3 border-b border-border px-4 py-3">
         <div className="min-w-0">
-          <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-primary">命中上下文</p>
+          <p className="text-[11px] font-medium tracking-[0.14em] text-primary">命中 Turn 与上下文</p>
           <h2 className="mt-1 line-clamp-2 font-serif text-base font-semibold">{title || contextLabel}</h2>
           <p className="mt-1 truncate text-[11px] text-muted-foreground">
             {title ? `${contextLabel} · ` : ""}{projectName(hit.projectPath)}
@@ -93,6 +103,17 @@ export function TranscriptPreview({
           <X className="h-4 w-4" />
         </Button>
       </header>
+
+      <section className="shrink-0 border-b border-primary/20 bg-primary/5 px-4 py-3" aria-label="命中证据">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-medium">
+          <span className="rounded-sm bg-primary/15 px-1.5 py-0.5 text-primary">{matchLabel}</span>
+          <span className="text-muted-foreground">{matchSummary}</span>
+          {hit.lineNumber && <span className="text-muted-foreground">第 {hit.lineNumber} 行</span>}
+        </div>
+        <p className="mt-2 line-clamp-3 text-sm leading-6 text-foreground" aria-label="本次搜索的命中证据">
+          <HighlightedText text={snippet} query={query} />
+        </p>
+      </section>
 
       <ConversationReader
         messages={nearbyMessages}
