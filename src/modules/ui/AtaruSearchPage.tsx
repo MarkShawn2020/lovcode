@@ -37,6 +37,7 @@ import { readableError } from "./ataru-search/utils";
 
 const RECENT_QUERY_KEY = "ataru:recentQueries";
 const LEGACY_RECENT_QUERY_KEY = "lovcode:search-overlay:recent-searches";
+const SEARCH_SCOPE_STORAGE_KEY = "ataru:searchScope";
 const IME_ENTER_GUARD_MS = 160;
 const RESULT_LIMIT = 40;
 const ALL_LEVELS: SearchLevel[] = ["project", "session", "run", "turn"];
@@ -64,6 +65,21 @@ function isSearchScope(value: string | null): value is SearchScope {
 
 function isSearchMode(value: string | null): value is SearchMode {
   return value === "auto" || value === "keyword" || value === "semantic" || value === "hybrid";
+}
+
+function loadSearchScope(): SearchScope {
+  try {
+    const storedScope = window.localStorage.getItem(SEARCH_SCOPE_STORAGE_KEY);
+    return isSearchScope(storedScope) ? storedScope : "turn";
+  } catch {
+    return "turn";
+  }
+}
+
+function storeSearchScope(scope: SearchScope) {
+  try {
+    window.localStorage.setItem(SEARCH_SCOPE_STORAGE_KEY, scope);
+  } catch {}
 }
 
 function loadRecentQueries(): string[] {
@@ -130,7 +146,7 @@ export function AtaruSearchPage() {
   const initialMode = searchParams.get("mode");
   const [query, setQuery] = useState(() => initialQuery);
   const [submittedQuery, setSubmittedQuery] = useState(() => initialQuery);
-  const [level, setLevel] = useState<SearchScope>(() => (isSearchScope(initialLevel) ? initialLevel : "turn"));
+  const [level, setLevel] = useState<SearchScope>(() => (isSearchScope(initialLevel) ? initialLevel : loadSearchScope()));
   const [mode, setMode] = useState<SearchMode>(() => (isSearchMode(initialMode) ? initialMode : "auto"));
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [selectedHitId, setSelectedHitId] = useState<string | null>(null);
@@ -157,6 +173,11 @@ export function AtaruSearchPage() {
     requestAnimationFrame(() => {
       composingRef.current = false;
     });
+  }, []);
+
+  const selectSearchScope = useCallback((nextScope: SearchScope) => {
+    storeSearchScope(nextScope);
+    setLevel(nextScope);
   }, []);
 
   useEffect(() => {
@@ -333,7 +354,7 @@ export function AtaruSearchPage() {
               <span>⌘</span><span>K</span>
             </div>
           </div>
-          <Select value={level} onValueChange={(value) => setLevel(value as SearchScope)}>
+          <Select value={level} onValueChange={(value) => selectSearchScope(value as SearchScope)}>
             <SelectTrigger className="h-9 w-28 shrink-0 rounded-md border-foreground/15 bg-card px-3.5 text-sm font-medium shadow-none sm:w-32" aria-label="结果类型">
               <SelectValue />
             </SelectTrigger>
