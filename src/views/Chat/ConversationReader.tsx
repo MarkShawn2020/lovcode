@@ -1,4 +1,5 @@
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Check, Copy, Wrench } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -112,39 +113,51 @@ export const ConversationReader = memo(function ConversationReader({
   compact?: boolean;
 }) {
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const visibleMessages = useMemo(() => messages.filter((message) => !message.is_meta), [messages]);
+  const rowVirtualizer = useVirtualizer({
+    count: visibleMessages.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 180,
+    overscan: 6,
+    measureElement: (element) => element.getBoundingClientRect().height + 12,
+  });
 
   useEffect(() => {
     if (loading || visibleMessages.length === 0) return;
-    const selector = targetMessageId
-      ? `[data-message-id="${CSS.escape(targetMessageId)}"]`
+    const targetIndex = targetMessageId
+      ? visibleMessages.findIndex((message) => message.uuid === targetMessageId)
       : targetLineNumber
-        ? `[data-line-number="${targetLineNumber}"]`
-        : null;
-    if (!selector) return;
+        ? visibleMessages.findIndex((message) => message.line_number === targetLineNumber)
+        : -1;
+    if (targetIndex < 0) return;
     requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>(selector)?.scrollIntoView({ block: "center" });
+      rowVirtualizer.scrollToIndex(targetIndex, { align: "center" });
     });
-  }, [loading, targetLineNumber, targetMessageId, visibleMessages.length]);
+  }, [loading, rowVirtualizer, targetLineNumber, targetMessageId, visibleMessages]);
 
   if (error) return <CopyError error={error} projectId={projectId} sessionId={sessionId} />;
   if (loading) return <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">正在读取会话内容…</div>;
   if (visibleMessages.length === 0) return <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">这个会话没有可显示的消息</div>;
 
   return (
-    <div className={`min-h-0 flex-1 overflow-y-auto ${compact ? "px-3 py-3" : "px-5 py-5"}`}>
-      <div className={`mx-auto space-y-3 ${compact ? "max-w-3xl" : "max-w-5xl"}`}>
-        {visibleMessages.map((message, index) => {
+    <div ref={scrollRef} className={`min-h-0 flex-1 overflow-y-auto ${compact ? "px-3 py-3" : "px-5 py-5"}`}>
+      <div className={`relative mx-auto ${compact ? "max-w-3xl" : "max-w-5xl"}`} style={{ height: `${rowVirtualizer.getTotalSize()}px` }}>
+        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+          const message = visibleMessages[virtualRow.index];
           const isUser = message.role === "user" && !message.is_tool;
           const timestamp = formatTimestamp(message.timestamp);
           return (
             <article
-              key={`${message.uuid}:${message.line_number}:${index}`}
+              key={`${message.uuid}:${message.line_number}:${virtualRow.index}`}
+              ref={rowVirtualizer.measureElement}
+              data-index={virtualRow.index}
               data-message-id={message.uuid || undefined}
               data-line-number={message.line_number}
-              className={`group rounded-xl border border-border p-4 [content-visibility:auto] [contain-intrinsic-size:auto_160px] ${
+              className={`group absolute left-0 top-0 w-full rounded-xl border border-border p-4 ${
                 isUser ? "bg-primary/5" : "bg-card"
               }`}
+              style={{ transform: `translateY(${virtualRow.start}px)` }}
             >
               <header className="mb-3 flex items-center justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2">
