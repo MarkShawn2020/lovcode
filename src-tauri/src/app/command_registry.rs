@@ -12,6 +12,7 @@ pub(crate) fn command_handler() -> Box<tauri::ipc::InvokeHandler<tauri::Wry>> {
         get_session_source_path,
         list_all_sessions_streamed,
         make_window_nonactivating_panel,
+        preview_semantic_search_initialization,
         reveal_session_in_finder,
         search_chats,
         semantic_search_chats,

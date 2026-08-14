@@ -12,6 +12,7 @@ enum CliRequest {
         project_id: String,
         session_id: String,
     },
+    SemanticPreflight,
 }
 
 pub(crate) fn run_cli_if_requested() -> Option<i32> {
@@ -80,6 +81,18 @@ pub(crate) fn run_cli_if_requested() -> Option<i32> {
                 }
             }
         }
+        Ok(CliRequest::SemanticPreflight) => match semantic_search_initialization_preview()
+            .and_then(|preview| serde_json::to_string(&preview).map_err(|error| error.to_string()))
+        {
+            Ok(json) => {
+                println!("{json}");
+                0
+            }
+            Err(error) => {
+                eprintln!("Ataru semantic preflight failed: {error}");
+                1
+            }
+        },
         Err(error) => {
             eprintln!("{error}");
             2
@@ -91,6 +104,12 @@ fn parse_cli_request(args: &[String]) -> Option<Result<CliRequest, String>> {
     let command = args.first()?.as_str();
     if matches!(command, "--version" | "-V") {
         return Some(Ok(CliRequest::Version));
+    }
+    if command == "semantic" {
+        return Some(match args.get(1).map(String::as_str) {
+            Some("preview") => Ok(CliRequest::SemanticPreflight),
+            _ => Err("Usage: ataru semantic preview --json".to_string()),
+        });
     }
     if command != "search" {
         if command == "session" {
@@ -278,6 +297,14 @@ mod tests {
                 project_id: "-Users-mark-projects-ataru".to_string(),
                 session_id: "session-123".to_string(),
             }))
+        );
+    }
+
+    #[test]
+    fn parses_semantic_preflight_request() {
+        assert_eq!(
+            parse_cli_request(&args(&["semantic", "preview", "--json"])),
+            Some(Ok(CliRequest::SemanticPreflight))
         );
     }
 

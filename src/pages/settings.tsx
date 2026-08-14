@@ -4,7 +4,9 @@ import { AppUpdatePanel } from "@/components/AppUpdatePanel";
 import {
   getSemanticSearchStatus,
   initializeSemanticSearch,
+  previewSemanticSearchInitialization,
   setSemanticSearchEnabled,
+  type SemanticSearchInitializationPreview,
   type SemanticSearchStatus,
 } from "@/modules/api/ataru";
 
@@ -15,6 +17,7 @@ export default function SettingsPage() {
   const [semantic, setSemantic] = useState<SemanticSearchStatus | null>(null);
   const [semanticBusy, setSemanticBusy] = useState(false);
   const [semanticError, setSemanticError] = useState<string | null>(null);
+  const [semanticPreview, setSemanticPreview] = useState<SemanticSearchInitializationPreview | null>(null);
   const diagnostic = semanticError ?? semantic?.error ?? null;
 
   const refreshSemanticStatus = async () => {
@@ -48,6 +51,18 @@ export default function SettingsPage() {
     try {
       setSemanticError(null);
       setSemantic(await initializeSemanticSearch());
+    } catch (error) {
+      setSemanticError(semanticErrorContext(error));
+    } finally {
+      setSemanticBusy(false);
+    }
+  };
+
+  const previewSemanticInitialization = async () => {
+    setSemanticBusy(true);
+    try {
+      setSemanticError(null);
+      setSemanticPreview(await previewSemanticSearchInitialization());
     } catch (error) {
       setSemanticError(semanticErrorContext(error));
     } finally {
@@ -108,15 +123,30 @@ export default function SettingsPage() {
                       ? "已读取 Embedding 配置，等待初始化本地索引"
                       : "尚未读取到 Embedding 配置"}
                 </div>
-                <button
-                  type="button"
-                  disabled={semanticBusy || !semantic.configured}
-                  onClick={() => void initializeSemantic()}
-                  className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  初始化本地索引
-                </button>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={semanticBusy}
+                    onClick={() => void previewSemanticInitialization()}
+                    className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    检查初始化范围
+                  </button>
+                  <button
+                    type="button"
+                    disabled={semanticBusy || !semantic.configured}
+                    onClick={() => void initializeSemantic()}
+                    className="rounded-lg border border-border bg-card px-3 py-2 text-sm font-medium text-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    初始化本地索引
+                  </button>
+                </div>
               </div>
+              {semanticPreview && (
+                <p className="mt-3 text-xs leading-5 text-muted-foreground">
+                  已抽样扫描 {semanticPreview.sampledSessions.toLocaleString()} / {semanticPreview.sourceSessions.toLocaleString()} 个会话，估计约 {semanticPreview.candidateChunks.toLocaleString()} 个文本片段、{semanticPreview.embeddingBatches.toLocaleString()} 批 Embedding 请求；仅本地扫描，未发送任何对话内容。
+                </p>
+              )}
               {!semantic.configured && (
                 <p className="mt-3 text-xs leading-5 text-muted-foreground">
                   请先在 Claude 配置的 env 中设置 <code>LOVCODE_EMBEDDING_BASE_URL</code>、<code>LOVCODE_EMBEDDING_MODEL</code>，以及需要时的 <code>LOVCODE_EMBEDDING_API_KEY</code>。

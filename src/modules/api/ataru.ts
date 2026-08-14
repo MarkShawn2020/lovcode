@@ -79,6 +79,15 @@ export interface SemanticSearchStatus {
   error?: string | null;
 }
 
+export interface SemanticSearchInitializationPreview {
+  sourceSessions: number;
+  sampledSessions: number;
+  sourceBytes: number;
+  candidateChunks: number;
+  candidateChars: number;
+  embeddingBatches: number;
+}
+
 export function getSemanticSearchStatus(): Promise<SemanticSearchStatus> {
   return invoke<SemanticSearchStatus>("get_semantic_search_status");
 }
@@ -89,4 +98,8 @@ export function setSemanticSearchEnabled(enabled: boolean): Promise<SemanticSear
 
 export function initializeSemanticSearch(): Promise<SemanticSearchStatus> {
   return invoke<SemanticSearchStatus>("initialize_semantic_search");
+}
+
+export function previewSemanticSearchInitialization(): Promise<SemanticSearchInitializationPreview> {
+  return invoke<SemanticSearchInitializationPreview>("preview_semantic_search_initialization");
 }

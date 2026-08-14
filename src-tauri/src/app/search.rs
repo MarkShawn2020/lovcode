@@ -2124,12 +2124,24 @@ pub(crate) struct SemanticSearchStatus {
     pub(crate) error: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SemanticSearchInitializationPreview {
+    pub(crate) source_sessions: usize,
+    pub(crate) sampled_sessions: usize,
+    pub(crate) source_bytes: u64,
+    pub(crate) candidate_chunks: usize,
+    pub(crate) candidate_chars: usize,
+    pub(crate) embedding_batches: usize,
+}
+
 const EMBEDDING_SEARCH_INDEX_VERSION: u32 = 4;
 const DEFAULT_EMBEDDING_SEARCH_STORE_KIND: SemanticSearchStoreKind =
     SemanticSearchStoreKind::Sqlite;
 const EMBEDDING_SEARCH_BATCH_SIZE: usize = 32;
 const EMBEDDING_SEARCH_MAX_TEXT_CHARS: usize = 2400;
 const EMBEDDING_SEARCH_MAX_CHUNKS_PER_SESSION: usize = 160;
+const SEMANTIC_PREVIEW_SAMPLE_SIZE: usize = 48;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -3365,6 +3377,60 @@ pub(crate) async fn set_semantic_search_enabled(
 ) -> Result<SemanticSearchStatus, String> {
     save_semantic_search_settings(&SemanticSearchSettings { enabled })?;
     get_semantic_search_status().await
+}
+
+#[tauri::command]
+pub(crate) async fn preview_semantic_search_initialization(
+) -> Result<SemanticSearchInitializationPreview, String> {
+    tauri::async_runtime::spawn_blocking(semantic_search_initialization_preview)
+        .await
+        .map_err(|error| format!("ATARU_SEMANTIC_PREVIEW: Local preflight task failed. {error}"))?
+}
+
+pub(crate) fn semantic_search_initialization_preview(
+) -> Result<SemanticSearchInitializationPreview, String> {
+    let (claude_sources, codex_sources, source_manifest) = collect_embedding_search_sources()?;
+    let source_sessions = source_manifest.len();
+    let claude_sample_size = claude_sources.len().min(SEMANTIC_PREVIEW_SAMPLE_SIZE / 2);
+    let codex_sample_size = codex_sources
+        .len()
+        .min(SEMANTIC_PREVIEW_SAMPLE_SIZE.saturating_sub(claude_sample_size));
+    let sampled_sessions = claude_sample_size + codex_sample_size;
+    let mut sampled_chunks = 0usize;
+    let mut sampled_chars = 0usize;
+
+    for source in claude_sources.iter().take(claude_sample_size) {
+        let candidates = collect_claude_embedding_candidates(source);
+        sampled_chunks += candidates.len();
+        sampled_chars += candidates
+            .iter()
+            .map(|candidate| candidate.text.chars().count())
+            .sum::<usize>();
+    }
+    for source in codex_sources.iter().take(codex_sample_size) {
+        let candidates = collect_codex_embedding_candidates(source);
+        sampled_chunks += candidates.len();
+        sampled_chars += candidates
+            .iter()
+            .map(|candidate| candidate.text.chars().count())
+            .sum::<usize>();
+    }
+    let scale = if sampled_sessions == 0 {
+        0.0
+    } else {
+        source_sessions as f64 / sampled_sessions as f64
+    };
+    let candidate_chunks = (sampled_chunks as f64 * scale).ceil() as usize;
+    let candidate_chars = (sampled_chars as f64 * scale).ceil() as usize;
+
+    Ok(SemanticSearchInitializationPreview {
+        source_sessions,
+        sampled_sessions,
+        source_bytes: source_manifest.iter().map(|source| source.size).sum(),
+        candidate_chunks,
+        candidate_chars,
+        embedding_batches: candidate_chunks.div_ceil(EMBEDDING_SEARCH_BATCH_SIZE),
+    })
 }
 
 #[tauri::command]
