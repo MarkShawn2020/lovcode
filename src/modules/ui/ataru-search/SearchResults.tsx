@@ -3,6 +3,14 @@ import {
   Loader2,
   Search,
 } from "lucide-react";
+import { useMemo, useState } from "react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
   type SearchHit,
@@ -25,6 +33,41 @@ const RESULT_LEVEL_LABELS: Record<SearchHit["level"], string> = {
   project: "Project",
 };
 
+const SEARCH_SORT_OPTIONS = [
+  { value: "updated-desc", label: "最新更新时间" },
+  { value: "updated-asc", label: "最早更新时间" },
+  { value: "relevance", label: "相关度" },
+] as const;
+
+type SearchSort = (typeof SEARCH_SORT_OPTIONS)[number]["value"];
+
+function timestampValue(timestamp: string | undefined): number | null {
+  if (!timestamp) return null;
+  const value = Date.parse(timestamp);
+  return Number.isNaN(value) ? null : value;
+}
+
+export function sortSearchHits(hits: SearchHit[], sort: SearchSort): SearchHit[] {
+  return hits
+    .map((hit, index) => ({ hit, index, timestamp: timestampValue(hit.timestamp) }))
+    .sort((left, right) => {
+      if (sort === "relevance") {
+        return right.hit.score - left.hit.score || left.index - right.index;
+      }
+
+      if (left.timestamp === null || right.timestamp === null) {
+        if (left.timestamp === right.timestamp) return left.index - right.index;
+        return left.timestamp === null ? 1 : -1;
+      }
+
+      const timeDifference = sort === "updated-desc"
+        ? right.timestamp - left.timestamp
+        : left.timestamp - right.timestamp;
+      return timeDifference || left.index - right.index;
+    })
+    .map(({ hit }) => hit);
+}
+
 export function SearchResults({
   response,
   loading,
@@ -44,6 +87,12 @@ export function SearchResults({
   onRetry: () => void;
   onSelectQuery: (query: string) => void;
 }) {
+  const [sort, setSort] = useState<SearchSort>("updated-desc");
+  const hits = useMemo(
+    () => (response ? sortSearchHits(response.hits, sort) : []),
+    [response, sort],
+  );
+
   return (
     <section
       id="ataru-search-results"
@@ -52,7 +101,13 @@ export function SearchResults({
       aria-busy={loading}
       role="tabpanel"
     >
-      <SearchSummary response={response} loading={loading} error={error} />
+      <SearchSummary
+        response={response}
+        loading={loading}
+        error={error}
+        sort={sort}
+        onSortChange={(value) => setSort(value as SearchSort)}
+      />
       {response && response.warnings.length > 0 && (
         <div className="mx-auto w-full max-w-3xl px-5 pt-2 sm:px-8">
           <div
@@ -70,16 +125,16 @@ export function SearchResults({
         <div className="mx-auto w-full max-w-3xl px-5 pb-12 pt-7 sm:px-8">
           <ErrorState error={error} onRetry={onRetry} />
         </div>
-      ) : response && response.hits.length === 0 && !loading ? (
+      ) : response && hits.length === 0 && !loading ? (
         <EmptyResults query={response.query} onSelectQuery={onSelectQuery} />
       ) : (
         <div className="mx-auto w-full max-w-3xl px-5 pb-12 pt-2 sm:px-8">
-          {response?.hits.map((hit, index) => (
+          {hits.map((hit, index) => (
             <ResultCard
               key={hit.id}
               hit={hit}
               rank={index + 1}
-              query={response.query}
+              query={response?.query ?? ""}
               selected={hit.id === selectedHitId}
               onSelect={() => onSelectHit(hit.id)}
               onOpenContext={() => onOpenContext(hit)}
@@ -96,10 +151,14 @@ function SearchSummary({
   response,
   loading,
   error,
+  sort,
+  onSortChange,
 }: {
   response: SearchResponse | null;
   loading: boolean;
   error: string | null;
+  sort: SearchSort;
+  onSortChange: (sort: string) => void;
 }) {
   const detail = error
     ? "这次搜索没有完成"
@@ -115,7 +174,26 @@ function SearchSummary({
       <p className="text-xs font-medium text-muted-foreground" role="status" aria-live="polite">
         {detail}
       </p>
-      {loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" aria-label="正在搜索" />}
+      <div className="flex shrink-0 items-center gap-2">
+        {response && response.hits.length > 1 && (
+          <Select value={sort} onValueChange={onSortChange}>
+            <SelectTrigger
+              className="h-8 w-[8.5rem] rounded-md border-border bg-card px-2.5 text-xs font-medium shadow-none"
+              aria-label="搜索结果排序"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent className="rounded-lg border-border shadow-lg">
+              {SEARCH_SORT_OPTIONS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+        {loading && <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" aria-label="正在搜索" />}
+      </div>
     </div>
   );
 }
