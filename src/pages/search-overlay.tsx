@@ -91,7 +91,7 @@ function mergeSearchResponses(
 export default function SearchOverlay() {
   const [query, setQuery] = useState("");
   const [scope, setScope] = useState<SearchScope>("all");
-  const [mode, setMode] = useState<SearchMode>("auto");
+  const [mode, setMode] = useState<SearchMode>("keyword");
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);

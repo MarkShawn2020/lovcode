@@ -171,7 +171,7 @@ flowchart TB
 
     SOURCES[("Local transcript files")]
     TEXT[("Tantivy + Jieba\nkeyword index")]
-    VECTOR[("SQLite / LanceDB\noptional vector store")]
+    VECTOR[("SQLite\noptional vector store")]
     EMBED["Optional embedding provider"]
     CONTEXT["Raw context reader\nmessage · line · deep link"]
 
@@ -275,7 +275,7 @@ flowchart TB
 
 **事实来源：** 用户本机的 Claude/Codex 会话文件。
 
-**派生数据：** Tantivy 全文索引、`search-index-manifest.json`、可选 SQLite/LanceDB 向量索引和会话缓存。
+**派生数据：** Tantivy 全文索引、`search-index-manifest.json`、由用户在高级设置中显式初始化的 SQLite 向量索引和会话缓存。
 
 **边界：** Ataru 可以清除或重建派生索引，但不删除原始会话。远程语义提供方只有在用户显式配置后才参与，并且只接收完成召回所需的最小化文本。
 
@@ -394,7 +394,7 @@ docs/images/                 README cover and current product path visuals
 | Desktop shell | Tauri 2 |
 | Frontend | React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui |
 | Search | Tantivy + Jieba |
-| Semantic recall | OpenAI-compatible Embeddings, SQLite/LanceDB adapters |
+| Semantic recall | 用户显式启用的 OpenAI-compatible Embeddings + SQLite 索引 |
 | Backend | Rust 2021 |
 | State | React Query, Jotai, Tauri events |
 

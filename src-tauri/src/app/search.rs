@@ -2050,21 +2050,16 @@ struct EmbeddingSearchConfig {
     base_url: String,
     api_key: String,
     model: String,
-    store: SemanticSearchStoreKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SemanticSearchStoreKind {
     Sqlite,
-    LanceDb,
 }
 
 impl SemanticSearchStoreKind {
     fn as_str(self) -> &'static str {
-        match self {
-            Self::Sqlite => "sqlite",
-            Self::LanceDb => "lancedb",
-        }
+        "sqlite"
     }
 }
 
@@ -2119,6 +2114,7 @@ struct EmbeddingApiDatum {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SemanticSearchStatus {
+    pub(crate) enabled: bool,
     pub(crate) configured: bool,
     pub(crate) ready: bool,
     pub(crate) model: Option<String>,
@@ -2130,26 +2126,45 @@ pub(crate) struct SemanticSearchStatus {
 
 const EMBEDDING_SEARCH_INDEX_VERSION: u32 = 4;
 const DEFAULT_EMBEDDING_SEARCH_STORE_KIND: SemanticSearchStoreKind =
-    SemanticSearchStoreKind::LanceDb;
-const LANCEDB_SEMANTIC_ENTRIES_TABLE: &str = "semantic_entries";
-const LANCEDB_SEMANTIC_SOURCES_TABLE: &str = "semantic_sources";
-const LANCEDB_SEMANTIC_METADATA_TABLE: &str = "semantic_metadata";
+    SemanticSearchStoreKind::Sqlite;
 const EMBEDDING_SEARCH_BATCH_SIZE: usize = 32;
 const EMBEDDING_SEARCH_MAX_TEXT_CHARS: usize = 2400;
 const EMBEDDING_SEARCH_MAX_CHUNKS_PER_SESSION: usize = 160;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticSearchSettings {
+    enabled: bool,
+}
+
+fn semantic_search_settings_path() -> PathBuf {
+    get_index_dir()
+        .parent()
+        .map(|parent| parent.join("semantic-search-settings.json"))
+        .unwrap_or_else(|| PathBuf::from("semantic-search-settings.json"))
+}
+
+fn load_semantic_search_settings() -> SemanticSearchSettings {
+    fs::read_to_string(semantic_search_settings_path())
+        .ok()
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default()
+}
+
+fn save_semantic_search_settings(settings: &SemanticSearchSettings) -> Result<(), String> {
+    let path = semantic_search_settings_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let value = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
+    fs::write(path, value).map_err(|error| error.to_string())
+}
 
 fn embedding_search_store_path() -> PathBuf {
     get_index_dir()
         .parent()
         .map(|parent| parent.join("semantic-search.sqlite"))
         .unwrap_or_else(|| PathBuf::from("semantic-search.sqlite"))
-}
-
-fn lancedb_embedding_search_store_path() -> PathBuf {
-    get_index_dir()
-        .parent()
-        .map(|parent| parent.join("semantic-search.lancedb"))
-        .unwrap_or_else(|| PathBuf::from("semantic-search.lancedb"))
 }
 
 fn settings_env_value(settings: &Value, key: &str) -> Option<String> {
@@ -2185,19 +2200,6 @@ fn load_embedding_search_config() -> Result<EmbeddingSearchConfig, String> {
     let api_key = embedding_setting_value("LOVCODE_EMBEDDING_API_KEY")
         .or_else(|| embedding_setting_value("OPENAI_API_KEY"))
         .unwrap_or_default();
-    let store = embedding_setting_value("LOVCODE_SEMANTIC_STORE")
-        .or_else(|| embedding_setting_value("LOVCODE_RAG_STORE"))
-        .map(|value| match value.to_ascii_lowercase().as_str() {
-            "sqlite" => Ok(SemanticSearchStoreKind::Sqlite),
-            "lance" | "lancedb" => Ok(SemanticSearchStoreKind::LanceDb),
-            other => Err(format!(
-                "Unsupported semantic search store '{}'. Use 'lancedb' or 'sqlite'.",
-                other
-            )),
-        })
-        .transpose()?
-        .unwrap_or(DEFAULT_EMBEDDING_SEARCH_STORE_KIND);
-
     let Some(base_url) = base_url else {
         return Err(
             "Embedding search is not configured. Set LOVCODE_EMBEDDING_BASE_URL, LOVCODE_EMBEDDING_MODEL, and optionally LOVCODE_EMBEDDING_API_KEY (or use OPENAI_API_KEY)."
@@ -2209,7 +2211,6 @@ fn load_embedding_search_config() -> Result<EmbeddingSearchConfig, String> {
         base_url,
         api_key,
         model,
-        store,
     })
 }
 
@@ -2230,7 +2231,6 @@ struct SemanticRagStoreStatus {
 
 enum SemanticRagStoreAdapter {
     Sqlite(SqliteSemanticRagStore),
-    LanceDb(LanceDbSemanticRagStore),
 }
 
 struct SqliteSemanticRagStore {
@@ -2291,210 +2291,13 @@ impl SqliteSemanticRagStore {
     }
 }
 
-struct LanceDbSemanticRagStore {
-    path: PathBuf,
-}
-
-impl LanceDbSemanticRagStore {
-    fn new() -> Self {
-        Self {
-            path: lancedb_embedding_search_store_path(),
-        }
-    }
-
-    fn uri(&self) -> String {
-        self.path.to_string_lossy().into_owned()
-    }
-
-    async fn connect(&self) -> Result<lancedb::Connection, String> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
-        lancedb::connect(&self.uri())
-            .execute()
-            .await
-            .map_err(|e| format!("open LanceDB semantic search store: {}", e))
-    }
-
-    async fn load_current(
-        &self,
-        config: &EmbeddingSearchConfig,
-        sources: &[EmbeddingSearchSourceManifestEntry],
-    ) -> Result<Option<EmbeddingSearchIndex>, String> {
-        if !self.path.exists() {
-            return Ok(None);
-        }
-        let db = self.connect().await?;
-        let metadata = match load_lancedb_metadata(&db).await {
-            Ok(metadata) => metadata,
-            Err(_) => return Ok(None),
-        };
-        if !semantic_store_metadata_matches(&metadata, config) {
-            return Ok(None);
-        }
-
-        let stored_sources = match load_lancedb_sources(&db).await {
-            Ok(sources) => sources,
-            Err(_) => return Ok(None),
-        };
-        if stored_sources != sources {
-            return Ok(None);
-        }
-
-        let entries = lancedb_entry_count(&db).await.unwrap_or(0);
-        if entries == 0 {
-            return Ok(None);
-        }
-
-        Ok(Some(EmbeddingSearchIndex {
-            entries: Vec::new(),
-        }))
-    }
-
-    async fn replace(
-        &self,
-        config: &EmbeddingSearchConfig,
-        dimensions: usize,
-        sources: Vec<EmbeddingSearchSourceManifestEntry>,
-        entries: Vec<EmbeddingSearchEntry>,
-    ) -> Result<EmbeddingSearchIndex, String> {
-        let db = self.connect().await?;
-        let indexed_at = now_secs();
-        let metadata = vec![
-            (
-                "version".to_string(),
-                EMBEDDING_SEARCH_INDEX_VERSION.to_string(),
-            ),
-            (
-                "store_kind".to_string(),
-                SemanticSearchStoreKind::LanceDb.as_str().to_string(),
-            ),
-            ("base_url".to_string(), config.base_url.clone()),
-            ("model".to_string(), config.model.clone()),
-            ("dimensions".to_string(), dimensions.to_string()),
-            ("indexed_at".to_string(), indexed_at.to_string()),
-        ];
-
-        db.create_table(
-            LANCEDB_SEMANTIC_METADATA_TABLE,
-            lancedb_metadata_batch(&metadata)?,
-        )
-        .mode(lancedb::database::CreateTableMode::Overwrite)
-        .execute()
-        .await
-        .map_err(|e| format!("write LanceDB semantic metadata: {}", e))?;
-
-        db.create_table(
-            LANCEDB_SEMANTIC_SOURCES_TABLE,
-            lancedb_sources_batch(&sources)?,
-        )
-        .mode(lancedb::database::CreateTableMode::Overwrite)
-        .execute()
-        .await
-        .map_err(|e| format!("write LanceDB semantic sources: {}", e))?;
-
-        db.create_table(
-            LANCEDB_SEMANTIC_ENTRIES_TABLE,
-            lancedb_entries_batch(&entries, dimensions)?,
-        )
-        .mode(lancedb::database::CreateTableMode::Overwrite)
-        .execute()
-        .await
-        .map_err(|e| format!("write LanceDB semantic entries: {}", e))?;
-
-        Ok(EmbeddingSearchIndex {
-            entries: Vec::new(),
-        })
-    }
-
-    async fn status(&self, config: &EmbeddingSearchConfig) -> SemanticRagStoreStatus {
-        if !self.path.exists() {
-            return SemanticRagStoreStatus {
-                ready: false,
-                entries: 0,
-                error: None,
-            };
-        }
-
-        let db = match self.connect().await {
-            Ok(db) => db,
-            Err(error) => {
-                return SemanticRagStoreStatus {
-                    ready: false,
-                    entries: 0,
-                    error: Some(error),
-                };
-            }
-        };
-        let metadata = match load_lancedb_metadata(&db).await {
-            Ok(metadata) => metadata,
-            Err(_) => {
-                return SemanticRagStoreStatus {
-                    ready: false,
-                    entries: 0,
-                    error: None,
-                };
-            }
-        };
-        let entries = lancedb_entry_count(&db).await.unwrap_or(0);
-        SemanticRagStoreStatus {
-            ready: entries > 0 && semantic_store_metadata_matches(&metadata, config),
-            entries,
-            error: None,
-        }
-    }
-
-    async fn search(
-        &self,
-        query_vector: &[f32],
-        limit: usize,
-        project_id: Option<&str>,
-    ) -> Result<Vec<SearchResult>, String> {
-        use futures::TryStreamExt;
-        use lancedb::query::{ExecutableQuery, QueryBase};
-
-        let db = self.connect().await?;
-        let table = db
-            .open_table(LANCEDB_SEMANTIC_ENTRIES_TABLE)
-            .execute()
-            .await
-            .map_err(|e| format!("open LanceDB semantic entries: {}", e))?;
-        let mut query = table
-            .query()
-            .nearest_to(query_vector)
-            .map_err(|e| format!("prepare LanceDB vector search: {}", e))?
-            .distance_type(lancedb::DistanceType::Cosine)
-            .limit(limit);
-        if let Some(project_id) = project_id {
-            query = query.only_if(format!(
-                "project_id = {}",
-                lancedb_sql_string_literal(project_id)
-            ));
-        }
-        let batches = query
-            .execute()
-            .await
-            .map_err(|e| format!("execute LanceDB vector search: {}", e))?
-            .try_collect::<Vec<_>>()
-            .await
-            .map_err(|e| format!("collect LanceDB vector search: {}", e))?;
-        parse_lancedb_search_results(&batches)
-    }
-}
-
 impl SemanticRagStoreAdapter {
-    fn new(config: &EmbeddingSearchConfig) -> Self {
-        match config.store {
-            SemanticSearchStoreKind::Sqlite => Self::Sqlite(SqliteSemanticRagStore::new()),
-            SemanticSearchStoreKind::LanceDb => Self::LanceDb(LanceDbSemanticRagStore::new()),
-        }
+    fn new(_config: &EmbeddingSearchConfig) -> Self {
+        Self::Sqlite(SqliteSemanticRagStore::new())
     }
 
     fn kind(&self) -> SemanticSearchStoreKind {
-        match self {
-            Self::Sqlite(_) => SemanticSearchStoreKind::Sqlite,
-            Self::LanceDb(_) => SemanticSearchStoreKind::LanceDb,
-        }
+        SemanticSearchStoreKind::Sqlite
     }
 
     async fn load_current(
@@ -2504,7 +2307,6 @@ impl SemanticRagStoreAdapter {
     ) -> Result<Option<EmbeddingSearchIndex>, String> {
         match self {
             Self::Sqlite(store) => store.load_current(config, sources),
-            Self::LanceDb(store) => store.load_current(config, sources).await,
         }
     }
 
@@ -2517,14 +2319,12 @@ impl SemanticRagStoreAdapter {
     ) -> Result<EmbeddingSearchIndex, String> {
         match self {
             Self::Sqlite(store) => store.replace(config, dimensions, sources, entries),
-            Self::LanceDb(store) => store.replace(config, dimensions, sources, entries).await,
         }
     }
 
     async fn status(&self, config: &EmbeddingSearchConfig) -> SemanticRagStoreStatus {
         match self {
             Self::Sqlite(store) => store.status(config),
-            Self::LanceDb(store) => store.status(config).await,
         }
     }
 
@@ -2542,7 +2342,6 @@ impl SemanticRagStoreAdapter {
                 limit,
                 project_id,
             )),
-            Self::LanceDb(store) => store.search(query_vector, limit, project_id).await,
         }
     }
 }
@@ -2754,7 +2553,8 @@ fn semantic_store_metadata_matches(
         .get("version")
         .and_then(|value| value.parse::<u32>().ok())
         == Some(EMBEDDING_SEARCH_INDEX_VERSION)
-        && metadata.get("store_kind").map(String::as_str) == Some(config.store.as_str())
+        && metadata.get("store_kind").map(String::as_str)
+            == Some(DEFAULT_EMBEDDING_SEARCH_STORE_KIND.as_str())
         && metadata.get("base_url").map(String::as_str) == Some(config.base_url.as_str())
         && metadata.get("model").map(String::as_str) == Some(config.model.as_str())
         && metadata_usize(metadata, "dimensions").unwrap_or(0) > 0
@@ -2878,337 +2678,6 @@ fn load_semantic_store_entries(
         });
     }
     Ok(entries)
-}
-
-fn lancedb_metadata_batch(
-    metadata: &[(String, String)],
-) -> Result<arrow_array::RecordBatch, String> {
-    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
-        arrow_schema::Field::new("key", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("value", arrow_schema::DataType::Utf8, false),
-    ]));
-    let keys = metadata
-        .iter()
-        .map(|(key, _)| key.clone())
-        .collect::<Vec<_>>();
-    let values = metadata
-        .iter()
-        .map(|(_, value)| value.clone())
-        .collect::<Vec<_>>();
-    arrow_array::RecordBatch::try_new(
-        schema,
-        vec![
-            std::sync::Arc::new(arrow_array::StringArray::from(keys)),
-            std::sync::Arc::new(arrow_array::StringArray::from(values)),
-        ],
-    )
-    .map_err(|e| format!("build LanceDB semantic metadata batch: {}", e))
-}
-
-fn lancedb_sources_batch(
-    sources: &[EmbeddingSearchSourceManifestEntry],
-) -> Result<arrow_array::RecordBatch, String> {
-    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
-        arrow_schema::Field::new("path", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("source_kind", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("session_id", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("size", arrow_schema::DataType::Int64, false),
-        arrow_schema::Field::new("mtime", arrow_schema::DataType::Int64, false),
-    ]));
-    arrow_array::RecordBatch::try_new(
-        schema,
-        vec![
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                sources
-                    .iter()
-                    .map(|source| source.path.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                sources
-                    .iter()
-                    .map(|source| source.source_kind.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                sources
-                    .iter()
-                    .map(|source| source.session_id.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::Int64Array::from(
-                sources
-                    .iter()
-                    .map(|source| u64_to_sql_i64(source.size))
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::Int64Array::from(
-                sources
-                    .iter()
-                    .map(|source| u64_to_sql_i64(source.mtime))
-                    .collect::<Vec<_>>(),
-            )),
-        ],
-    )
-    .map_err(|e| format!("build LanceDB semantic sources batch: {}", e))
-}
-
-fn lancedb_entries_batch(
-    entries: &[EmbeddingSearchEntry],
-    dimensions: usize,
-) -> Result<arrow_array::RecordBatch, String> {
-    let dimensions_i32 = i32::try_from(dimensions)
-        .map_err(|_| "Embedding dimensions are too large for LanceDB.".to_string())?;
-    let schema = std::sync::Arc::new(arrow_schema::Schema::new(vec![
-        arrow_schema::Field::new("source_path", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("source_kind", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("source_size", arrow_schema::DataType::Int64, false),
-        arrow_schema::Field::new("source_mtime", arrow_schema::DataType::Int64, false),
-        arrow_schema::Field::new("session_id", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("project_id", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("timestamp", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("text", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new("result_json", arrow_schema::DataType::Utf8, false),
-        arrow_schema::Field::new(
-            "vector",
-            arrow_schema::DataType::FixedSizeList(
-                std::sync::Arc::new(arrow_schema::Field::new(
-                    "item",
-                    arrow_schema::DataType::Float32,
-                    true,
-                )),
-                dimensions_i32,
-            ),
-            false,
-        ),
-    ]));
-    let vectors = arrow_array::FixedSizeListArray::from_iter_primitive::<
-        arrow_array::types::Float32Type,
-        _,
-        _,
-    >(
-        entries
-            .iter()
-            .map(|entry| Some(entry.vector.iter().copied().map(Some).collect::<Vec<_>>())),
-        dimensions_i32,
-    );
-    let result_json = entries
-        .iter()
-        .map(|entry| serde_json::to_string(&entry.result))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| format!("serialize LanceDB semantic entry result: {}", e))?;
-
-    arrow_array::RecordBatch::try_new(
-        schema,
-        vec![
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                entries
-                    .iter()
-                    .map(|entry| entry.source_path.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                entries
-                    .iter()
-                    .map(|entry| entry.source_kind.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::Int64Array::from(
-                entries
-                    .iter()
-                    .map(|entry| u64_to_sql_i64(entry.source_size))
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::Int64Array::from(
-                entries
-                    .iter()
-                    .map(|entry| u64_to_sql_i64(entry.source_mtime))
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                entries
-                    .iter()
-                    .map(|entry| entry.result.session_id.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                entries
-                    .iter()
-                    .map(|entry| entry.result.project_id.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                entries
-                    .iter()
-                    .map(|entry| entry.result.timestamp.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::StringArray::from(
-                entries
-                    .iter()
-                    .map(|entry| entry.text.clone())
-                    .collect::<Vec<_>>(),
-            )),
-            std::sync::Arc::new(arrow_array::StringArray::from(result_json)),
-            std::sync::Arc::new(vectors),
-        ],
-    )
-    .map_err(|e| format!("build LanceDB semantic entries batch: {}", e))
-}
-
-async fn lancedb_scan_table(
-    db: &lancedb::Connection,
-    table_name: &str,
-) -> Result<Vec<arrow_array::RecordBatch>, String> {
-    use futures::TryStreamExt;
-    use lancedb::query::ExecutableQuery;
-
-    let table = db
-        .open_table(table_name)
-        .execute()
-        .await
-        .map_err(|e| format!("open LanceDB table '{}': {}", table_name, e))?;
-    table
-        .query()
-        .execute()
-        .await
-        .map_err(|e| format!("scan LanceDB table '{}': {}", table_name, e))?
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(|e| format!("collect LanceDB table '{}': {}", table_name, e))
-}
-
-fn lancedb_string_column<'a>(
-    batch: &'a arrow_array::RecordBatch,
-    name: &str,
-) -> Result<&'a arrow_array::StringArray, String> {
-    let index = batch
-        .schema()
-        .index_of(name)
-        .map_err(|e| format!("missing LanceDB column '{}': {}", name, e))?;
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<arrow_array::StringArray>()
-        .ok_or_else(|| format!("LanceDB column '{}' is not a string", name))
-}
-
-fn lancedb_i64_column<'a>(
-    batch: &'a arrow_array::RecordBatch,
-    name: &str,
-) -> Result<&'a arrow_array::Int64Array, String> {
-    let index = batch
-        .schema()
-        .index_of(name)
-        .map_err(|e| format!("missing LanceDB column '{}': {}", name, e))?;
-    batch
-        .column(index)
-        .as_any()
-        .downcast_ref::<arrow_array::Int64Array>()
-        .ok_or_else(|| format!("LanceDB column '{}' is not an int64", name))
-}
-
-async fn load_lancedb_metadata(
-    db: &lancedb::Connection,
-) -> Result<HashMap<String, String>, String> {
-    use arrow_array::Array;
-
-    let batches = lancedb_scan_table(db, LANCEDB_SEMANTIC_METADATA_TABLE).await?;
-    let mut metadata = HashMap::new();
-    for batch in batches {
-        let keys = lancedb_string_column(&batch, "key")?;
-        let values = lancedb_string_column(&batch, "value")?;
-        for row in 0..batch.num_rows() {
-            if keys.is_null(row) || values.is_null(row) {
-                continue;
-            }
-            metadata.insert(keys.value(row).to_string(), values.value(row).to_string());
-        }
-    }
-    Ok(metadata)
-}
-
-async fn load_lancedb_sources(
-    db: &lancedb::Connection,
-) -> Result<Vec<EmbeddingSearchSourceManifestEntry>, String> {
-    use arrow_array::Array;
-
-    let batches = lancedb_scan_table(db, LANCEDB_SEMANTIC_SOURCES_TABLE).await?;
-    let mut sources = Vec::new();
-    for batch in batches {
-        let paths = lancedb_string_column(&batch, "path")?;
-        let source_kinds = lancedb_string_column(&batch, "source_kind")?;
-        let session_ids = lancedb_string_column(&batch, "session_id")?;
-        let sizes = lancedb_i64_column(&batch, "size")?;
-        let mtimes = lancedb_i64_column(&batch, "mtime")?;
-        for row in 0..batch.num_rows() {
-            if paths.is_null(row) || source_kinds.is_null(row) || session_ids.is_null(row) {
-                continue;
-            }
-            sources.push(EmbeddingSearchSourceManifestEntry {
-                path: paths.value(row).to_string(),
-                source_kind: source_kinds.value(row).to_string(),
-                session_id: session_ids.value(row).to_string(),
-                size: sizes.value(row).max(0) as u64,
-                mtime: mtimes.value(row).max(0) as u64,
-            });
-        }
-    }
-    sources.sort();
-    Ok(sources)
-}
-
-async fn lancedb_entry_count(db: &lancedb::Connection) -> Result<usize, String> {
-    let batches = lancedb_scan_table(db, LANCEDB_SEMANTIC_ENTRIES_TABLE).await?;
-    Ok(batches.iter().map(|batch| batch.num_rows()).sum())
-}
-
-fn lancedb_sql_string_literal(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "''"))
-}
-
-fn lancedb_distance_score(batch: &arrow_array::RecordBatch, row: usize) -> Option<f32> {
-    use arrow_array::Array;
-
-    let index = batch
-        .schema()
-        .index_of("_distance")
-        .or_else(|_| batch.schema().index_of("_score"))
-        .ok()?;
-    let column = batch.column(index);
-    if column.is_null(row) {
-        return None;
-    }
-    if let Some(values) = column.as_any().downcast_ref::<arrow_array::Float32Array>() {
-        return Some(1.0 - values.value(row));
-    }
-    if let Some(values) = column.as_any().downcast_ref::<arrow_array::Float64Array>() {
-        return Some((1.0 - values.value(row)) as f32);
-    }
-    None
-}
-
-fn parse_lancedb_search_results(
-    batches: &[arrow_array::RecordBatch],
-) -> Result<Vec<SearchResult>, String> {
-    use arrow_array::Array;
-
-    let mut results = Vec::new();
-    for batch in batches {
-        let result_json = lancedb_string_column(batch, "result_json")?;
-        for row in 0..batch.num_rows() {
-            if result_json.is_null(row) {
-                continue;
-            }
-            let mut result = serde_json::from_str::<SearchResult>(result_json.value(row))
-                .map_err(|e| format!("parse LanceDB semantic result: {}", e))?;
-            if let Some(score) = lancedb_distance_score(batch, row) {
-                result.score = score;
-            }
-            results.push(result);
-        }
-    }
-    Ok(results)
 }
 
 fn collect_embedding_search_sources() -> Result<
@@ -3845,10 +3314,25 @@ mod semantic_search_tests {
 
 #[tauri::command]
 pub(crate) async fn get_semantic_search_status() -> Result<SemanticSearchStatus, String> {
+    let enabled = load_semantic_search_settings().enabled;
+    if !enabled {
+        return Ok(SemanticSearchStatus {
+            enabled: false,
+            configured: false,
+            ready: false,
+            model: None,
+            base_url: None,
+            store: DEFAULT_EMBEDDING_SEARCH_STORE_KIND.as_str().to_string(),
+            entries: 0,
+            error: None,
+        });
+    }
+
     let config = match load_embedding_search_config() {
         Ok(config) => config,
         Err(error) => {
             return Ok(SemanticSearchStatus {
+                enabled,
                 configured: false,
                 ready: false,
                 model: None,
@@ -3864,6 +3348,7 @@ pub(crate) async fn get_semantic_search_status() -> Result<SemanticSearchStatus,
     let store_status = store.status(&config).await;
 
     Ok(SemanticSearchStatus {
+        enabled,
         configured: true,
         ready: store_status.ready,
         model: Some(config.model),
@@ -3875,11 +3360,32 @@ pub(crate) async fn get_semantic_search_status() -> Result<SemanticSearchStatus,
 }
 
 #[tauri::command]
+pub(crate) async fn set_semantic_search_enabled(
+    enabled: bool,
+) -> Result<SemanticSearchStatus, String> {
+    save_semantic_search_settings(&SemanticSearchSettings { enabled })?;
+    get_semantic_search_status().await
+}
+
+#[tauri::command]
+pub(crate) async fn initialize_semantic_search() -> Result<SemanticSearchStatus, String> {
+    if !load_semantic_search_settings().enabled {
+        return Err("ATARU_SEMANTIC_DISABLED: Enable semantic recall in Advanced settings before initialization.".to_string());
+    }
+    let config = load_embedding_search_config()?;
+    let _ = ensure_embedding_search_index(&config).await?;
+    get_semantic_search_status().await
+}
+
+#[tauri::command]
 pub(crate) async fn semantic_search_chats(
     query: String,
     limit: Option<usize>,
     project_id: Option<String>,
 ) -> Result<Vec<SearchResult>, String> {
+    if !load_semantic_search_settings().enabled {
+        return Err("ATARU_SEMANTIC_DISABLED: Enable semantic recall in Advanced settings before searching.".to_string());
+    }
     let config = load_embedding_search_config()?;
     let (store, index) = ensure_embedding_search_index(&config).await?;
     let query_vectors = embed_texts(&config, &[query]).await?;

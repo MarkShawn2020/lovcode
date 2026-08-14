@@ -67,3 +67,26 @@ export function startSearchIndexBuild(
 export function startIncrementalSearchIndexBuild(): Promise<SearchIndexBuildStatus> {
   return startSearchIndexBuild(false);
 }
+
+export interface SemanticSearchStatus {
+  enabled: boolean;
+  configured: boolean;
+  ready: boolean;
+  model?: string | null;
+  baseUrl?: string | null;
+  store: "sqlite";
+  entries: number;
+  error?: string | null;
+}
+
+export function getSemanticSearchStatus(): Promise<SemanticSearchStatus> {
+  return invoke<SemanticSearchStatus>("get_semantic_search_status");
+}
+
+export function setSemanticSearchEnabled(enabled: boolean): Promise<SemanticSearchStatus> {
+  return invoke<SemanticSearchStatus>("set_semantic_search_enabled", { enabled });
+}
+
+export function initializeSemanticSearch(): Promise<SemanticSearchStatus> {
+  return invoke<SemanticSearchStatus>("initialize_semantic_search");
+}

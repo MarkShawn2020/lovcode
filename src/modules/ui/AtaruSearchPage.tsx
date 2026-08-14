@@ -147,7 +147,7 @@ export function AtaruSearchPage() {
   const [query, setQuery] = useState(() => initialQuery);
   const [submittedQuery, setSubmittedQuery] = useState(() => initialQuery);
   const [level, setLevel] = useState<SearchScope>(() => (isSearchScope(initialLevel) ? initialLevel : loadSearchScope()));
-  const [mode, setMode] = useState<SearchMode>(() => (isSearchMode(initialMode) ? initialMode : "auto"));
+  const [mode, setMode] = useState<SearchMode>(() => (isSearchMode(initialMode) ? initialMode : "keyword"));
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [selectedHitId, setSelectedHitId] = useState<string | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -226,7 +226,7 @@ export function AtaruSearchPage() {
       const nextParams = new URLSearchParams();
       nextParams.set("q", trimmed);
       nextParams.set("level", level);
-      if (mode !== "auto") nextParams.set("mode", mode);
+      if (mode !== "keyword") nextParams.set("mode", mode);
       setSearchParams(nextParams, { replace: true });
 
       try {
