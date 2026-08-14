@@ -162,8 +162,9 @@ function ResultCard({
       <button
         type="button"
         onClick={onSelect}
-        aria-pressed={selected}
-        aria-label={`查看第 ${rank} 条结果：${heading}。${excerpt}`}
+        aria-controls="ataru-transcript-preview"
+        aria-expanded={selected}
+        aria-label={`${selected ? "收起" : "展开"}第 ${rank} 条结果的详情：${heading}。${excerpt}`}
         className={cn(
           "group block w-full rounded-xl px-2.5 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:px-3 sm:py-5",
           !selected && "hover:bg-card/70",
@@ -196,7 +197,7 @@ function ResultCard({
               </span>
             )}
           </span>
-          <span className="mt-1.5 block h-12 overflow-hidden line-clamp-2 font-serif text-[17px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
+          <span className="mt-1.5 block h-6 overflow-hidden line-clamp-1 font-serif text-[17px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
             {title ? <HighlightedText text={title} query={query} /> : heading}
           </span>
           <span className="mt-1.5 block h-12 overflow-hidden line-clamp-2 text-[13px] leading-6 text-foreground/80">

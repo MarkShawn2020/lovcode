@@ -75,6 +75,7 @@ export function TranscriptPreview({
 
   return (
     <section
+      id="ataru-transcript-preview"
       data-ataru-preview="true"
       data-preview-open={open}
       className="hidden min-h-0 min-w-0 flex-col overflow-hidden border-l border-border bg-card md:flex"

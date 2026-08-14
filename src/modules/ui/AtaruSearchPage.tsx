@@ -292,9 +292,13 @@ export function AtaruSearchPage() {
   const selectedHit = response?.hits.find((hit) => hit.id === selectedHitId) ?? response?.hits.at(0) ?? null;
   const hasQuery = submittedQuery.trim().length > 0;
   const selectHit = useCallback((hitId: string) => {
+    if (isPreviewOpen && selectedHitId === hitId) {
+      setIsPreviewOpen(false);
+      return;
+    }
     setSelectedHitId(hitId);
     setIsPreviewOpen(true);
-  }, []);
+  }, [isPreviewOpen, selectedHitId]);
   const closePreview = useCallback(() => setIsPreviewOpen(false), []);
   const openHitContext = useCallback((hit: SearchHit) => {
     if (!hit.sessionId) return;
