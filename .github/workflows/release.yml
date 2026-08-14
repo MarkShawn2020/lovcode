@@ -206,6 +206,12 @@ jobs:
         with:
           workspaces: src-tauri
           cache-bin: false
+          # A release bump updates the root package entry in Cargo.lock, but it
+          # does not require recompiling Tantivy/LanceDB and the rest of the
+          # dependency graph. Keep one dependency cache per Rust host and let
+          # Cargo's fingerprints rebuild only crates whose inputs changed.
+          shared-key: ataru-release-dependencies
+          add-rust-environment-hash-key: false
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
