@@ -196,10 +196,10 @@ function ResultCard({
               </span>
             )}
           </span>
-          <span className="mt-1.5 block min-h-12 line-clamp-2 font-serif text-[17px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
+          <span className="mt-1.5 block h-12 overflow-hidden line-clamp-2 font-serif text-[17px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
             {title ? <HighlightedText text={title} query={query} /> : heading}
           </span>
-          <span className="mt-1.5 block min-h-12 line-clamp-2 text-[13px] leading-6 text-foreground/80">
+          <span className="mt-1.5 block h-12 overflow-hidden line-clamp-2 text-[13px] leading-6 text-foreground/80">
             <HighlightedText text={excerpt} query={query} />
           </span>
         </span>
