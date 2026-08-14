@@ -14,7 +14,6 @@ import {
   formatTimestamp,
   getSearchResultContextLabel,
   getSearchResultExcerpt,
-  getSearchResultMatchLabel,
   getSearchResultTitle,
   projectName,
 } from "./utils";
@@ -145,7 +144,6 @@ function ResultCard({
   const heading = title || getSearchResultContextLabel(hit);
   const excerpt = getSearchResultExcerpt(hit, query, title);
   const levelLabel = RESULT_LEVEL_LABELS[hit.level];
-  const matchLocation = getSearchResultMatchLabel(hit, query, excerpt);
   const matchSummary = hit.level === "run" && hit.matchCount > 1
     ? `${hit.matchCount} 条 Turn 命中`
     : hit.matchCount > 1
@@ -198,16 +196,11 @@ function ResultCard({
               </span>
             )}
           </span>
-          <span className="mt-1.5 block line-clamp-2 font-serif text-[17px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
+          <span className="mt-1.5 block min-h-12 line-clamp-2 font-serif text-[17px] font-semibold leading-6 text-primary decoration-primary/60 underline-offset-2 group-hover:underline">
             {title ? <HighlightedText text={title} query={query} /> : heading}
           </span>
-          <span className="mt-1.5 flex items-start gap-2 text-[13px] leading-6 text-foreground/80">
-            <span className="mt-0.5 shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-primary/70">
-              {matchLocation}
-            </span>
-            <span className="line-clamp-3 min-w-0">
-              <HighlightedText text={excerpt} query={query} />
-            </span>
+          <span className="mt-1.5 block min-h-12 line-clamp-2 text-[13px] leading-6 text-foreground/80">
+            <HighlightedText text={excerpt} query={query} />
           </span>
         </span>
       </button>
