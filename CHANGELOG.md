@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.41.0
+
+### Minor Changes
+
+- a0c5cd5: Add signed in-app update checks, download and install progress, restart handoff, and strict updater artifact release gates for Tauri desktop builds.
+- Improve global search evidence and match previews, align results with the Turn → Run → Session → Project model, add result sorting and stable scope persistence, and speed up long session reading.
+
+### Patch Changes
+
+- a3aaace: 在全局顶部导航展示可展开的记忆索引状态，并提供当前会话、数据与消息进度、耗时、预计剩余时间和可复制的诊断信息。
+- Keep search available while the index updates in the background, and refine repeated result preview interactions and compact result copy.
+
 ## 0.40.1
 
 ### Patch Changes

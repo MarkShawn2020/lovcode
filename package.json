@@ -1,7 +1,7 @@
 {
   "name": "ataru",
   "private": true,
-  "version": "0.40.1",
+  "version": "0.41.0",
   "type": "module",
   "packageManager": "pnpm@10.18.1",
   "scripts": {
