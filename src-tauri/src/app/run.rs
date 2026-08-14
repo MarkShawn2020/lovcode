@@ -31,7 +31,7 @@ fn watch_conversation_directory(app: tauri::AppHandle, directory: PathBuf) {
             match notify::recommended_watcher(move |event: Result<Event, notify::Error>| {
                 if let Ok(event) = event {
                     if event.kind.is_create() || event.kind.is_modify() || event.kind.is_remove() {
-                        let _ = sender.send(());
+                        let _ = sender.send(event.paths);
                     }
                 }
             }) {
@@ -47,9 +47,14 @@ fn watch_conversation_directory(app: tauri::AppHandle, directory: PathBuf) {
             return;
         }
 
-        while receiver.recv().is_ok() {
-            while receiver.recv_timeout(Duration::from_millis(400)).is_ok() {}
+        while let Ok(mut changed_paths) = receiver.recv() {
+            while let Ok(paths) = receiver.recv_timeout(Duration::from_millis(400)) {
+                changed_paths.extend(paths);
+            }
+            changed_paths.sort();
+            changed_paths.dedup();
             emit_sessions_changed_with_fresh_cache(app.clone());
+            notify_incremental_search_index_source_changes(app.clone(), &changed_paths);
         }
     });
 }

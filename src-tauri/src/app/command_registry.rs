@@ -5,6 +5,7 @@ pub(crate) fn command_handler() -> Box<tauri::ipc::InvokeHandler<tauri::Wry>> {
         ataru::api::ataru_search,
         cancel_session_stream,
         copy_to_clipboard,
+        get_incremental_search_index_sync_status,
         get_search_index_status,
         get_semantic_search_status,
         initialize_semantic_search,
@@ -16,6 +17,7 @@ pub(crate) fn command_handler() -> Box<tauri::ipc::InvokeHandler<tauri::Wry>> {
         reveal_session_in_finder,
         search_chats,
         semantic_search_chats,
+        set_incremental_search_index_sync_enabled,
         set_semantic_search_enabled,
         start_search_index_build,
     ])

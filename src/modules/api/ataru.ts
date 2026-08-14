@@ -68,6 +68,30 @@ export function startIncrementalSearchIndexBuild(): Promise<SearchIndexBuildStat
   return startSearchIndexBuild(false);
 }
 
+export interface SearchIndexWatchTarget {
+  source: string;
+  rootPath: string;
+  files: string[];
+}
+
+export interface IncrementalSearchIndexSyncStatus {
+  enabled: boolean;
+  monitoring: boolean;
+  targets: SearchIndexWatchTarget[];
+  lastChangeAt?: number | null;
+  lastSyncRequestedAt?: number | null;
+}
+
+export function getIncrementalSearchIndexSyncStatus(): Promise<IncrementalSearchIndexSyncStatus> {
+  return invoke<IncrementalSearchIndexSyncStatus>("get_incremental_search_index_sync_status");
+}
+
+export function setIncrementalSearchIndexSyncEnabled(
+  enabled: boolean,
+): Promise<IncrementalSearchIndexSyncStatus> {
+  return invoke<IncrementalSearchIndexSyncStatus>("set_incremental_search_index_sync_enabled", { enabled });
+}
+
 export interface SemanticSearchStatus {
   enabled: boolean;
   configured: boolean;

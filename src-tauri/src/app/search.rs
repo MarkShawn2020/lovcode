@@ -49,6 +49,24 @@ pub(crate) struct SearchIndexBuildStatus {
     pub error: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SearchIndexWatchTarget {
+    pub source: String,
+    pub root_path: String,
+    pub files: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct IncrementalSearchIndexSyncStatus {
+    pub enabled: bool,
+    pub monitoring: bool,
+    pub targets: Vec<SearchIndexWatchTarget>,
+    pub last_change_at: Option<u64>,
+    pub last_sync_requested_at: Option<u64>,
+}
+
 impl Default for SearchIndexBuildStatus {
     fn default() -> Self {
         Self {
@@ -168,6 +186,43 @@ const SEARCH_INDEX_BUILD_PENDING: u8 = 2;
 static SEARCH_INDEX_BUILD_STATE: std::sync::atomic::AtomicU8 =
     std::sync::atomic::AtomicU8::new(SEARCH_INDEX_BUILD_IDLE);
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct IncrementalSearchIndexSyncSettings {
+    #[serde(default = "incremental_search_index_sync_default_enabled")]
+    enabled: bool,
+}
+
+impl Default for IncrementalSearchIndexSyncSettings {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+const fn incremental_search_index_sync_default_enabled() -> bool {
+    true
+}
+
+#[derive(Clone, Debug)]
+struct IncrementalSearchIndexSyncRuntime {
+    enabled: bool,
+    last_change_at: Option<u64>,
+    last_sync_requested_at: Option<u64>,
+}
+
+impl From<IncrementalSearchIndexSyncSettings> for IncrementalSearchIndexSyncRuntime {
+    fn from(settings: IncrementalSearchIndexSyncSettings) -> Self {
+        Self {
+            enabled: settings.enabled,
+            last_change_at: None,
+            last_sync_requested_at: None,
+        }
+    }
+}
+
+static INCREMENTAL_SEARCH_INDEX_SYNC_RUNTIME: LazyLock<Mutex<IncrementalSearchIndexSyncRuntime>> =
+    LazyLock::new(|| Mutex::new(load_incremental_search_index_sync_settings().into()));
+
 // Bump the manifest when indexed Turn semantics change. The next startup will
 // rebuild once so atomic content blocks, tool roles, and block identities are
 // backfilled.
@@ -237,6 +292,31 @@ fn search_index_manifest_path() -> PathBuf {
         .parent()
         .map(|parent| parent.join("search-index-manifest.json"))
         .unwrap_or_else(|| PathBuf::from("search-index-manifest.json"))
+}
+
+fn incremental_search_index_sync_settings_path() -> PathBuf {
+    get_index_dir()
+        .parent()
+        .map(|parent| parent.join("incremental-search-index-sync-settings.json"))
+        .unwrap_or_else(|| PathBuf::from("incremental-search-index-sync-settings.json"))
+}
+
+fn load_incremental_search_index_sync_settings() -> IncrementalSearchIndexSyncSettings {
+    fs::read_to_string(incremental_search_index_sync_settings_path())
+        .ok()
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default()
+}
+
+fn save_incremental_search_index_sync_settings(
+    settings: &IncrementalSearchIndexSyncSettings,
+) -> Result<(), String> {
+    let path = incremental_search_index_sync_settings_path();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let value = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
+    fs::write(path, value).map_err(|error| error.to_string())
 }
 
 fn search_index_path_signature(path: &Path) -> Option<SearchIndexPathSignature> {
@@ -531,6 +611,129 @@ fn collect_codex_search_sources() -> Vec<CodexSearchSource> {
         .collect()
 }
 
+fn current_search_index_watch_targets() -> Result<Vec<SearchIndexWatchTarget>, String> {
+    let claude_root = get_claude_dir().join("projects");
+    let mut claude_files = collect_claude_search_sources(&claude_root)?
+        .into_iter()
+        .map(|source| source_path_key(&source.path))
+        .collect::<Vec<_>>();
+    claude_files.sort();
+
+    let codex_root = get_codex_dir();
+    let mut codex_files = collect_codex_search_sources()
+        .into_iter()
+        .map(|source| source_path_key(&source.path))
+        .collect::<Vec<_>>();
+    codex_files.sort();
+
+    Ok(vec![
+        SearchIndexWatchTarget {
+            source: "Claude Code".to_string(),
+            root_path: source_path_key(&claude_root),
+            files: claude_files,
+        },
+        SearchIndexWatchTarget {
+            source: "Codex".to_string(),
+            root_path: source_path_key(&codex_root),
+            files: codex_files,
+        },
+    ])
+}
+
+fn current_incremental_search_index_sync_status() -> Result<IncrementalSearchIndexSyncStatus, String>
+{
+    let targets = current_search_index_watch_targets()?;
+    let runtime = INCREMENTAL_SEARCH_INDEX_SYNC_RUNTIME
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let monitoring = runtime.enabled
+        && targets
+            .iter()
+            .any(|target| Path::new(&target.root_path).exists());
+
+    Ok(IncrementalSearchIndexSyncStatus {
+        enabled: runtime.enabled,
+        monitoring,
+        targets,
+        last_change_at: runtime.last_change_at,
+        last_sync_requested_at: runtime.last_sync_requested_at,
+    })
+}
+
+fn incremental_search_index_sync_enabled() -> bool {
+    INCREMENTAL_SEARCH_INDEX_SYNC_RUNTIME
+        .lock()
+        .map(|runtime| runtime.enabled)
+        .unwrap_or(true)
+}
+
+fn is_incremental_search_index_source_path(path: &Path) -> bool {
+    if path.extension().and_then(|extension| extension.to_str()) != Some("jsonl") {
+        return false;
+    }
+
+    let is_claude_session = path.starts_with(get_claude_dir().join("projects"))
+        && !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("agent-"));
+    let is_codex_session = path.starts_with(get_codex_sessions_dir())
+        || path.starts_with(get_codex_archived_sessions_dir());
+
+    is_claude_session || is_codex_session
+}
+
+#[cfg(test)]
+mod incremental_search_index_sync_tests {
+    use super::*;
+
+    #[test]
+    fn defaults_to_enabled_for_new_installations() {
+        assert!(IncrementalSearchIndexSyncSettings::default().enabled);
+    }
+
+    #[test]
+    fn limits_auto_sync_to_indexable_session_sources() {
+        let claude_session = get_claude_dir()
+            .join("projects")
+            .join("project")
+            .join("session.jsonl");
+        let claude_agent = get_claude_dir()
+            .join("projects")
+            .join("project")
+            .join("agent-session.jsonl");
+        let codex_session = get_codex_sessions_dir().join("2026").join("session.jsonl");
+        let codex_config = get_codex_dir().join("config.jsonl");
+
+        assert!(is_incremental_search_index_source_path(&claude_session));
+        assert!(is_incremental_search_index_source_path(&codex_session));
+        assert!(!is_incremental_search_index_source_path(&claude_agent));
+        assert!(!is_incremental_search_index_source_path(&codex_config));
+    }
+}
+
+pub(crate) fn notify_incremental_search_index_source_changes(
+    app_handle: tauri::AppHandle,
+    changed_paths: &[PathBuf],
+) {
+    if !changed_paths
+        .iter()
+        .any(|path| is_incremental_search_index_source_path(path))
+        || !incremental_search_index_sync_enabled()
+    {
+        return;
+    }
+
+    if let Ok(mut runtime) = INCREMENTAL_SEARCH_INDEX_SYNC_RUNTIME.lock() {
+        let now = now_secs();
+        runtime.last_change_at = Some(now);
+        runtime.last_sync_requested_at = Some(now);
+    }
+
+    let _ = request_search_index_build(app_handle, false);
+}
+
 fn source_path_key(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
@@ -716,16 +919,44 @@ pub(crate) async fn get_search_index_status() -> Result<SearchIndexBuildStatus, 
 }
 
 #[tauri::command]
+pub(crate) async fn get_incremental_search_index_sync_status(
+) -> Result<IncrementalSearchIndexSyncStatus, String> {
+    tauri::async_runtime::spawn_blocking(current_incremental_search_index_sync_status)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+pub(crate) fn set_incremental_search_index_sync_enabled(
+    enabled: bool,
+) -> Result<IncrementalSearchIndexSyncStatus, String> {
+    save_incremental_search_index_sync_settings(&IncrementalSearchIndexSyncSettings { enabled })?;
+    let mut runtime = INCREMENTAL_SEARCH_INDEX_SYNC_RUNTIME
+        .lock()
+        .map_err(|error| error.to_string())?;
+    runtime.enabled = enabled;
+    drop(runtime);
+    current_incremental_search_index_sync_status()
+}
+
+#[tauri::command]
 pub(crate) fn start_search_index_build(
     app_handle: tauri::AppHandle,
     force: Option<bool>,
+) -> Result<SearchIndexBuildStatus, String> {
+    request_search_index_build(app_handle, force.unwrap_or(false))
+}
+
+fn request_search_index_build(
+    app_handle: tauri::AppHandle,
+    force: bool,
 ) -> Result<SearchIndexBuildStatus, String> {
     let Some(mut running_guard) = try_mark_search_index_build_running() else {
         return Ok(current_search_index_status());
     };
 
     let app_for_task = app_handle.clone();
-    let mut force = force.unwrap_or(false);
+    let mut force = force;
     tauri::async_runtime::spawn(async move {
         loop {
             let app_for_blocking = app_for_task.clone();
