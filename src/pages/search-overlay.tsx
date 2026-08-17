@@ -10,6 +10,7 @@ import {
   X,
 } from "lucide-react";
 import { useSearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
+import { getSearchIndexActivity } from "@/lib/searchIndexStatus";
 import { invoke } from "@/lib/tauri";
 import { ataruSearch, type SearchHit, type SearchLevel, type SearchMode, type SearchResponse } from "@/modules/api/ataru";
 import { getSearchModeCopy } from "@/modules/ai/query";
@@ -266,13 +267,16 @@ export default function SearchOverlay() {
     }
   };
 
-  const searchStateLabel = indexStatus?.state === "building"
-    ? `后台更新索引 ${Math.round((indexProgress ?? 0) * 100)}%${indexStatus.searchAvailable ? " · 可继续搜索" : ""}`
+  const indexActivity = getSearchIndexActivity(indexStatus);
+  const searchStateLabel = indexActivity.fullBuild
+    ? `整理本地索引 ${Math.round((indexProgress ?? 0) * 100)}%${indexStatus?.searchAvailable ? " · 可继续搜索" : ""}`
     : searching
       ? "正在搜索…"
       : response
         ? `${formatCount(response.total)} 个结果 · ${formatDuration(response.tookMs)}`
-        : "输入关键词开始搜索";
+        : indexActivity.syncing
+          ? "正在同步最新会话"
+          : "输入关键词开始搜索";
 
   return (
     <div className="fixed inset-0 flex items-start justify-center px-3 pb-6 pt-4 sm:px-6 sm:pt-6" onKeyDown={handleKeyDown}>
@@ -380,8 +384,8 @@ export default function SearchOverlay() {
             <div className="px-4 py-10 text-center text-sm text-muted-foreground">没有找到匹配“{query.trim()}”的内容</div>
           ) : query.trim() ? (
             <div className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-muted-foreground">
-              {indexStatus?.state === "building" ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
-              <span>{indexStatus?.state === "building" ? "首次搜索需要整理本地索引…" : "等待搜索结果…"}</span>
+              {indexActivity.fullBuild ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4" />}
+              <span>{indexActivity.fullBuild ? "首次搜索需要整理本地索引…" : "等待搜索结果…"}</span>
             </div>
           ) : (
             <div className="px-4 py-10 text-center">

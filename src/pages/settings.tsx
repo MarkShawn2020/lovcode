@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, DatabaseZap, FileClock, Loader2, Settings2 } from "lucide-react";
 import { AppUpdatePanel } from "@/components/AppUpdatePanel";
 import { useSearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
+import { getSearchIndexActivity } from "@/lib/searchIndexStatus";
 import {
   copyText,
   getIncrementalSearchIndexSyncStatus,
@@ -223,7 +224,7 @@ export default function SettingsPage() {
                       : "已暂停自动同步"}
                 </p>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  {indexStatus?.state === "building"
+                  {getSearchIndexActivity(indexStatus).syncing
                     ? "检测到变动，正在同步搜索索引。"
                     : `最近同步请求：${formatSyncTime(incrementalSync?.lastSyncRequestedAt)}`}
                 </p>

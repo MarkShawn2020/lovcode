@@ -30,6 +30,10 @@ pub(crate) struct SearchResult {
 #[serde(rename_all = "camelCase")]
 pub(crate) struct SearchIndexBuildStatus {
     pub state: String,
+    /// "full" for a whole-corpus build (progress is meaningful) or
+    /// "incremental" for a delta pass triggered by a changed session file
+    /// (totals cover only that delta, so the UI shows activity, not percent).
+    pub mode: String,
     pub search_available: bool,
     pub total_sessions: usize,
     pub processed_sessions: usize,
@@ -71,6 +75,7 @@ impl Default for SearchIndexBuildStatus {
     fn default() -> Self {
         Self {
             state: "idle".to_string(),
+            mode: "full".to_string(),
             search_available: false,
             total_sessions: 0,
             processed_sessions: 0,
@@ -998,6 +1003,18 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     let claude_sources = collect_claude_search_sources(&projects_dir)?;
     let codex_sources = collect_codex_search_sources();
     let previous_manifest = load_search_index_manifest();
+    let full_rebuild = force || previous_manifest.is_none() || !search_index_on_disk_is_current();
+    // An incremental pass only touches the changed sessions, but the badge it
+    // feeds reports how much is searchable overall. Seed the counter with the
+    // corpus we already have so it grows instead of restarting from zero.
+    let baseline_indexed_messages = if full_rebuild {
+        0
+    } else {
+        previous_manifest
+            .as_ref()
+            .map(|manifest| manifest_totals(&manifest.entries).1)
+            .unwrap_or(0)
+    };
     let started_at = now_secs();
     let discovered_sessions = claude_sources.len() + codex_sources.len();
     let discovered_bytes = claude_sources
@@ -1007,12 +1024,13 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         .sum();
     let mut status = SearchIndexBuildStatus {
         state: "building".to_string(),
+        mode: if full_rebuild { "full" } else { "incremental" }.to_string(),
         search_available: search_index_is_available(),
         total_sessions: discovered_sessions,
         processed_sessions: 0,
         total_messages: 0,
         processed_messages: 0,
-        indexed_messages: 0,
+        indexed_messages: baseline_indexed_messages,
         total_bytes: discovered_bytes,
         processed_bytes: 0,
         skipped_sessions: 0,
@@ -1037,7 +1055,6 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
                 .collect()
         })
         .unwrap_or_default();
-    let full_rebuild = force || previous_manifest.is_none() || !search_index_on_disk_is_current();
 
     let mut current_paths = HashSet::with_capacity(discovered_sessions);
     let mut final_manifest_entries: Vec<SearchIndexManifestEntry> =

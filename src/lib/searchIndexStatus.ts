@@ -1,5 +1,6 @@
 interface SearchIndexStatusLike {
   state?: string;
+  mode?: string;
   totalSessions?: number;
   processedSessions?: number;
   totalMessages?: number;
@@ -28,8 +29,21 @@ function formatDuration(totalSeconds: number) {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
-export function formatByteSize(bytes: number | null | undefined) {
-  const value = bytes ?? 0;
+/**
+ * A full build walks the whole corpus, so its percent is meaningful. An
+ * incremental pass only covers the sessions that just changed, so its totals
+ * restart on every pass — surface it as activity, never as a percentage.
+ */
+export function getSearchIndexActivity(status: SearchIndexStatusLike | null | undefined) {
+  const building = status?.state === "building";
+  return {
+    building,
+    fullBuild: building && status?.mode !== "incremental",
+    syncing: building && status?.mode === "incremental",
+  };
+}
+
+export function formatByteSize(bytes: number | null | undefined) {  const value = bytes ?? 0;
   if (!Number.isFinite(value) || value <= 0) return "0 B";
 
   const units = ["B", "KB", "MB", "GB", "TB"];
