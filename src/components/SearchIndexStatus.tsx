@@ -22,19 +22,22 @@ function formatLastActivity(updatedAt: number | null | undefined) {
 }
 
 function getStateTitle(status: SearchIndexBuildStatus) {
-  const { fullBuild, syncing } = getSearchIndexActivity(status);
-  if (syncing) return "正在同步最新会话";
-  if (fullBuild) return "正在建立记忆索引";
-  if (status.state === "error") return "记忆索引更新未完成";
-  if (status.state === "ready") return "记忆索引已就绪";
-  return "正在读取记忆索引";
+  const { fullBuild } = getSearchIndexActivity(status);
+  if (fullBuild) return "正在建立索引";
+  if (status.state === "error") return "索引更新未完成";
+  if (status.state === "ready" || status.searchAvailable) return "索引已就绪";
+  return "索引待建立";
 }
 
 function getStateHint(status: SearchIndexBuildStatus) {
-  const { fullBuild, syncing } = getSearchIndexActivity(status);
-  if (syncing) return "已有索引持续可搜索，新增会话在后台补齐。";
-  if (fullBuild && status.searchAvailable) return "旧索引仍可搜索，新索引在后台生成。";
-  return "索引任务独立于应用编译和启动。";
+  const { fullBuild } = getSearchIndexActivity(status);
+  if (fullBuild) {
+    return status.searchAvailable
+      ? "旧索引仍可搜索，新索引在后台生成。"
+      : "索引任务独立于应用编译和启动。";
+  }
+  if (status.state === "error") return "可重新更新，已有索引不受影响。";
+  return "会话有变动时在后台自动补齐。";
 }
 
 function getCurrentItem(status: SearchIndexBuildStatus) {
@@ -46,7 +49,7 @@ function getCurrentItem(status: SearchIndexBuildStatus) {
 function formatDiagnostic(status: SearchIndexBuildStatus, progress: number) {
   const timing = getSearchIndexTiming(status, progress);
   return [
-    "Ataru 记忆索引诊断",
+    "Ataru 索引诊断",
     `状态: ${status.state}`,
     `模式: ${status.mode ?? "-"}`,
     `进度: ${Math.round(progress * 100)}%`,
@@ -69,10 +72,10 @@ function formatDiagnostic(status: SearchIndexBuildStatus, progress: number) {
 
 function getBadgeLabel(status: SearchIndexBuildStatus) {
   const { fullBuild } = getSearchIndexActivity(status);
-  if (fullBuild) return "建立记忆索引";
+  if (fullBuild) return "建立索引";
   if (status.state === "error") return "索引更新未完成";
-  if (status.state === "ready" || status.searchAvailable) return "记忆索引就绪";
-  return "记忆索引待建立";
+  if (status.state === "ready" || status.searchAvailable) return "索引就绪";
+  return "索引待建立";
 }
 
 export function SearchIndexStatus({
@@ -114,7 +117,7 @@ export function SearchIndexStatus({
 
   if (!status) return <span className="text-xs font-medium text-foreground/70" role="status">读取索引状态…</span>;
 
-  const { building, fullBuild, syncing } = getSearchIndexActivity(status);
+  const { fullBuild, syncing } = getSearchIndexActivity(status);
   const timing = getSearchIndexTiming(status, progress);
   const percent = Math.round(progress * 100);
   const copyDiagnostic = async () => {
@@ -135,8 +138,8 @@ export function SearchIndexStatus({
     >
       <summary
         className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-foreground/70 outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&::-webkit-details-marker]:hidden"
-        aria-label="查看记忆索引详情"
-        title={getStateTitle(status)}
+        aria-label="查看索引详情"
+        title={syncing ? `${getStateTitle(status)} · 正在同步最新会话` : getStateTitle(status)}
       >
         {fullBuild ? (
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
@@ -157,7 +160,12 @@ export function SearchIndexStatus({
         <div className="border-b border-border px-4 py-3.5">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
-              <h2 className="font-serif text-base font-semibold text-foreground">{getStateTitle(status)}</h2>
+              <h2 className="flex items-center gap-2 font-serif text-base font-semibold text-foreground">
+                {getStateTitle(status)}
+                <span className={syncing ? "" : "invisible"} title="正在同步最新会话">
+                  <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground [animation-duration:1.8s]" />
+                </span>
+              </h2>
               <p className="mt-1 text-xs leading-5 text-muted-foreground">{getStateHint(status)}</p>
             </div>
             {fullBuild && (
@@ -179,40 +187,29 @@ export function SearchIndexStatus({
             </div>
           )}
 
-          {building && (
+          {fullBuild && (
             <section>
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">当前处理</p>
               <p className="mt-1.5 line-clamp-2 text-sm font-medium leading-5 text-foreground">{getCurrentItem(status)}</p>
               {status.currentProjectPath && (
                 <p className="mt-1 break-all text-xs leading-5 text-muted-foreground">{status.currentProjectPath}</p>
               )}
-              {status.currentSessionId && status.currentTitle && (
-                <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">{status.currentSessionId}</p>
-              )}
             </section>
           )}
 
           <dl className="grid grid-cols-2 gap-x-5 gap-y-3 border-t border-border pt-4 text-xs">
+            <Metric label="数据" value={`${formatByteSize(status.processedBytes)} / ${formatByteSize(status.totalBytes)}`} />
+            <Metric label="会话" value={`${formatCount(status.processedSessions)} / ${formatCount(status.totalSessions)}`} />
             <Metric
-              label={syncing ? "本次数据" : "数据"}
-              value={`${formatByteSize(status.processedBytes)} / ${formatByteSize(status.totalBytes)}`}
-            />
-            <Metric
-              label={syncing ? "本次会话" : "会话"}
-              value={`${formatCount(status.processedSessions)} / ${formatCount(status.totalSessions)}`}
-            />
-            <Metric
-              label={syncing ? "可检索消息" : "消息"}
+              label="可检索消息"
               value={
-                syncing
-                  ? formatCount(status.indexedMessages)
-                  : status.totalMessages
-                    ? `${formatCount(status.processedMessages ?? 0)} / ${formatCount(status.totalMessages)}`
-                    : formatCount(status.processedMessages ?? 0)
+                status.totalMessages
+                  ? `${formatCount(status.indexedMessages)} / ${formatCount(status.totalMessages)}`
+                  : formatCount(status.indexedMessages)
               }
             />
-            <Metric label={fullBuild ? "临时索引" : "索引大小"} value={formatByteSize(status.indexSizeBytes)} />
-            <Metric label="已用时间" value={timing.elapsed} />
+            <Metric label="索引大小" value={formatByteSize(status.indexSizeBytes)} />
+            {fullBuild && <Metric label="已用时间" value={timing.elapsed} />}
             {fullBuild && <Metric label="预计剩余" value={timing.eta === "estimating" ? "计算中" : timing.eta} />}
           </dl>
 

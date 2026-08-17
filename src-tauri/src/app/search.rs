@@ -1156,9 +1156,16 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     };
     let changed_sessions =
         claude_work_by_path.len() + codex_work_by_path.len() + deleted_entries.len();
-    status.total_sessions = changed_sessions;
+    // Report corpus-relative counters, not per-pass ones: sessions and bytes
+    // that are already up to date count as processed, so an incremental pass
+    // nudges a stable total instead of restarting its own denominator. On a
+    // full rebuild every session is work, so both seeds collapse to zero.
+    let pass_total_sessions = discovered_sessions + deleted_entries.len();
+    status.total_sessions = pass_total_sessions;
+    status.processed_sessions = pass_total_sessions.saturating_sub(changed_sessions);
     status.total_messages = 0;
-    status.total_bytes = work_bytes;
+    status.total_bytes = discovered_bytes;
+    status.processed_bytes = discovered_bytes.saturating_sub(work_bytes);
     status.current_title = None;
     status.updated_at = Some(now_secs());
 
