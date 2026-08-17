@@ -496,30 +496,27 @@ export default function WorkspacePage() {
                     : `${sessions.length.toLocaleString("zh-CN")} 个会话`}
               </p>
             </div>
-            <div className="flex shrink-0 items-center gap-2">
-              <div className="inline-flex rounded-lg border border-border bg-background p-0.5" role="group" aria-label="档案分组方式">
-                <button
-                  type="button"
-                  aria-pressed={archiveView === "session"}
-                  onClick={() => setArchiveView("session")}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                    archiveView === "session" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  }`}
-                >
-                  会话
-                </button>
-                <button
-                  type="button"
-                  aria-pressed={archiveView === "project"}
-                  onClick={() => setArchiveView("project")}
-                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                    archiveView === "project" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  }`}
-                >
-                  项目
-                </button>
-              </div>
-              <BookOpenText className="h-5 w-5 text-primary" aria-hidden="true" />
+            <div className="inline-flex shrink-0 rounded-lg border border-border bg-background p-0.5" role="group" aria-label="档案分组方式">
+              <button
+                type="button"
+                aria-pressed={archiveView === "session"}
+                onClick={() => setArchiveView("session")}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  archiveView === "session" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                会话
+              </button>
+              <button
+                type="button"
+                aria-pressed={archiveView === "project"}
+                onClick={() => setArchiveView("project")}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                  archiveView === "project" ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                项目
+              </button>
             </div>
           </div>
           <label className="relative mt-3 block">
