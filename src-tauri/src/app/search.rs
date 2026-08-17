@@ -347,7 +347,8 @@ fn search_index_disk_signature() -> SearchIndexDiskSignature {
 
 fn emit_search_index_status(app: Option<&tauri::AppHandle>, mut status: SearchIndexBuildStatus) {
     if status.total_messages > 0 {
-        status.processed_messages = status.processed_messages.min(status.total_messages);
+        // Docs written by the running pass are not searchable until it
+        // commits, so hold the reported figure at the corpus we published.
         status.indexed_messages = status.indexed_messages.min(status.total_messages);
     }
     if status.total_sessions > 0 {
@@ -357,7 +358,10 @@ fn emit_search_index_status(app: Option<&tauri::AppHandle>, mut status: SearchIn
         status.processed_bytes = status.processed_bytes.min(status.total_bytes);
     }
 
-    if status.state == "building" {
+    // Only a full rebuild writes to the staging directory. An incremental
+    // pass appends to the live index, so reporting the staging size would
+    // blink the panel down to 0 B and back for every synced session.
+    if status.state == "building" && status.mode == "full" {
         status.index_size_bytes = search_index_build_dir_size();
     } else if status.index_size_bytes == 0 {
         status.index_size_bytes = search_index_dir_size();
@@ -1004,16 +1008,16 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     let codex_sources = collect_codex_search_sources();
     let previous_manifest = load_search_index_manifest();
     let full_rebuild = force || previous_manifest.is_none() || !search_index_on_disk_is_current();
-    // An incremental pass only touches the changed sessions, but the badge it
-    // feeds reports how much is searchable overall. Seed the counter with the
-    // corpus we already have so it grows instead of restarting from zero.
-    let baseline_indexed_messages = if full_rebuild {
-        0
+    // An incremental pass only touches the changed sessions, but the panel it
+    // feeds reports how much is searchable overall. Seed every counter from the
+    // corpus we already published so they hold steady instead of restarting.
+    let (baseline_sessions, baseline_messages, baseline_bytes) = if full_rebuild {
+        (0, 0, 0)
     } else {
         previous_manifest
             .as_ref()
-            .map(|manifest| manifest_totals(&manifest.entries).1)
-            .unwrap_or(0)
+            .map(|manifest| manifest_totals(&manifest.entries))
+            .unwrap_or((0, 0, 0))
     };
     let started_at = now_secs();
     let discovered_sessions = claude_sources.len() + codex_sources.len();
@@ -1026,13 +1030,21 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
         state: "building".to_string(),
         mode: if full_rebuild { "full" } else { "incremental" }.to_string(),
         search_available: search_index_is_available(),
-        total_sessions: discovered_sessions,
-        processed_sessions: 0,
-        total_messages: 0,
+        total_sessions: if full_rebuild {
+            discovered_sessions
+        } else {
+            baseline_sessions
+        },
+        processed_sessions: if full_rebuild { 0 } else { baseline_sessions },
+        total_messages: baseline_messages,
         processed_messages: 0,
-        indexed_messages: baseline_indexed_messages,
-        total_bytes: discovered_bytes,
-        processed_bytes: 0,
+        indexed_messages: baseline_messages,
+        total_bytes: if full_rebuild {
+            discovered_bytes
+        } else {
+            baseline_bytes
+        },
+        processed_bytes: if full_rebuild { 0 } else { baseline_bytes },
         skipped_sessions: 0,
         index_size_bytes: 0,
         current_session_id: None,
@@ -1156,16 +1168,22 @@ fn run_search_index_build(app: Option<tauri::AppHandle>, force: bool) -> Result<
     };
     let changed_sessions =
         claude_work_by_path.len() + codex_work_by_path.len() + deleted_entries.len();
-    // Report corpus-relative counters, not per-pass ones: sessions and bytes
-    // that are already up to date count as processed, so an incremental pass
-    // nudges a stable total instead of restarting its own denominator. On a
-    // full rebuild every session is work, so both seeds collapse to zero.
-    let pass_total_sessions = discovered_sessions + deleted_entries.len();
-    status.total_sessions = pass_total_sessions;
-    status.processed_sessions = pass_total_sessions.saturating_sub(changed_sessions);
-    status.total_messages = 0;
-    status.total_bytes = discovered_bytes;
-    status.processed_bytes = discovered_bytes.saturating_sub(work_bytes);
+    if full_rebuild {
+        status.total_sessions = changed_sessions;
+        status.total_messages = 0;
+        status.total_bytes = work_bytes;
+    } else {
+        // An incremental pass indexes a handful of changed sessions, so its own
+        // ratios are meaningless and would restart on every pass. Keep counters
+        // pinned to the published corpus — `emit_search_index_status` clamps the
+        // in-flight increments to these totals — and let the pass show up purely
+        // as activity. The numbers then step once, when the pass commits.
+        status.total_sessions = baseline_sessions;
+        status.processed_sessions = baseline_sessions;
+        status.total_messages = baseline_messages;
+        status.total_bytes = baseline_bytes;
+        status.processed_bytes = baseline_bytes;
+    }
     status.current_title = None;
     status.updated_at = Some(now_secs());
 

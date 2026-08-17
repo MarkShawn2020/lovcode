@@ -10,7 +10,6 @@ import {
   X,
 } from "lucide-react";
 import { useSearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
-import { getSearchIndexActivity } from "@/lib/searchIndexStatus";
 import { invoke } from "@/lib/tauri";
 import { ataruSearch, type SearchHit, type SearchLevel, type SearchMode, type SearchResponse } from "@/modules/api/ataru";
 import { getSearchModeCopy } from "@/modules/ai/query";
@@ -103,7 +102,12 @@ export default function SearchOverlay() {
   const requestSequence = useRef(0);
   const compositionEndAt = useRef(0);
   const indexStartAttempted = useRef(false);
-  const { status: indexStatus, progress: indexProgress, start: startIndexBuild } = useSearchIndexBuildStatus();
+  const {
+    status: indexStatus,
+    progress: indexProgress,
+    activity: indexActivity,
+    start: startIndexBuild,
+  } = useSearchIndexBuildStatus();
 
   const hide = useCallback(() => {
     requestSequence.current += 1;
@@ -267,16 +271,16 @@ export default function SearchOverlay() {
     }
   };
 
-  const indexActivity = getSearchIndexActivity(indexStatus);
+  // Incremental sync is deliberately absent here: this line is the search
+  // box's own status, and a background pass swapping it in and out would read
+  // as flicker rather than information.
   const searchStateLabel = indexActivity.fullBuild
     ? `整理本地索引 ${Math.round((indexProgress ?? 0) * 100)}%${indexStatus?.searchAvailable ? " · 可继续搜索" : ""}`
     : searching
       ? "正在搜索…"
       : response
         ? `${formatCount(response.total)} 个结果 · ${formatDuration(response.tookMs)}`
-        : indexActivity.syncing
-          ? "正在同步最新会话"
-          : "输入关键词开始搜索";
+        : "输入关键词开始搜索";
 
   return (
     <div className="fixed inset-0 flex items-start justify-center px-3 pb-6 pt-4 sm:px-6 sm:pt-6" onKeyDown={handleKeyDown}>

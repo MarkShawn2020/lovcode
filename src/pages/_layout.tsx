@@ -8,7 +8,12 @@ import { useSearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
 export default function RootLayout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { status: indexStatus, progress: indexProgress, start: startIndexBuild } = useSearchIndexBuildStatus();
+  const {
+    status: indexStatus,
+    progress: indexProgress,
+    activity: indexActivity,
+    start: startIndexBuild,
+  } = useSearchIndexBuildStatus();
   const indexStartAttempted = useRef(false);
   const activeRoute: PrimaryRoute = location.pathname.startsWith("/workbench") || location.pathname.startsWith("/workspace") || location.pathname.startsWith("/history")
     ? "library"
@@ -35,7 +40,14 @@ export default function RootLayout() {
         onNavigate={navigatePrimary}
         onGoBack={() => navigate(-1)}
         onGoForward={() => navigate(1)}
-        rightSlot={<SearchIndexStatus status={indexStatus} progress={indexProgress} onRetry={() => void startIndexBuild(false)} />}
+        rightSlot={
+          <SearchIndexStatus
+            status={indexStatus}
+            progress={indexProgress}
+            activity={indexActivity}
+            onRetry={() => void startIndexBuild(false)}
+          />
+        }
       />
       <main className="min-h-0 min-w-0 flex-1 overflow-hidden">
         <Outlet />

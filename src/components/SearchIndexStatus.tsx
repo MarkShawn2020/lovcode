@@ -2,7 +2,7 @@ import { Check, ChevronDown, Copy, Loader2, RefreshCw } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import type { SearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
-import { formatByteSize, getSearchIndexActivity, getSearchIndexTiming } from "@/lib/searchIndexStatus";
+import { formatByteSize, getSearchIndexTiming, type SearchIndexActivity } from "@/lib/searchIndexStatus";
 import { copyText } from "@/modules/api/ataru";
 
 const countFormatter = new Intl.NumberFormat("zh-CN");
@@ -21,17 +21,15 @@ function formatLastActivity(updatedAt: number | null | undefined) {
   return `${Math.floor(minutes / 60)} 小时前有进度`;
 }
 
-function getStateTitle(status: SearchIndexBuildStatus) {
-  const { fullBuild } = getSearchIndexActivity(status);
-  if (fullBuild) return "正在建立索引";
+function getStateTitle(status: SearchIndexBuildStatus, activity: SearchIndexActivity) {
+  if (activity.fullBuild) return "正在建立索引";
   if (status.state === "error") return "索引更新未完成";
   if (status.state === "ready" || status.searchAvailable) return "索引已就绪";
   return "索引待建立";
 }
 
-function getStateHint(status: SearchIndexBuildStatus) {
-  const { fullBuild } = getSearchIndexActivity(status);
-  if (fullBuild) {
+function getStateHint(status: SearchIndexBuildStatus, activity: SearchIndexActivity) {
+  if (activity.fullBuild) {
     return status.searchAvailable
       ? "旧索引仍可搜索，新索引在后台生成。"
       : "索引任务独立于应用编译和启动。";
@@ -70,9 +68,8 @@ function formatDiagnostic(status: SearchIndexBuildStatus, progress: number) {
   ].join("\n");
 }
 
-function getBadgeLabel(status: SearchIndexBuildStatus) {
-  const { fullBuild } = getSearchIndexActivity(status);
-  if (fullBuild) return "建立索引";
+function getBadgeLabel(status: SearchIndexBuildStatus, activity: SearchIndexActivity) {
+  if (activity.fullBuild) return "建立索引";
   if (status.state === "error") return "索引更新未完成";
   if (status.state === "ready" || status.searchAvailable) return "索引就绪";
   return "索引待建立";
@@ -81,10 +78,12 @@ function getBadgeLabel(status: SearchIndexBuildStatus) {
 export function SearchIndexStatus({
   status,
   progress,
+  activity,
   onRetry,
 }: {
   status: SearchIndexBuildStatus | null;
   progress: number;
+  activity: SearchIndexActivity;
   onRetry: () => void;
 }) {
   const [copied, setCopied] = useState(false);
@@ -117,7 +116,7 @@ export function SearchIndexStatus({
 
   if (!status) return <span className="text-xs font-medium text-foreground/70" role="status">读取索引状态…</span>;
 
-  const { fullBuild, syncing } = getSearchIndexActivity(status);
+  const { fullBuild, syncing } = activity;
   const timing = getSearchIndexTiming(status, progress);
   const percent = Math.round(progress * 100);
   const copyDiagnostic = async () => {
@@ -139,7 +138,11 @@ export function SearchIndexStatus({
       <summary
         className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-foreground/70 outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&::-webkit-details-marker]:hidden"
         aria-label="查看索引详情"
-        title={syncing ? `${getStateTitle(status)} · 正在同步最新会话` : getStateTitle(status)}
+        title={
+          syncing
+            ? `${getStateTitle(status, activity)} · 正在同步最新会话`
+            : getStateTitle(status, activity)
+        }
       >
         {fullBuild ? (
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-primary" />
@@ -150,8 +153,8 @@ export function SearchIndexStatus({
         ) : (
           <Check className="h-3.5 w-3.5 shrink-0 text-primary" />
         )}
-        <span className="hidden truncate sm:inline">{getBadgeLabel(status)}</span>
-        <span className="sr-only" role="status">{getStateTitle(status)}</span>
+        <span className="hidden truncate sm:inline">{getBadgeLabel(status, activity)}</span>
+        <span className="sr-only" role="status">{getStateTitle(status, activity)}</span>
         {fullBuild && <span className="tabular-nums">{percent}%</span>}
         <ChevronDown className="h-3 w-3 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
       </summary>
@@ -161,12 +164,12 @@ export function SearchIndexStatus({
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h2 className="flex items-center gap-2 font-serif text-base font-semibold text-foreground">
-                {getStateTitle(status)}
+                {getStateTitle(status, activity)}
                 <span className={syncing ? "" : "invisible"} title="正在同步最新会话">
                   <RefreshCw className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground [animation-duration:1.8s]" />
                 </span>
               </h2>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">{getStateHint(status)}</p>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">{getStateHint(status, activity)}</p>
             </div>
             {fullBuild && (
               <span className="shrink-0 rounded-lg bg-primary/10 px-2 py-1 text-xs font-semibold tabular-nums text-primary">{percent}%</span>
@@ -200,14 +203,7 @@ export function SearchIndexStatus({
           <dl className="grid grid-cols-2 gap-x-5 gap-y-3 border-t border-border pt-4 text-xs">
             <Metric label="数据" value={`${formatByteSize(status.processedBytes)} / ${formatByteSize(status.totalBytes)}`} />
             <Metric label="会话" value={`${formatCount(status.processedSessions)} / ${formatCount(status.totalSessions)}`} />
-            <Metric
-              label="可检索消息"
-              value={
-                status.totalMessages
-                  ? `${formatCount(status.indexedMessages)} / ${formatCount(status.totalMessages)}`
-                  : formatCount(status.indexedMessages)
-              }
-            />
+            <Metric label="可检索消息" value={formatCount(status.indexedMessages)} />
             <Metric label="索引大小" value={formatByteSize(status.indexSizeBytes)} />
             {fullBuild && <Metric label="已用时间" value={timing.elapsed} />}
             {fullBuild && <Metric label="预计剩余" value={timing.eta === "estimating" ? "计算中" : timing.eta} />}

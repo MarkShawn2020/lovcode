@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { ChevronDown, DatabaseZap, FileClock, Loader2, Settings2 } from "lucide-react";
 import { AppUpdatePanel } from "@/components/AppUpdatePanel";
 import { useSearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
-import { getSearchIndexActivity } from "@/lib/searchIndexStatus";
 import {
   copyText,
   getIncrementalSearchIndexSyncStatus,
@@ -69,7 +68,7 @@ function WatchTargetFiles({ target }: { target: SearchIndexWatchTarget }) {
 }
 
 export default function SettingsPage() {
-  const { status: indexStatus } = useSearchIndexBuildStatus();
+  const { status: indexStatus, activity: indexActivity } = useSearchIndexBuildStatus();
   const [incrementalSync, setIncrementalSync] = useState<IncrementalSearchIndexSyncStatus | null>(null);
   const [incrementalSyncBusy, setIncrementalSyncBusy] = useState(false);
   const [incrementalSyncError, setIncrementalSyncError] = useState<string | null>(null);
@@ -224,7 +223,7 @@ export default function SettingsPage() {
                       : "已暂停自动同步"}
                 </p>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                  {getSearchIndexActivity(indexStatus).syncing
+                  {indexActivity.syncing
                     ? "检测到变动，正在同步搜索索引。"
                     : `最近同步请求：${formatSyncTime(incrementalSync?.lastSyncRequestedAt)}`}
                 </p>

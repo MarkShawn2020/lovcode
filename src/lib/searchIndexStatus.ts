@@ -29,15 +29,18 @@ function formatDuration(totalSeconds: number) {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
-/**
- * A full build walks the whole corpus, so its percent is meaningful. An
- * incremental pass only covers the sessions that just changed, so its totals
- * restart on every pass — surface it as activity, never as a percentage.
- */
-export function getSearchIndexActivity(status: SearchIndexStatusLike | null | undefined) {
+export interface SearchIndexActivity {
+  /** A whole-corpus build: percent and ETA are meaningful. */
+  fullBuild: boolean;
+  /** A delta pass for changed sessions: show activity, never a percentage. */
+  syncing: boolean;
+}
+
+export function getSearchIndexActivity(
+  status: SearchIndexStatusLike | null | undefined,
+): SearchIndexActivity {
   const building = status?.state === "building";
   return {
-    building,
     fullBuild: building && status?.mode !== "incremental",
     syncing: building && status?.mode === "incremental",
   };
