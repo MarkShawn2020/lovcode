@@ -85,3 +85,13 @@ pnpm tauri build
   ```
 
 - 清理后使用原来的 `npx lovstudio app ataru tauri dev` 或 `pnpm tauri dev` 重新启动；该操作只清理可重建的本地构建缓存，不涉及源码和用户会话数据。
+
+## Cross-session Notes
+
+- `scripts/sync-cargo-version.cjs` 必须同时同步 `src-tauri/tauri.conf.json`，其 `version` 优先于 Cargo.toml（2026-08-18, c163788）
+- `pnpm version` 会被 pnpm 内建命令截获，bump 必须用 `pnpm run version`（2026-08-18, c163788）
+- 未识别的 CLI 参数会 fall through 去启动桌面 GUI，所以外部脚本调用 ataru 前必须先 `--version` 版本门控（2026-08-18, c163788）
+- JSON CLI 的检索只走 keyword 模式，`--level` 会强制 `SearchMode::Keyword`，不要承诺命令行有语义/hybrid（2026-08-18, c163788）
+- `SEARCH_INDEX_BUILD_LOCK` 只在进程内生效，CLI 与桌面端并发构建靠「写临时目录再原子替换」兜底，构建前先读 `index status`（2026-08-18, c163788）
+- Ataru projectId 是以 `-` 开头的路径 slug，传给 argparse 类解析器必须用 `--flag=value` 形式（2026-08-18, c163788）
+- 搜索响应字段是 camelCase（`tookMs` 而非 `took_ms`）（2026-08-18, c163788）
