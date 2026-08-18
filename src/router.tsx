@@ -7,26 +7,32 @@
 import { Suspense } from "react";
 import { createHashRouter, RouterProvider } from "react-router-dom";
 import routes from "~react-pages";
+import { RouteErrorBoundary } from "./components/RouteErrorBoundary";
 import RootLayout from "./pages/_layout";
 
 // ============================================================================
 // Router Configuration
 // ============================================================================
 
-// The global-search panel renders in its own native window.
-const STANDALONE_PATHS = new Set(["/search-overlay"]);
+// Routes that bypass RootLayout: the global-search panel renders in its own
+// native window, and /landing is the public web page served on
+// ataru.lovstudio.ai — it must not mount the desktop shell, which invokes Tauri.
+const STANDALONE_PATHS = new Set(["/search-overlay", "/landing"]);
 const standaloneRoutes = routes.filter((r) =>
   r && typeof r === "object" && "path" in r && STANDALONE_PATHS.has(`/${(r as { path?: string }).path ?? ""}`)
 );
 const layoutRoutes = routes.filter((r) => !standaloneRoutes.includes(r));
 
 const routesWithLayout = [
-  ...standaloneRoutes,
+  ...standaloneRoutes.map((r) => ({ ...(r as object), errorElement: <RouteErrorBoundary /> })),
   {
     path: "/",
     element: <RootLayout />,
+    errorElement: <RouteErrorBoundary />,
     children: layoutRoutes,
   },
+  // Unknown paths would otherwise hit React Router's developer error screen.
+  { path: "*", element: <RouteErrorBoundary /> },
 ];
 
 const router = createHashRouter(routesWithLayout);
