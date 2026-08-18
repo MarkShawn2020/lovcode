@@ -948,6 +948,21 @@ pub(crate) fn set_incremental_search_index_sync_enabled(
     current_incremental_search_index_sync_status()
 }
 
+/// Headless entry points for the JSON CLI.
+///
+/// The desktop build drives indexing through Tauri commands that need an
+/// `AppHandle` to emit progress. Agent Skills and scripts have no window, so
+/// they get the same single-writer pipeline without event emission: status is
+/// read from the manifest on disk, and a build runs to completion in-process.
+pub(crate) fn cli_search_index_status() -> SearchIndexBuildStatus {
+    current_search_index_status()
+}
+
+pub(crate) fn cli_build_search_index(force: bool) -> Result<SearchIndexBuildStatus, String> {
+    run_search_index_build(None, force)?;
+    Ok(current_search_index_status())
+}
+
 #[tauri::command]
 pub(crate) fn start_search_index_build(
     app_handle: tauri::AppHandle,

@@ -7,6 +7,11 @@ enum CliRequest {
         query: String,
         limit: usize,
         level: Option<ataru::sdk::SearchLevel>,
+        project_id: Option<String>,
+    },
+    IndexStatus,
+    IndexBuild {
+        force: bool,
     },
     ReadSession {
         project_id: String,
@@ -28,6 +33,7 @@ pub(crate) fn run_cli_if_requested() -> Option<i32> {
             query,
             limit,
             level,
+            project_id,
         }) => {
             let result = if let Some(level) = level {
                 ataru::api::ataru_keyword_search(ataru::sdk::SearchRequest {
@@ -35,13 +41,13 @@ pub(crate) fn run_cli_if_requested() -> Option<i32> {
                     level,
                     mode: ataru::sdk::SearchMode::Keyword,
                     limit,
-                    project_id: None,
+                    project_id,
                 })
                 .and_then(|response| {
                     serde_json::to_string(&response).map_err(|error| error.to_string())
                 })
             } else {
-                search_chats(query, Some(limit), None).and_then(|results| {
+                search_chats(query, Some(limit), project_id).and_then(|results| {
                     serde_json::to_string(&results).map_err(|error| error.to_string())
                 })
             };
@@ -81,6 +87,28 @@ pub(crate) fn run_cli_if_requested() -> Option<i32> {
                 }
             }
         }
+        Ok(CliRequest::IndexStatus) => match serde_json::to_string(&cli_search_index_status()) {
+            Ok(json) => {
+                println!("{json}");
+                0
+            }
+            Err(error) => {
+                eprintln!("Ataru index status failed: {error}");
+                1
+            }
+        },
+        Ok(CliRequest::IndexBuild { force }) => match cli_build_search_index(force)
+            .and_then(|status| serde_json::to_string(&status).map_err(|error| error.to_string()))
+        {
+            Ok(json) => {
+                println!("{json}");
+                0
+            }
+            Err(error) => {
+                eprintln!("Ataru index build failed: {error}");
+                1
+            }
+        },
         Ok(CliRequest::SemanticPreflight) => match semantic_search_initialization_preview()
             .and_then(|preview| serde_json::to_string(&preview).map_err(|error| error.to_string()))
         {
@@ -105,6 +133,13 @@ fn parse_cli_request(args: &[String]) -> Option<Result<CliRequest, String>> {
     if matches!(command, "--version" | "-V") {
         return Some(Ok(CliRequest::Version));
     }
+    if command == "index" {
+        return Some(match args.get(1).map(String::as_str) {
+            Some("status") => parse_index_status_request(args),
+            Some("build") => parse_index_build_request(args),
+            _ => Err("Usage: ataru index status --json | ataru index build [--force] --json".to_string()),
+        });
+    }
     if command == "semantic" {
         return Some(match args.get(1).map(String::as_str) {
             Some("preview") => Ok(CliRequest::SemanticPreflight),
@@ -121,6 +156,7 @@ fn parse_cli_request(args: &[String]) -> Option<Result<CliRequest, String>> {
     let mut query_parts = Vec::new();
     let mut limit = 50usize;
     let mut level = None;
+    let mut project_id = None;
     let mut index = 1usize;
     while index < args.len() {
         match args[index].as_str() {
@@ -164,6 +200,20 @@ fn parse_cli_request(args: &[String]) -> Option<Result<CliRequest, String>> {
                 };
                 index += 2;
             }
+            "--project-id" => {
+                let Some(value) = args.get(index + 1) else {
+                    return Some(Err(
+                        "Usage: ataru search <query> --json [--project-id PROJECT_ID]".to_string(),
+                    ));
+                };
+                if value.is_empty() {
+                    return Some(Err(
+                        "Ataru search project id must not be empty.".to_string()
+                    ));
+                }
+                project_id = Some(value.clone());
+                index += 2;
+            }
             value if value.starts_with('-') => {
                 return Some(Err(format!("Unknown Ataru search option: {value}")));
             }
@@ -189,7 +239,29 @@ fn parse_cli_request(args: &[String]) -> Option<Result<CliRequest, String>> {
         query,
         limit,
         level,
+        project_id,
     }))
+}
+
+fn parse_index_status_request(args: &[String]) -> Result<CliRequest, String> {
+    for value in args.iter().skip(2) {
+        if value != "--json" {
+            return Err(format!("Unknown Ataru index status option: {value}"));
+        }
+    }
+    Ok(CliRequest::IndexStatus)
+}
+
+fn parse_index_build_request(args: &[String]) -> Result<CliRequest, String> {
+    let mut force = false;
+    for value in args.iter().skip(2) {
+        match value.as_str() {
+            "--json" => {}
+            "--force" => force = true,
+            other => return Err(format!("Unknown Ataru index build option: {other}")),
+        }
+    }
+    Ok(CliRequest::IndexBuild { force })
 }
 
 fn parse_session_request(args: &[String]) -> Result<CliRequest, String> {
@@ -271,6 +343,7 @@ mod tests {
                 query: "global session".to_string(),
                 limit: 80,
                 level: None,
+                project_id: None,
             }))
         );
         assert_eq!(
@@ -281,6 +354,7 @@ mod tests {
                 query: "ranking".to_string(),
                 limit: 50,
                 level: Some(ataru::sdk::SearchLevel::Project),
+                project_id: None,
             }))
         );
         assert_eq!(

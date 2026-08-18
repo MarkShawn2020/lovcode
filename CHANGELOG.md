@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.41.3
+
+### Patch Changes
+
+- JSON CLI 新增 `ataru index status` 与 `ataru index build [--force]`，无界面调用方终于可以自己完成 `ensure_index`，不必先打开桌面端；`ataru search` 支持 `--project-id` 按项目收敛检索范围。
+
 ## 0.41.2
 
 ### Patch Changes
