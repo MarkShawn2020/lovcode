@@ -23,12 +23,18 @@ export function GlobalHeader({
         <button
           type="button"
           onClick={() => onNavigate("search")}
-          className="mr-2 inline-flex h-8 items-center gap-2 rounded-lg px-2 text-foreground transition-colors hover:bg-muted"
+          className="inline-flex h-8 items-center gap-2 rounded-lg px-2 text-foreground transition-colors hover:bg-muted"
           aria-label="打开 Ataru 搜索"
         >
           <img src="/ataru.svg" alt="" className="h-6 w-6 shrink-0 object-contain" />
           <span className="font-serif text-[15px] font-semibold tracking-tight">Ataru</span>
         </button>
+        <span
+          title={`Ataru v${__APP_VERSION__}`}
+          className="mr-2 select-none rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px] leading-none text-muted-foreground"
+        >
+          v{__APP_VERSION__}
+        </span>
         <HeaderButton onClick={onGoBack} label="后退"><ChevronLeft className="h-4 w-4" /></HeaderButton>
         <HeaderButton onClick={onGoForward} label="前进"><ChevronRight className="h-4 w-4" /></HeaderButton>
       </div>
