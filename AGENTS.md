@@ -95,3 +95,5 @@ pnpm tauri build
 - `SEARCH_INDEX_BUILD_LOCK` 只在进程内生效，CLI 与桌面端并发构建靠「写临时目录再原子替换」兜底，构建前先读 `index status`（2026-08-18, c163788）
 - Ataru projectId 是以 `-` 开头的路径 slug，传给 argparse 类解析器必须用 `--flag=value` 形式（2026-08-18, c163788）
 - 搜索响应字段是 camelCase（`tookMs` 而非 `took_ms`）（2026-08-18, c163788）
+- 站点域名由 `public/CNAME` 驱动 GitHub Pages，改域名必须同步 `index.html` 的 canonical/og:url 和落地页 hostname 判断（2026-08-18, b4e2a40）
+- 开启 Pages 强制 HTTPS 用 `gh api -X PUT repos/<owner>/<repo>/pages --input -` 传 JSON body，`-f https_enforced=true` 会 422（2026-08-18, b4e2a40）
