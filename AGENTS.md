@@ -6,7 +6,7 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 This project uses **Lovstudio Warm Academic Style (暖学术风格)**
 
-Reference complete design guide: file:///Users/mark/@lovstudio/design/design-guide.md
+Reference complete design guide: file:///Users/mark/lovstudio/vault/design/design-guide.md
 
 ### Quick Rules
 1. **禁止硬编码颜色**：必须使用 semantic 类名（如 `bg-primary`、`text-muted-foreground`）
@@ -103,3 +103,4 @@ pnpm tauri build
 - 落地页配色必须用 `.landing-theme` 作用域覆盖：全局 `:root` 是桌面 app 的 Yoda 主题（纯白+深绿），与品牌素材的暖米+陶土冲突，改 `:root` 会连带重刷整个 app（2026-08-18, d3b73de）
 - `ego-browser` 的 `captureScreenshot()` 返回路径跨轮复用同一文件名，旧内容会失效成全白；整页取证用 `cdp('Page.captureScreenshot',{captureBeyondViewport:true})` 自己写文件（2026-08-18, d3b73de）
 - CDP `Emulation.setDeviceMetricsOverride` 的 width 会被浏览器窗口下限顶住（实测最窄 378），无法真正验证 320px；改为核对断点区间来推断（2026-08-18, d3b73de）
+- 设计规范引用路径是 `/Users/mark/lovstudio/vault/design/design-guide.md`；`/Users/mark/@lovstudio/design/` 不存在（2026-08-18, 3ef5b9b）
