@@ -97,3 +97,6 @@ pnpm tauri build
 - 搜索响应字段是 camelCase（`tookMs` 而非 `took_ms`）（2026-08-18, c163788）
 - 站点域名由 `public/CNAME` 驱动 GitHub Pages，改域名必须同步 `index.html` 的 canonical/og:url 和落地页 hostname 判断（2026-08-18, b4e2a40）
 - 开启 Pages 强制 HTTPS 用 `gh api -X PUT repos/<owner>/<repo>/pages --input -` 传 JSON body，`-f https_enforced=true` 会 422（2026-08-18, b4e2a40）
+- `index.html` 的 hostname 门控会把 `*.lovstudio.ai` 重定向到 `/#/landing`，删改 `src/pages/landing.tsx` 必须同步改这段门控，否则公网首页直接掉进路由错误页（2026-08-18, 1adef12）
+- `/landing` 必须留在 `STANDALONE_PATHS`：挂上 RootLayout 会在浏览器里触发 Tauri invoke（2026-08-18, 1adef12）
+- 校验前端构建不要写 `dist/`（本地 dev server 在跑），用 `vite build --outDir /tmp/... --emptyOutDir` 验证后删除（2026-08-18, 1adef12）
