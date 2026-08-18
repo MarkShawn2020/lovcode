@@ -139,6 +139,43 @@ input, button, a, select, textarea {
   }
 }
 
+/* The public landing page is the brand speaking, not the app UI. The desktop
+   surfaces run Yoda's white/green theme above; the marketing page runs the
+   Lovstudio Warm Academic palette its own artwork was drawn in (warm beige
+   canvas, charcoal ink, terracotta action). Scoped so the app is untouched. */
+.landing-theme {
+  --radius: 0.75rem;
+
+  --background: #f9f9f7;
+  --foreground: #181818;
+
+  --card: #ffffff;
+  --card-foreground: #181818;
+
+  --popover: #ffffff;
+  --popover-foreground: #181818;
+
+  --primary: #cc785c;
+  --primary-foreground: #fdfdfc;
+
+  --secondary: #f0eee6;
+  --secondary-foreground: #4a4842;
+
+  --muted: #f0eee6;
+  --muted-foreground: #6f6e67;
+
+  --accent: #f0eee6;
+  --accent-foreground: #181818;
+
+  --border: #e8e6dc;
+  --input: #e8e6dc;
+  --ring: #cc785c;
+
+  /* Paper-like ground: the brand guide forbids pure white as the canvas. */
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
 /* Ataru keeps Yoda's compact control geometry across search and handoff
    surfaces. */
 .ataru-linear-shell {
