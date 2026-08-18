@@ -9,22 +9,22 @@
       name="description"
       content="Ataru helps you quickly and accurately recall past conversations with Claude Code, Codex, and other AI coding tools."
     />
-    <link rel="canonical" href="https://code.lovstudio.ai/" />
+    <link rel="canonical" href="https://ataru.lovstudio.ai/" />
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://code.lovstudio.ai/" />
+    <meta property="og:url" content="https://ataru.lovstudio.ai/" />
     <meta property="og:title" content="Ataru — Find past AI conversations, fast" />
     <meta
       property="og:description"
       content="Quickly and accurately recall past conversations with Claude Code, Codex, and other AI coding tools."
     />
-    <meta property="og:image" content="https://code.lovstudio.ai/ataru.png" />
+    <meta property="og:image" content="https://ataru.lovstudio.ai/ataru.png" />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Ataru — Find past AI conversations, fast" />
     <meta
       name="twitter:description"
       content="Quickly and accurately recall past conversations with Claude Code, Codex, and other AI coding tools."
     />
-    <meta name="twitter:image" content="https://code.lovstudio.ai/ataru.png" />
+    <meta name="twitter:image" content="https://ataru.lovstudio.ai/ataru.png" />
     <style>
       /* Splash screen — paints on the very first frame, before React mounts.
          Removed by main.tsx once <RouterProvider> renders. */
@@ -97,7 +97,7 @@
       // app shell and the beige background would paint a giant block.
       (function () {
         var hash = location.hash || "";
-        if (location.hostname === "code.lovstudio.ai" && (!hash || hash === "#" || hash === "#/")) {
+        if (/(^|\.)lovstudio\.ai$/.test(location.hostname) && (!hash || hash === "#" || hash === "#/")) {
           location.replace("/#/landing");
           return;
         }

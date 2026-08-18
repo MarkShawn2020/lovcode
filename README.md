@@ -105,7 +105,7 @@ pnpm dev:app:no-watch
 
 ## Agent Skill
 
-GUI 只是 Ataru 的一个客户端。面向 Agent 的正确抽象是一项单独的 `Ataru Search Skill`：它负责把“确认索引可用、发起搜索、读取上下文”变成一个稳定动作，而不是让每个 Agent 自己理解 Tantivy、文件路径或来源格式。
+GUI 只是 Ataru 的一个客户端。面向 Agent 的正确抽象是 Skill：把“确认索引可用、发起搜索、读取上下文”变成稳定动作，而不是让每个 Agent 自己理解 Tantivy、文件路径或来源格式。这套抽象已经落地为两个可安装的 Agent Skill，见下方 [已发布的 Skill](#已发布的-skill)。
 
 ### Skill 的最小工作流
 
@@ -145,6 +145,25 @@ const response = await invoke("ataru_search", {
 无界面环境可以通过 JSON CLI 调用同一套搜索契约；首次查询前仍需完成 `ensure_index`。
 
 Skill 不拥有另一套索引，也不复制排序算法；它只是 `api/sdk` 契约的 Agent-facing adapter。独立 `SKILL.md` 包装层应复用这套 `ensure_index → search → inspect` 流程，避免 CLI、桌面端和不同 Agent 之间出现三套行为。
+
+### 已发布的 Skill
+
+| Skill | 职责 | 驱动脚本 |
+| --- | --- | --- |
+| `lov-ataru-indexing` | 检查索引状态、等待正在进行的构建、执行增量追赶或全量重建、预估语义索引成本 | `scripts/ataru_index.py` |
+| `lov-ataru-search` | 召回历史会话上下文，返回可定位命中，并按稳定 ID 回读原文窗口 | `scripts/ataru_recall.py` |
+
+```bash
+npx lovstudio skills add ataru-indexing
+npx lovstudio skills add ataru-search
+```
+
+两个 Skill 都通过 JSON CLI 驱动，不复制排序算法，也不维护第二套索引：
+
+- 二进制解析后先做 `--version` 门控（要求 ≥ 0.41.3），避免旧版本把 CLI 参数 fall through 成一个桌面窗口。
+- `lov-ataru-search` 在索引未就绪时**拒绝执行**并返回 `ATARU_INDEX_NOT_READY` / `ATARU_INDEX_BUILDING`，绝不把“索引缺失”伪装成“零命中”。
+- CLI 只有关键词模式，因此 Skill 返回的 `mode` 恒为 `keyword`、`semanticAvailable` 恒为 `false`；需要语义或 hybrid 召回请用桌面端。
+- 在实测语料（2705 sessions / 847526 messages / 6.6GB 索引）上，turn 级查询约 48s，因此 Skill 默认超时为 180s（`read` 为 300s）。
 
 ## Architecture
 
@@ -291,15 +310,39 @@ flowchart TB
 
 **代码：** `src-tauri/src/app/cli.rs`、`src-tauri/src/app/run.rs`
 
-CLI 在 Tauri 初始化之前处理 `search` 请求，适合 Agent wrapper、脚本和 CI。它支持
-`search <query> --json [--limit N] [--level turn|run|session|project]`，以及按稳定身份读取完整会话：
+CLI 在 Tauri 初始化之前处理请求，适合 Agent wrapper、脚本和 CI。全部子命令都返回单个 JSON 对象：
 
 ```bash
+# 版本门控：CLI 必须先确认二进制支持这些子命令
+ataru --version --json
+
+# 索引：读取状态 / 触发无界面构建
+ataru index status --json
+ataru index build --json            # 增量追赶
+ataru index build --force --json    # 全量重建
+
+# 语义索引预估（不写入）
+ataru semantic preview --json
+
+# 检索：可选层级与项目过滤
+ataru search "索引没有更新" --json \
+  --level turn --limit 20 \
+  --project-id PROJECT_ID
+
+# 按稳定身份读取完整会话
 ataru session read \
   --project-id PROJECT_ID \
   --session-id SESSION_ID \
   --json
 ```
+
+**CLI 的真实边界（不要在包装层里承诺更多）：**
+
+- 未识别的参数会 fall through 去启动桌面 GUI，因此任何外部脚本都必须先用 `--version` 做版本门控。
+- `--level` 会强制 `SearchMode::Keyword`：CLI 只提供关键词检索，语义与 hybrid 仅在桌面端可用。
+- `--limit` 上限 200；带 `--level` 的聚合查询上限 100。
+- 项目 ID 是以 `-` 开头的路径 slug（如 `-Users-me-code-app`），传给 argparse 类解析器时必须写成 `--project-id=VALUE`。
+- 索引构建锁只在进程内生效；CLI 与桌面端并发构建依靠「写临时目录再原子替换」兜底，构建前应先读 `index status`。
 
 `session read` 输出当前页面可见的消息 JSON，并按源文件顺序保留 `uuid`、`line_number`、角色和正文。
 档案阅读器的“复制给 Agent”还会复制 `ataru-agent-context/v1`，其中包含同一组稳定 ID、真实源文件路径、CLI 参数、Tauri command 和当前页面消息快照。
