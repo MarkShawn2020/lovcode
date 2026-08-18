@@ -8,8 +8,8 @@
 </h1>
 
 <p align="center">
-  <strong>在本地，快速找回过去 AI 对话中的答案。</strong><br>
-  <sub>Search the memory of your AI work.</sub><br>
+  <strong>高性能 AI 记忆检索：本地会话的检索内核，以及一个桌面 GUI。</strong><br>
+  <sub>High-performance AI memory retrieval — a local search core, plus a desktop app.</sub><br>
   <sub>macOS · Windows · Linux</sub>
 </p>
 
