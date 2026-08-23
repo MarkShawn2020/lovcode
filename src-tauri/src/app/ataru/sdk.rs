@@ -340,12 +340,11 @@ fn search_evidence_excerpt(value: &str, query: &str, max_chars: usize) -> String
         .chars()
         .count();
     let total_chars = normalized.chars().count();
-    let context_padding = 56.max(max_chars.saturating_sub(match_length) / 2);
-    let mut start = match_start.saturating_sub(context_padding);
+    // Result cards show two lines. Keep enough leading context to orient the
+    // reader without pushing the actual evidence below the line clamp.
+    let leading_context = 72.min(max_chars.saturating_sub(match_length));
+    let start = match_start.saturating_sub(leading_context);
     let end = (start + max_chars).min(total_chars);
-    if end - start < max_chars {
-        start = end.saturating_sub(max_chars);
-    }
     let excerpt = normalized
         .chars()
         .skip(start)
@@ -361,58 +360,28 @@ fn search_evidence_excerpt(value: &str, query: &str, max_chars: usize) -> String
 
 fn first_query_match(value: &str, query: &str) -> Option<(usize, usize)> {
     let ascii_lower = value.to_ascii_lowercase();
-    search_terms(query)
+    crate::app::search_display_terms(query)
         .into_iter()
         .filter_map(|term| {
-            value
-                .find(&term)
-                .or_else(|| ascii_lower.find(&term.to_ascii_lowercase()))
-                .map(|index| (index, term.len()))
+            let term_lower = term.to_ascii_lowercase();
+            ascii_lower
+                .match_indices(&term_lower)
+                .find(|(index, matched)| {
+                    if !term.contains(['_', '-']) {
+                        return true;
+                    }
+
+                    let before = ascii_lower[..*index].chars().next_back();
+                    let after = ascii_lower[*index + matched.len()..].chars().next();
+                    let is_identifier_character = |character: char| {
+                        character.is_alphanumeric() || matches!(character, '_' | '-')
+                    };
+                    before.is_none_or(|character| !is_identifier_character(character))
+                        && after.is_none_or(|character| !is_identifier_character(character))
+                })
+                .map(|(index, matched)| (index, matched.len()))
         })
         .min_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)))
-}
-
-fn search_terms(query: &str) -> Vec<String> {
-    const FIELDS: [&str; 12] = [
-        "title",
-        "project",
-        "turn",
-        "run",
-        "round",
-        "session",
-        "assistant",
-        "user",
-        "summary",
-        "prompt",
-        "content",
-        "path",
-    ];
-    let prepared = query.replace(['(', ')', '"', '\''], " ");
-    let mut terms = Vec::new();
-    for raw_token in prepared.split_whitespace() {
-        let token = if let Some((field, value)) = raw_token.split_once(':') {
-            if FIELDS
-                .iter()
-                .any(|candidate| field.eq_ignore_ascii_case(candidate))
-            {
-                value
-            } else {
-                raw_token
-            }
-        } else {
-            raw_token
-        };
-        let token = token.trim();
-        if token.is_empty() || matches!(token.to_ascii_lowercase().as_str(), "and" | "or" | "not") {
-            continue;
-        }
-        if !terms.iter().any(|existing: &String| existing == token) {
-            terms.push(token.to_string());
-        }
-    }
-    terms.sort_by_key(|term| std::cmp::Reverse(term.chars().count()));
-    terms.truncate(12);
-    terms
 }
 
 fn truncate_text(value: &str, max_chars: usize) -> String {
@@ -618,6 +587,29 @@ mod tests {
         assert!(hits[0].snippet.starts_with('…'));
         assert!(hits[0].snippet.contains("ego-browser"));
         assert!(hits[0].snippet.chars().count() <= 422);
+    }
+
+    #[test]
+    fn centers_identifier_evidence_on_the_complete_match() {
+        let mut long_result = result("s1", 1, "identifier-result", "p1");
+        long_result.content = format!(
+            "lov-publish-wechat-article {} WECHAT_APP_SECRET configured",
+            "unrelated ".repeat(80),
+        );
+
+        let hits = aggregate_candidates(
+            vec![candidate(long_result, 0.9)],
+            SearchLevel::Session,
+            20,
+            "WECHAT_APP_SECRET",
+        );
+
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].snippet.starts_with('…'));
+        assert!(hits[0].snippet.contains("WECHAT_APP_SECRET"));
+        let match_byte = hits[0].snippet.find("WECHAT_APP_SECRET").unwrap();
+        assert!(hits[0].snippet[..match_byte].chars().count() <= 73);
+        assert!(!hits[0].snippet.contains("lov-publish-wechat-article"));
     }
 
     #[test]

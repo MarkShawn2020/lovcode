@@ -24,7 +24,29 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useRelativeTimeNow, useSessionTimeFormat } from "@/hooks/useSessionTimeFormat";
 import { useStreamedSessions } from "@/hooks/useStreamedSessions";
+import { projectLabel } from "@/lib/projectLabel";
+import {
+  ALL_PROJECTS_FILTER,
+  ALL_SOURCES_FILTER,
+  filterSessions,
+  getProjectFilterOptions,
+  SESSION_SOURCE_LABELS,
+  type SessionSourceFilter,
+} from "@/lib/sessionFilters";
+import {
+  formatAbsoluteSessionTime,
+  formatSessionTime,
+  type SessionTimeFormat,
+} from "@/lib/sessionTime";
 import {
   copyText,
   getSessionMessages,
@@ -42,21 +64,6 @@ function sessionTitle(session: Session) {
   return readable.length > 88 ? `${readable.slice(0, 88)}…` : readable;
 }
 
-function projectLabel(session: Session) {
-  const path = session.project_path?.trim();
-  if (!path) return session.project_id;
-  return path.split("/").filter(Boolean).at(-1) ?? path;
-}
-
-function formatSessionTime(timestamp: number) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(timestamp * 1000));
-}
-
 type ArchiveView = "session" | "project";
 
 interface ProjectGroup {
@@ -71,12 +78,16 @@ function SessionRow({
   session,
   active,
   onSelect,
+  timeFormat,
+  now,
   nested = false,
   style,
 }: {
   session: Session;
   active: boolean;
   onSelect: (session: Session) => void;
+  timeFormat: SessionTimeFormat;
+  now: number;
   nested?: boolean;
   style?: CSSProperties;
 }) {
@@ -92,11 +103,17 @@ function SessionRow({
     >
       <span className="truncate text-sm font-medium">{sessionTitle(session)}</span>
       <span className="mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-        <span className="truncate">{projectLabel(session)}</span>
+        <span className="truncate">{projectLabel(session.project_path, session.project_id)}</span>
         <span aria-hidden="true">·</span>
         <span className="shrink-0 uppercase">{session.source}</span>
         <span aria-hidden="true">·</span>
-        <time className="shrink-0">{formatSessionTime(session.last_modified)}</time>
+        <time
+          className="shrink-0"
+          dateTime={new Date(session.last_modified * 1000).toISOString()}
+          title={formatAbsoluteSessionTime(session.last_modified)}
+        >
+          {formatSessionTime(session.last_modified, timeFormat, now)}
+        </time>
       </span>
     </button>
   );
@@ -306,7 +323,11 @@ function ArchiveActionsMenu({
 export default function WorkspacePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { sessions, initialLoading } = useStreamedSessions();
+  const timeFormat = useSessionTimeFormat();
+  const relativeTimeNow = useRelativeTimeNow(timeFormat === "relative");
   const [filter, setFilter] = useState("");
+  const [projectFilter, setProjectFilter] = useState(ALL_PROJECTS_FILTER);
+  const [sourceFilter, setSourceFilter] = useState<SessionSourceFilter>(ALL_SOURCES_FILTER);
   const [messages, setMessages] = useState<Message[]>([]);
   const [messageLoading, setMessageLoading] = useState(false);
   const [messageError, setMessageError] = useState<string | null>(null);
@@ -315,19 +336,17 @@ export default function WorkspacePage() {
   const [diagnosticCopied, setDiagnosticCopied] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const filteredSessions = useMemo(() => {
-    const needle = filter.trim().toLocaleLowerCase();
-    if (!needle) return sessions;
-    return sessions.filter((session) => {
-      const haystack = [
-        sessionTitle(session),
-        session.project_path,
-        session.project_id,
-        session.source,
-      ].filter(Boolean).join("\n").toLocaleLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [filter, sessions]);
+  const projectFilterOptions = useMemo(() => getProjectFilterOptions(sessions), [sessions]);
+  const sourceFilterOptions = useMemo(() => {
+    const sources = new Set(sessions.map((session) => session.source));
+    return Object.entries(SESSION_SOURCE_LABELS)
+      .filter(([source]) => sources.has(source as Session["source"])) as Array<[Session["source"], string]>;
+  }, [sessions]);
+  const filteredSessions = useMemo(() => filterSessions(sessions, {
+    query: filter,
+    projectId: projectFilter,
+    source: sourceFilter,
+  }, sessionTitle), [filter, projectFilter, sessions, sourceFilter]);
 
   const requestedProjectId = searchParams.get("projectId");
   const requestedSessionId = searchParams.get("sessionId");
@@ -355,7 +374,7 @@ export default function WorkspacePage() {
       groups.set(session.project_id, {
         projectId: session.project_id,
         projectPath: session.project_path,
-        label: projectLabel(session),
+        label: projectLabel(session.project_path, session.project_id),
         sessions: [session],
         lastModified: session.last_modified,
       });
@@ -493,7 +512,9 @@ export default function WorkspacePage() {
                   ? "正在读取本地记录"
                   : archiveView === "project"
                     ? `${projectGroups.length.toLocaleString("zh-CN")} 个项目 · ${filteredSessions.length.toLocaleString("zh-CN")} 个会话`
-                    : `${sessions.length.toLocaleString("zh-CN")} 个会话`}
+                    : filteredSessions.length === sessions.length
+                      ? `${sessions.length.toLocaleString("zh-CN")} 个会话`
+                      : `${filteredSessions.length.toLocaleString("zh-CN")} / ${sessions.length.toLocaleString("zh-CN")} 个会话`}
               </p>
             </div>
             <div className="inline-flex shrink-0 rounded-lg border border-border bg-background p-0.5" role="group" aria-label="档案分组方式">
@@ -529,6 +550,35 @@ export default function WorkspacePage() {
               className="h-9 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15"
             />
           </label>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <Select value={projectFilter} onValueChange={setProjectFilter}>
+              <SelectTrigger className="h-8 min-w-0 w-full rounded-lg border-border bg-background text-xs shadow-none" aria-label="按项目筛选会话">
+                <SelectValue placeholder="全部项目" />
+              </SelectTrigger>
+              <SelectContent
+                position="popper"
+                align="start"
+                searchPlaceholder="筛选项目…"
+                className="max-w-[320px] rounded-lg border-border shadow-lg"
+              >
+                <SelectItem value={ALL_PROJECTS_FILTER} sticky>全部项目</SelectItem>
+                {projectFilterOptions.map((project) => (
+                  <SelectItem key={project.value} value={project.value}>{project.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={sourceFilter} onValueChange={(value) => setSourceFilter(value as SessionSourceFilter)}>
+              <SelectTrigger className="h-8 min-w-0 w-full rounded-lg border-border bg-background text-xs shadow-none" aria-label="按来源类型筛选会话">
+                <SelectValue placeholder="全部类型" />
+              </SelectTrigger>
+              <SelectContent position="popper" align="start" className="rounded-lg border-border shadow-lg">
+                <SelectItem value={ALL_SOURCES_FILTER} sticky>全部类型</SelectItem>
+                {sourceFilterOptions.map(([source, label]) => (
+                  <SelectItem key={source} value={source}>{label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </div>
 
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto" aria-label="历史会话列表">
@@ -544,6 +594,8 @@ export default function WorkspacePage() {
                   session={session}
                   active={active}
                   onSelect={selectSession}
+                  timeFormat={timeFormat}
+                  now={relativeTimeNow}
                   style={{ height: `${virtualRow.size}px`, transform: `translateY(${virtualRow.start}px)` }}
                 />;
               })}
@@ -582,6 +634,8 @@ export default function WorkspacePage() {
                             session={session}
                             active={selectedSession?.id === session.id && selectedSession.project_id === session.project_id}
                             onSelect={selectSession}
+                            timeFormat={timeFormat}
+                            now={relativeTimeNow}
                             nested
                           />
                         ))}

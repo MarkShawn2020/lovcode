@@ -1,4 +1,5 @@
 import type { SearchHit } from "@/modules/sdk/search";
+import { parseScopedSearchQuery } from "../../../lib/searchScopes.ts";
 
 export function formatCount(value: number): string {
   return new Intl.NumberFormat().format(value);
@@ -104,34 +105,86 @@ export function cleanMessageText(value: string): string {
   return cleaned || clean(value) || value.trim();
 }
 
-const SEARCH_FIELD_PREFIX = /\b(?:title|project|turn|run|round|session|assistant|user|summary|prompt|content|path):/gi;
-
 /** Keep query parsing consistent between snippet extraction and <mark> rendering. */
 export function searchTerms(query: string): string[] {
-  return [...new Set(
-    query
-      .replace(SEARCH_FIELD_PREFIX, " ")
-      .replace(/[()\"']/g, " ")
-      .split(/\s+/)
-      .map((term) => term.trim())
-      .filter((term) => term.length > 0 && !/^(?:and|or|not)$/i.test(term)),
-  )]
+  const uniqueTerms = new Map<string, string>();
+  parseScopedSearchQuery(query).positiveTerms
+    .map((term) => term.text.trim())
+    .filter(Boolean)
+    .forEach((term) => {
+      const normalized = term.toLocaleLowerCase();
+      if (!uniqueTerms.has(normalized)) uniqueTerms.set(normalized, term);
+    });
+
+  return [...uniqueTerms.values()]
     .sort((left, right) => right.length - left.length)
     .slice(0, 12);
 }
 
-function firstSearchMatch(value: string, query: string): { index: number; length: number } | null {
-  const normalized = value.toLocaleLowerCase();
-  return searchTerms(query)
-    .map((term) => ({
-      index: normalized.indexOf(term.toLocaleLowerCase()),
-      length: term.length,
-    }))
-    .filter((match) => match.index >= 0)
-    .sort((left, right) => left.index - right.index || right.length - left.length)[0] ?? null;
+export interface SearchHighlightSegment {
+  text: string;
+  highlighted: boolean;
 }
 
-/** Keep the result card useful by centering a longer snippet on the query. */
+interface SearchTextMatch {
+  index: number;
+  length: number;
+}
+
+function hasCompleteIdentifierBoundary(text: string, index: number, length: number): boolean {
+  const before = [...text.slice(0, index)].at(-1);
+  const after = [...text.slice(index + length)].at(0);
+  const isIdentifierCharacter = (character: string) => /[\p{L}\p{N}_-]/u.test(character);
+  return (!before || !isIdentifierCharacter(before)) && (!after || !isIdentifierCharacter(after));
+}
+
+function findSearchTextMatches(text: string, query: string): SearchTextMatch[] {
+  const escapedTerms = searchTerms(query)
+    .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  if (escapedTerms.length === 0) return [];
+
+  const pattern = new RegExp(escapedTerms.join("|"), "giu");
+  return [...text.matchAll(pattern)]
+    .filter((match) => {
+      if (!/[_-]/.test(match[0])) return true;
+      return hasCompleteIdentifierBoundary(text, match.index, match[0].length);
+    })
+    .map((match) => ({ index: match.index, length: match[0].length }));
+}
+
+/** Return render-ready ranges while keeping compound identifiers whole. */
+export function getSearchHighlightSegments(text: string, query: string): SearchHighlightSegment[] {
+  const matches = findSearchTextMatches(text, query);
+  if (matches.length === 0) return [{ text, highlighted: false }];
+
+  const segments: SearchHighlightSegment[] = [];
+  let cursor = 0;
+
+  const append = (value: string, highlighted: boolean) => {
+    if (!value) return;
+    const previous = segments.at(-1);
+    if (previous?.highlighted === highlighted) {
+      previous.text += value;
+    } else {
+      segments.push({ text: value, highlighted });
+    }
+  };
+
+  for (const match of matches) {
+    append(text.slice(cursor, match.index), false);
+    append(text.slice(match.index, match.index + match.length), true);
+    cursor = match.index + match.length;
+  }
+  append(text.slice(cursor), false);
+
+  return segments.length > 0 ? segments : [{ text, highlighted: false }];
+}
+
+function firstSearchMatch(value: string, query: string): { index: number; length: number } | null {
+  return findSearchTextMatches(value, query)[0] ?? null;
+}
+
+/** Keep the actual match inside the two visible result-card lines. */
 export function cleanSearchExcerpt(value: string, query: string, maxChars = 420): string {
   const raw = cleanMessageText(value);
   const cleaned = (hasPathQuery(query) ? raw : hidePathNoise(raw, query)).replace(/\s+/g, " ").trim();
@@ -141,8 +194,8 @@ export function cleanSearchExcerpt(value: string, query: string, maxChars = 420)
   const match = firstSearchMatch(visible, query);
   if (!match) return `${visible.slice(0, maxChars - 1).trimEnd()}…`;
 
-  const contextPadding = Math.max(56, Math.floor((maxChars - match.length) / 2));
-  const start = Math.max(0, match.index - contextPadding);
+  const leadingContext = Math.min(72, Math.max(24, Math.floor((maxChars - match.length) / 4)));
+  const start = Math.max(0, match.index - leadingContext);
   const end = Math.min(visible.length, start + maxChars);
   const prefix = start > 0 ? "…" : "";
   const suffix = end < visible.length ? "…" : "";

@@ -2,18 +2,16 @@ import { Check, Copy, RefreshCw } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { copyText } from "@/modules/api/ataru";
-import { searchTerms } from "./utils";
+import { getSearchHighlightSegments } from "./utils";
 
 export function HighlightedText({ text, query }: { text: string; query: string }) {
-  const terms = searchTerms(query);
-  if (terms.length === 0) return text;
-  const escaped = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  const pattern = new RegExp(`(${escaped.join("|")})`, "gi");
-  const matches = new Set(terms.map((term) => term.toLocaleLowerCase()));
-  return text.split(pattern).map((part, index) => (
-    matches.has(part.toLocaleLowerCase())
-      ? <mark key={`${part}:${index}`} className="rounded-sm bg-primary/20 px-0.5 font-semibold text-foreground underline decoration-primary/40 decoration-1 underline-offset-2">{part}</mark>
-      : part
+  const segments = getSearchHighlightSegments(text, query);
+  if (!segments.some((segment) => segment.highlighted)) return text;
+
+  return segments.map((segment, index) => (
+    segment.highlighted
+      ? <mark key={index} className="rounded-sm bg-primary/30 px-0.5 font-semibold text-foreground underline decoration-primary/60 decoration-1 underline-offset-2">{segment.text}</mark>
+      : segment.text
   ));
 }
 

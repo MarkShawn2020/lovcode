@@ -1798,8 +1798,8 @@ fn normalize_scope_name(scope: &str) -> String {
         .collect()
 }
 
-fn canonical_search_field(scope: &str, schema: &Schema) -> Option<&'static str> {
-    let field = match normalize_scope_name(scope).as_str() {
+fn canonical_search_field_name(scope: &str) -> Option<&'static str> {
+    Some(match normalize_scope_name(scope).as_str() {
         "content" | "body" | "message" | "messages" | "text" | "turn" => "content",
         "title" | "name" => "title",
         "summary" => "summary",
@@ -1812,8 +1812,11 @@ fn canonical_search_field(scope: &str, schema: &Schema) -> Option<&'static str> 
         "uuid" => "uuid",
         "role" => "role",
         _ => return None,
-    };
+    })
+}
 
+fn canonical_search_field(scope: &str, schema: &Schema) -> Option<&'static str> {
+    let field = canonical_search_field_name(scope)?;
     schema.get_field(field).ok().map(|_| field)
 }
 
@@ -1837,6 +1840,475 @@ fn split_occur_prefix(token: &str) -> (&str, &str) {
         Some(b'+') | Some(b'-') if token.len() > 1 => (&token[..1], &token[1..]),
         _ => ("", token),
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LiteralSearchTermKind {
+    Flexible,
+    Phrase,
+    Identifier,
+}
+
+#[derive(Clone, Debug)]
+struct LiteralSearchTerm {
+    field: Option<&'static str>,
+    text: String,
+    kind: LiteralSearchTermKind,
+}
+
+#[derive(Clone, Debug)]
+enum LiteralSearchExpression {
+    Term(LiteralSearchTerm),
+    And(Vec<LiteralSearchExpression>),
+    Or(Vec<LiteralSearchExpression>),
+    Not(Box<LiteralSearchExpression>),
+}
+
+#[derive(Clone, Debug)]
+struct LiteralSearchQuery {
+    expression: Option<LiteralSearchExpression>,
+    default_fields: Vec<&'static str>,
+}
+
+fn combine_literal_expression(
+    conjunction: bool,
+    children: Vec<Option<LiteralSearchExpression>>,
+) -> Option<LiteralSearchExpression> {
+    let mut compact = children.into_iter().flatten().collect::<Vec<_>>();
+    match compact.len() {
+        0 => None,
+        1 => compact.pop(),
+        _ if conjunction => Some(LiteralSearchExpression::And(compact)),
+        _ => Some(LiteralSearchExpression::Or(compact)),
+    }
+}
+
+fn negate_literal_expression(
+    expression: Option<LiteralSearchExpression>,
+) -> Option<LiteralSearchExpression> {
+    match expression {
+        Some(LiteralSearchExpression::Not(child)) => Some(*child),
+        Some(child) => Some(LiteralSearchExpression::Not(Box::new(child))),
+        None => None,
+    }
+}
+
+fn strip_literal_search_value(value: &str) -> Option<(String, bool)> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let bytes = trimmed.as_bytes();
+    let quoted = bytes.len() >= 2
+        && matches!(bytes[0], b'"' | b'\'')
+        && bytes.last().copied() == Some(bytes[0]);
+    let text = if quoted {
+        trimmed[1..trimmed.len() - 1].trim()
+    } else {
+        trimmed
+    };
+    (!text.is_empty()).then(|| (text.to_string(), quoted))
+}
+
+fn literal_search_term_kind(text: &str, quoted: bool) -> LiteralSearchTermKind {
+    if text.contains('_') || text.contains('-') {
+        LiteralSearchTermKind::Identifier
+    } else if quoted {
+        LiteralSearchTermKind::Phrase
+    } else {
+        LiteralSearchTermKind::Flexible
+    }
+}
+
+fn parse_literal_search_term(
+    token: &str,
+    group_field: Option<&'static str>,
+) -> Option<LiteralSearchExpression> {
+    let (occur, value) = split_occur_prefix(token);
+    let mut field = group_field;
+    let mut raw_value = value;
+
+    if let Some((candidate_field, candidate_value)) = split_search_qualifier(value) {
+        if normalize_scope_name(candidate_field) == "in" {
+            return None;
+        }
+        if let Some(canonical) = canonical_search_field_name(candidate_field) {
+            field = Some(canonical);
+            raw_value = candidate_value;
+        }
+    }
+
+    if normalize_query_operator(raw_value).is_some() {
+        return None;
+    }
+
+    let (text, quoted) = strip_literal_search_value(raw_value)?;
+    let expression = LiteralSearchExpression::Term(LiteralSearchTerm {
+        field,
+        kind: literal_search_term_kind(&text, quoted),
+        text,
+    });
+
+    if occur == "-" {
+        negate_literal_expression(Some(expression))
+    } else {
+        Some(expression)
+    }
+}
+
+fn literal_scoped_group_token(token: &str) -> Option<(&'static str, bool)> {
+    let (occur, value) = split_occur_prefix(token);
+    let field = value.strip_suffix(':')?;
+    canonical_search_field_name(field).map(|field| (field, occur == "-"))
+}
+
+struct LiteralSearchExpressionParser {
+    tokens: Vec<String>,
+    index: usize,
+}
+
+impl LiteralSearchExpressionParser {
+    fn new(tokens: Vec<String>) -> Self {
+        Self { tokens, index: 0 }
+    }
+
+    fn parse(&mut self) -> Option<LiteralSearchExpression> {
+        self.parse_or(None)
+    }
+
+    fn peek(&self) -> Option<&str> {
+        self.tokens.get(self.index).map(String::as_str)
+    }
+
+    fn advance(&mut self) -> Option<String> {
+        let token = self.tokens.get(self.index)?.clone();
+        self.index += 1;
+        Some(token)
+    }
+
+    fn match_operator(&mut self, operator: &str) -> bool {
+        if self.peek().and_then(normalize_query_operator) != Some(operator) {
+            return false;
+        }
+        self.index += 1;
+        true
+    }
+
+    fn parse_or(&mut self, group_field: Option<&'static str>) -> Option<LiteralSearchExpression> {
+        let mut children = vec![self.parse_and(group_field)];
+        while self.match_operator("OR") {
+            children.push(self.parse_and(group_field));
+        }
+        combine_literal_expression(false, children)
+    }
+
+    fn parse_and(&mut self, group_field: Option<&'static str>) -> Option<LiteralSearchExpression> {
+        let mut children = Vec::new();
+        while let Some(token) = self.peek() {
+            if token == ")" || normalize_query_operator(token) == Some("OR") {
+                break;
+            }
+            if self.match_operator("AND") {
+                continue;
+            }
+            children.push(self.parse_unary(group_field));
+        }
+        combine_literal_expression(true, children)
+    }
+
+    fn parse_unary(
+        &mut self,
+        group_field: Option<&'static str>,
+    ) -> Option<LiteralSearchExpression> {
+        if self.match_operator("NOT") {
+            return negate_literal_expression(self.parse_unary(group_field));
+        }
+        if self.peek() == Some("-") {
+            self.index += 1;
+            return negate_literal_expression(self.parse_unary(group_field));
+        }
+        if self.peek() == Some("+") {
+            self.index += 1;
+            return self.parse_unary(group_field);
+        }
+        self.parse_primary(group_field)
+    }
+
+    fn parse_primary(
+        &mut self,
+        group_field: Option<&'static str>,
+    ) -> Option<LiteralSearchExpression> {
+        let token = self.peek()?.to_string();
+
+        if let Some((field, negated)) = literal_scoped_group_token(&token) {
+            if self.tokens.get(self.index + 1).map(String::as_str) == Some("(") {
+                self.index += 2;
+                let expression = self.parse_or(Some(field));
+                if self.peek() == Some(")") {
+                    self.index += 1;
+                }
+                return if negated {
+                    negate_literal_expression(expression)
+                } else {
+                    expression
+                };
+            }
+        }
+
+        if token == "(" {
+            self.index += 1;
+            let expression = self.parse_or(group_field);
+            if self.peek() == Some(")") {
+                self.index += 1;
+            }
+            return expression;
+        }
+        if token == ")" {
+            return None;
+        }
+
+        parse_literal_search_term(&self.advance()?, group_field)
+    }
+}
+
+fn is_default_scope_directive(token: &str) -> bool {
+    split_search_qualifier(token).is_some_and(|(field, _)| normalize_scope_name(field) == "in")
+}
+
+fn parse_literal_search_query(query: &str) -> LiteralSearchQuery {
+    let tokens = tokenize_search_query(query);
+    let mut default_fields = Vec::new();
+
+    for token in &tokens {
+        let Some((field, value)) = split_search_qualifier(token) else {
+            continue;
+        };
+        if normalize_scope_name(field) != "in" {
+            continue;
+        }
+        for scope in value.split(',') {
+            if let Some(field) = canonical_search_field_name(scope.trim()) {
+                push_unique_scope(&mut default_fields, field);
+            }
+        }
+    }
+
+    let expression_tokens = tokens
+        .into_iter()
+        .filter(|token| !is_default_scope_directive(token))
+        .collect::<Vec<_>>();
+    let expression = LiteralSearchExpressionParser::new(expression_tokens).parse();
+    LiteralSearchQuery {
+        expression,
+        default_fields,
+    }
+}
+
+fn literal_expression_has_constraints(expression: &LiteralSearchExpression) -> bool {
+    match expression {
+        LiteralSearchExpression::Term(term) => term.kind != LiteralSearchTermKind::Flexible,
+        LiteralSearchExpression::Not(child) => literal_expression_has_constraints(child),
+        LiteralSearchExpression::And(children) | LiteralSearchExpression::Or(children) => {
+            children.iter().any(literal_expression_has_constraints)
+        }
+    }
+}
+
+fn collect_positive_literal_terms(
+    expression: &LiteralSearchExpression,
+    positive: bool,
+    terms: &mut Vec<String>,
+) {
+    match expression {
+        LiteralSearchExpression::Term(term) if positive => terms.push(term.text.clone()),
+        LiteralSearchExpression::Term(_) => {}
+        LiteralSearchExpression::Not(child) => {
+            collect_positive_literal_terms(child, !positive, terms)
+        }
+        LiteralSearchExpression::And(children) | LiteralSearchExpression::Or(children) => {
+            for child in children {
+                collect_positive_literal_terms(child, positive, terms);
+            }
+        }
+    }
+}
+
+pub(crate) fn search_display_terms(query: &str) -> Vec<String> {
+    let parsed = parse_literal_search_query(query);
+    let mut candidates = Vec::new();
+    if let Some(expression) = parsed.expression.as_ref() {
+        collect_positive_literal_terms(expression, true, &mut candidates);
+    }
+
+    let mut seen = HashSet::new();
+    let mut terms = candidates
+        .into_iter()
+        .filter(|term| seen.insert(term.to_lowercase()))
+        .collect::<Vec<_>>();
+    terms.sort_by_key(|term| std::cmp::Reverse(term.chars().count()));
+    terms.truncate(12);
+    terms
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LiteralMatchState {
+    Match,
+    Miss,
+}
+
+fn invert_literal_match_state(state: LiteralMatchState) -> LiteralMatchState {
+    match state {
+        LiteralMatchState::Match => LiteralMatchState::Miss,
+        LiteralMatchState::Miss => LiteralMatchState::Match,
+    }
+}
+
+fn contains_complete_identifier(value: &str, identifier: &str) -> bool {
+    let value = value.to_lowercase();
+    let identifier = identifier.to_lowercase();
+    value.match_indices(&identifier).any(|(start, matched)| {
+        let before = value[..start].chars().next_back();
+        let after = value[start + matched.len()..].chars().next();
+        let is_identifier_char =
+            |character: char| character.is_alphanumeric() || matches!(character, '_' | '-');
+        before.is_none_or(|character| !is_identifier_char(character))
+            && after.is_none_or(|character| !is_identifier_char(character))
+    })
+}
+
+fn contains_literal_phrase(value: &str, phrase: &str) -> bool {
+    let normalized_value = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let normalized_phrase = phrase.split_whitespace().collect::<Vec<_>>().join(" ");
+    normalized_value
+        .to_lowercase()
+        .contains(&normalized_phrase.to_lowercase())
+}
+
+fn contains_flexible_search_term(value: &str, term: &str) -> bool {
+    let value = value.to_lowercase();
+    let term = term.to_lowercase();
+    if term.is_empty() {
+        return false;
+    }
+
+    value.match_indices(&term).any(|(start, matched)| {
+        if !term.chars().all(char::is_alphanumeric) {
+            return true;
+        }
+        let before = value[..start].chars().next_back();
+        let after = value[start + matched.len()..].chars().next();
+        before.is_none_or(|character| !character.is_alphanumeric())
+            && after.is_none_or(|character| !character.is_alphanumeric())
+    })
+}
+
+fn literal_value_matches(value: &str, term: &LiteralSearchTerm) -> bool {
+    match term.kind {
+        LiteralSearchTermKind::Identifier => contains_complete_identifier(value, &term.text),
+        LiteralSearchTermKind::Phrase => contains_literal_phrase(value, &term.text),
+        LiteralSearchTermKind::Flexible => contains_flexible_search_term(value, &term.text),
+    }
+}
+
+fn literal_field_matches(result: &SearchResult, field: &str, term: &LiteralSearchTerm) -> bool {
+    match field {
+        "content" => literal_value_matches(&result.content, term),
+        "title" => result
+            .title
+            .as_deref()
+            .is_some_and(|value| literal_value_matches(value, term)),
+        "summary" => result
+            .summary
+            .as_deref()
+            .into_iter()
+            .chain(result.session_summary.as_deref())
+            .any(|value| literal_value_matches(value, term)),
+        "last_prompt" => result
+            .last_prompt
+            .as_deref()
+            .is_some_and(|value| literal_value_matches(value, term)),
+        "round_prompt" => result
+            .round_prompt
+            .as_deref()
+            .is_some_and(|value| literal_value_matches(value, term)),
+        "prompt" | "user" => {
+            result.role.eq_ignore_ascii_case("user") && literal_value_matches(&result.content, term)
+        }
+        "assistant" => {
+            result.role.eq_ignore_ascii_case("assistant")
+                && literal_value_matches(&result.content, term)
+        }
+        "project" => {
+            literal_value_matches(&result.project_path, term)
+                || literal_value_matches(&result.project_id, term)
+        }
+        "session_id" => literal_value_matches(&result.session_id, term),
+        "uuid" => literal_value_matches(&result.uuid, term),
+        "role" => literal_value_matches(&result.role, term),
+        _ => false,
+    }
+}
+
+fn evaluate_literal_search_expression(
+    result: &SearchResult,
+    expression: &LiteralSearchExpression,
+    default_fields: &[&'static str],
+) -> LiteralMatchState {
+    match expression {
+        LiteralSearchExpression::Term(term) => {
+            let fields = term.field.map(|field| vec![field]).unwrap_or_else(|| {
+                if default_fields.is_empty() {
+                    vec!["content"]
+                } else {
+                    default_fields.to_vec()
+                }
+            });
+            if fields
+                .iter()
+                .any(|field| literal_field_matches(result, field, term))
+            {
+                LiteralMatchState::Match
+            } else {
+                LiteralMatchState::Miss
+            }
+        }
+        LiteralSearchExpression::Not(child) => invert_literal_match_state(
+            evaluate_literal_search_expression(result, child, default_fields),
+        ),
+        LiteralSearchExpression::And(children) => {
+            let states = children
+                .iter()
+                .map(|child| evaluate_literal_search_expression(result, child, default_fields))
+                .collect::<Vec<_>>();
+            if states.contains(&LiteralMatchState::Miss) {
+                LiteralMatchState::Miss
+            } else {
+                LiteralMatchState::Match
+            }
+        }
+        LiteralSearchExpression::Or(children) => {
+            let states = children
+                .iter()
+                .map(|child| evaluate_literal_search_expression(result, child, default_fields))
+                .collect::<Vec<_>>();
+            if states.contains(&LiteralMatchState::Match) {
+                LiteralMatchState::Match
+            } else {
+                LiteralMatchState::Miss
+            }
+        }
+    }
+}
+
+fn search_result_satisfies_literal_query(
+    result: &SearchResult,
+    query: &LiteralSearchQuery,
+) -> bool {
+    query.expression.as_ref().is_none_or(|expression| {
+        evaluate_literal_search_expression(result, expression, &query.default_fields)
+            != LiteralMatchState::Miss
+    })
 }
 
 fn scoped_group_token(token: &str, schema: &Schema) -> Option<(String, &'static str)> {
@@ -2272,6 +2744,137 @@ mod search_index_documents_tests {
             .unwrap();
     }
 
+    fn literal_result(content: &str) -> SearchResult {
+        SearchResult {
+            uuid: "message".to_string(),
+            content: content.to_string(),
+            role: "assistant".to_string(),
+            line_number: 1,
+            project_id: "project".to_string(),
+            project_path: "/tmp/project".to_string(),
+            session_id: "session".to_string(),
+            session_summary: None,
+            title: None,
+            summary: None,
+            last_prompt: None,
+            round_index: 1,
+            round_prompt: None,
+            round_timestamp: None,
+            timestamp: "2026-08-23T00:00:00Z".to_string(),
+            score: 1.0,
+        }
+    }
+
+    fn satisfies(content: &str, query: &str) -> bool {
+        search_result_satisfies_literal_query(
+            &literal_result(content),
+            &parse_literal_search_query(query),
+        )
+    }
+
+    #[test]
+    fn query_parser_uses_space_as_and_and_preserves_or_and_phrases() {
+        let schema = create_schema();
+        let index = Index::create_in_ram(schema.clone());
+        register_jieba_tokenizer(&index);
+        let mut writer = index.writer(15_000_000).unwrap();
+
+        for (uuid, content) in [
+            ("both", "alpha gap beta"),
+            ("alpha-only", "alpha"),
+            ("beta-only", "beta"),
+            ("phrase", "alpha beta"),
+            ("reverse", "beta alpha"),
+        ] {
+            add_search_document(&mut writer, &schema, uuid, content, "project");
+        }
+        writer.commit().unwrap();
+
+        let search_index = SearchIndex { index, schema };
+        let ids = |query: &str| {
+            search_index_documents(&search_index, query, &["content"], 10, None)
+                .unwrap()
+                .into_iter()
+                .map(|result| result.uuid)
+                .collect::<HashSet<_>>()
+        };
+
+        assert_eq!(
+            ids("alpha beta"),
+            HashSet::from([
+                "both".to_string(),
+                "phrase".to_string(),
+                "reverse".to_string(),
+            ])
+        );
+        assert_eq!(ids("alpha OR beta").len(), 5);
+        assert_eq!(ids("\"alpha beta\""), HashSet::from(["phrase".to_string()]));
+    }
+
+    #[test]
+    fn literal_filter_requires_complete_identifiers_and_boolean_combinations() {
+        assert!(satisfies(
+            "WECHAT_APP_SECRET is configured",
+            "WECHAT_APP_SECRET"
+        ));
+        assert!(!satisfies(
+            "wechat AppSecret SECRET_KEY",
+            "WECHAT_APP_SECRET"
+        ));
+        assert!(!satisfies(
+            "MY_WECHAT_APP_SECRET_VALUE",
+            "WECHAT_APP_SECRET"
+        ));
+        assert!(satisfies("ego-browser command", "ego-browser"));
+        assert!(!satisfies("lov-publish-wechat-article", "wechat-article"));
+
+        assert!(satisfies(
+            "WECHAT_APP_SECRET and APP_TOKEN",
+            "WECHAT_APP_SECRET APP_TOKEN"
+        ));
+        assert!(!satisfies(
+            "WECHAT_APP_SECRET only",
+            "WECHAT_APP_SECRET APP_TOKEN"
+        ));
+        assert!(satisfies(
+            "APP_TOKEN only",
+            "WECHAT_APP_SECRET OR APP_TOKEN"
+        ));
+        assert!(satisfies(
+            "ordinary fallback only",
+            "WECHAT_APP_SECRET OR fallback"
+        ));
+        assert!(!satisfies(
+            "wechat AppSecret SECRET_KEY",
+            "WECHAT_APP_SECRET OR fallback"
+        ));
+        assert!(satisfies(
+            "WECHAT_APP_SECRET is current",
+            "WECHAT_APP_SECRET -legacy"
+        ));
+        assert!(!satisfies(
+            "WECHAT_APP_SECRET replaces legacy config",
+            "WECHAT_APP_SECRET -legacy"
+        ));
+        assert!(satisfies("the app\nsecret is present", "\"app secret\""));
+    }
+
+    #[test]
+    fn display_terms_preserve_phrases_and_skip_exclusions() {
+        assert_eq!(
+            search_display_terms("wechat AND \"app secret\" OR token -legacy NOT hidden"),
+            vec![
+                "app secret".to_string(),
+                "wechat".to_string(),
+                "token".to_string(),
+            ]
+        );
+        assert_eq!(
+            search_display_terms("WECHAT_APP_SECRET"),
+            vec!["WECHAT_APP_SECRET".to_string()]
+        );
+    }
+
     #[test]
     fn project_filter_is_applied_before_top_docs_limit() {
         let schema = create_schema();
@@ -2323,14 +2926,29 @@ pub(crate) fn search_chats(
     let max_results = limit.unwrap_or(50);
     let guard = loaded_search_index_guard()?;
     let search_index = guard.as_ref().unwrap();
+    let literal_query = parse_literal_search_query(&query);
+    let has_literal_constraints = literal_query
+        .expression
+        .as_ref()
+        .is_some_and(literal_expression_has_constraints);
     let normalized_query = normalize_scoped_search_query(&query, &search_index.schema);
-    search_index_documents(
+    let candidate_limit = if has_literal_constraints {
+        max_results.saturating_mul(8).clamp(max_results, 2_000)
+    } else {
+        max_results
+    };
+    let mut results = search_index_documents(
         search_index,
         &normalized_query,
         &["content"],
-        max_results,
+        candidate_limit,
         project_id.as_deref(),
-    )
+    )?;
+    if has_literal_constraints {
+        results.retain(|result| search_result_satisfies_literal_query(result, &literal_query));
+        results.truncate(max_results);
+    }
+    Ok(results)
 }
 
 #[derive(Clone, Debug)]

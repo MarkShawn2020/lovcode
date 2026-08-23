@@ -25,6 +25,7 @@ type SearchExpression =
 export interface ParsedScopedSearchQuery {
   raw: string;
   terms: ScopedSearchTerm[];
+  positiveTerms: ScopedSearchTerm[];
   defaultScopes: SearchScope[];
   highlightQuery: string;
   hasScopes: boolean;
@@ -216,8 +217,11 @@ function parseTermToken(token: string, groupScope: SearchScope | null): SearchEx
 
 class SearchExpressionParser {
   private index = 0;
+  private readonly tokens: string[];
 
-  constructor(private readonly tokens: string[]) {}
+  constructor(tokens: string[]) {
+    this.tokens = tokens;
+  }
 
   parse() {
     return this.parseOr(null);
@@ -347,15 +351,15 @@ export function parseScopedSearchQuery(query: string): ParsedScopedSearchQuery {
   const expressionTokens = tokens.filter((token) => !isDefaultScopeDirective(token));
   const expression = new SearchExpressionParser(expressionTokens).parse();
   const terms = collectExpressionTerms(expression);
-  const highlightTerms = collectExpressionTerms(expression, { positiveOnly: true });
+  const positiveTerms = collectExpressionTerms(expression, { positiveOnly: true });
   const hasScopes = defaultScopes.length > 0 || terms.some((term) => Boolean(term.scope));
 
-  const highlightQuery = (highlightTerms.length > 0 ? highlightTerms : terms)
+  const highlightQuery = (positiveTerms.length > 0 ? positiveTerms : terms)
     .map((term) => term.text)
     .join(" ")
     .trim() || raw;
 
-  return { raw, terms, defaultScopes, highlightQuery, hasScopes, expression };
+  return { raw, terms, positiveTerms, defaultScopes, highlightQuery, hasScopes, expression };
 }
 
 function normalizeSearchValue(value: string | null | undefined) {

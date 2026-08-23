@@ -11,6 +11,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useRelativeTimeNow, useSessionTimeFormat } from "@/hooks/useSessionTimeFormat";
+import {
+  formatAbsoluteSessionTime,
+  formatSessionTime,
+  type SessionTimeFormat,
+} from "@/lib/sessionTime";
 import { cn } from "@/lib/utils";
 import {
   type SearchHit,
@@ -19,7 +25,6 @@ import {
 import { ErrorState, HighlightedText } from "./SearchFeedback";
 import {
   formatCount,
-  formatTimestamp,
   getSearchResultContextLabel,
   getSearchResultExcerpt,
   getSearchResultTitle,
@@ -88,6 +93,8 @@ export function SearchResults({
   onSelectQuery: (query: string) => void;
 }) {
   const [sort, setSort] = useState<SearchSort>("updated-desc");
+  const timeFormat = useSessionTimeFormat();
+  const relativeTimeNow = useRelativeTimeNow(timeFormat === "relative");
   const hits = useMemo(
     () => (response ? sortSearchHits(response.hits, sort) : []),
     [response, sort],
@@ -135,6 +142,8 @@ export function SearchResults({
               hit={hit}
               rank={index + 1}
               query={response?.query ?? ""}
+              timeFormat={timeFormat}
+              now={relativeTimeNow}
               selected={hit.id === selectedHitId}
               onSelect={() => onSelectHit(hit.id)}
               onOpenContext={() => onOpenContext(hit)}
@@ -207,6 +216,8 @@ function ResultCard({
   hit,
   rank,
   query,
+  timeFormat,
+  now,
   selected,
   onSelect,
   onOpenContext,
@@ -214,6 +225,8 @@ function ResultCard({
   hit: SearchHit;
   rank: number;
   query: string;
+  timeFormat: SessionTimeFormat;
+  now: number;
   selected: boolean;
   onSelect: () => void;
   onOpenContext: () => void;
@@ -221,6 +234,7 @@ function ResultCard({
   const title = getSearchResultTitle(hit, query);
   const heading = title || getSearchResultContextLabel(hit);
   const excerpt = getSearchResultExcerpt(hit, query, title);
+  const timestamp = hit.timestamp ? timestampValue(hit.timestamp) : null;
   const levelLabel = RESULT_LEVEL_LABELS[hit.level];
   const matchSummary = hit.level === "run" && hit.matchCount > 1
     ? `${hit.matchCount} 条 Turn 命中`
@@ -259,8 +273,16 @@ function ResultCard({
               {hit.timestamp && (
                 <>
                   <span aria-hidden="true" className="shrink-0 text-foreground/30">·</span>
-                  <time dateTime={hit.timestamp} className="shrink-0">
-                    {formatTimestamp(hit.timestamp)}
+                  <time
+                    dateTime={hit.timestamp}
+                    title={timestamp === null
+                      ? hit.timestamp
+                      : formatAbsoluteSessionTime(timestamp / 1_000)}
+                    className="shrink-0"
+                  >
+                    {timestamp === null
+                      ? hit.timestamp
+                      : formatSessionTime(timestamp / 1_000, timeFormat, now)}
                   </time>
                 </>
               )}

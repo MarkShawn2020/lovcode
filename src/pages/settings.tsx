@@ -1,7 +1,16 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, DatabaseZap, FileClock, Loader2, Settings2 } from "lucide-react";
+import { ChevronDown, Clock3, DatabaseZap, FileClock, Loader2, Settings2 } from "lucide-react";
 import { AppUpdatePanel } from "@/components/AppUpdatePanel";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useSearchIndexBuildStatus } from "@/hooks/useSearchIndexBuildStatus";
+import { useSessionTimeFormat } from "@/hooks/useSessionTimeFormat";
+import { setSessionTimeFormat } from "@/lib/sessionTime";
 import {
   copyText,
   getIncrementalSearchIndexSyncStatus,
@@ -69,6 +78,7 @@ function WatchTargetFiles({ target }: { target: SearchIndexWatchTarget }) {
 
 export default function SettingsPage() {
   const { status: indexStatus, activity: indexActivity } = useSearchIndexBuildStatus();
+  const sessionTimeFormat = useSessionTimeFormat();
   const [incrementalSync, setIncrementalSync] = useState<IncrementalSearchIndexSyncStatus | null>(null);
   const [incrementalSyncBusy, setIncrementalSyncBusy] = useState(false);
   const [incrementalSyncError, setIncrementalSyncError] = useState<string | null>(null);
@@ -185,6 +195,33 @@ export default function SettingsPage() {
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
             搜索索引、对话档案与应用偏好将在这里统一管理。
           </p>
+        </section>
+
+        <section className="rounded-xl border border-border bg-card p-6">
+          <div className="flex items-start justify-between gap-6">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 text-primary">
+                <Clock3 className="h-4 w-4" />
+                <span className="text-sm font-medium">界面显示</span>
+              </div>
+              <h2 className="mt-2 font-serif text-lg font-semibold text-foreground">会话时间</h2>
+              <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                控制资料库会话列表的时间格式。相对时间会每分钟更新，悬停仍可查看精确时间。
+              </p>
+            </div>
+            <Select
+              value={sessionTimeFormat}
+              onValueChange={(value) => setSessionTimeFormat(value === "absolute" ? "absolute" : "relative")}
+            >
+              <SelectTrigger className="h-9 w-32 shrink-0 rounded-lg border-border bg-background shadow-none" aria-label="会话时间显示格式">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="rounded-lg border-border shadow-lg">
+                <SelectItem value="relative">相对时间</SelectItem>
+                <SelectItem value="absolute">绝对时间</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
         </section>
 
         <section className="rounded-xl border border-border bg-card p-6">
