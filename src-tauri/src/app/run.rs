@@ -104,15 +104,6 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            #[cfg(all(debug_assertions, target_os = "macos"))]
-            unsafe {
-                use cocoa::appkit::NSApp;
-                use cocoa::base::nil;
-                use objc::*;
-                let application = NSApp();
-                let _: () = msg_send![application, hide: nil];
-            }
-
             watch_conversation_directory(app.handle().clone(), get_claude_dir().join("projects"));
             watch_conversation_directory(app.handle().clone(), get_codex_dir());
             Ok(())
