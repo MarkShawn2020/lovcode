@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.41.4
+
+### Patch Changes
+
+- 修复 macOS 启动时主窗口先显示后隐藏造成的闪烁，让窗口从启动开始保持稳定显示。
+
 ## 0.41.3
 
 ### Patch Changes
