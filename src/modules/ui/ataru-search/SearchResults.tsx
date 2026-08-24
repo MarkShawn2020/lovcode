@@ -1,9 +1,11 @@
 import {
   BookOpenText,
+  Check,
+  Copy,
   Loader2,
   Search,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Select,
   SelectContent,
@@ -19,6 +21,7 @@ import {
 } from "@/lib/sessionTime";
 import { cn } from "@/lib/utils";
 import {
+  copyText,
   type SearchHit,
   type SearchResponse,
 } from "@/modules/api/ataru";
@@ -29,6 +32,8 @@ import {
   getSearchResultExcerpt,
   getSearchResultTitle,
   projectName,
+  searchHitIndexAsJson,
+  searchHitIndexesAsJson,
 } from "./utils";
 
 const RESULT_LEVEL_LABELS: Record<SearchHit["level"], string> = {
@@ -110,6 +115,7 @@ export function SearchResults({
     >
       <SearchSummary
         response={response}
+        hits={hits}
         loading={loading}
         error={error}
         sort={sort}
@@ -158,17 +164,21 @@ export function SearchResults({
 
 function SearchSummary({
   response,
+  hits,
   loading,
   error,
   sort,
   onSortChange,
 }: {
   response: SearchResponse | null;
+  hits: SearchHit[];
   loading: boolean;
   error: string | null;
   sort: SearchSort;
   onSortChange: (sort: string) => void;
 }) {
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
+  useEffect(() => setCopyStatus("idle"), [hits, response?.query]);
   const detail = error
     ? "这次搜索没有完成"
     : response
@@ -176,6 +186,13 @@ function SearchSummary({
       : loading
         ? "正在搜索…"
         : "输入关键词后按 Enter 搜索";
+  const copyAllIndexes = () => {
+    if (!response || hits.length === 0) return;
+    setCopyStatus("idle");
+    void copyText(searchHitIndexesAsJson(hits, response.query))
+      .then(() => setCopyStatus("copied"))
+      .catch(() => setCopyStatus("error"));
+  };
 
   return (
     <div className="mx-auto flex min-h-[84px] w-full max-w-3xl items-end justify-between gap-4 px-5 pb-3 pt-7 sm:px-8">
@@ -184,6 +201,34 @@ function SearchSummary({
         {detail}
       </p>
       <div className="flex shrink-0 items-center gap-2">
+        {response && hits.length > 0 && (
+          <button
+            type="button"
+            onClick={copyAllIndexes}
+            aria-label={copyStatus === "copied"
+              ? "已复制全部搜索结果索引"
+              : copyStatus === "error"
+                ? "复制全部搜索结果索引失败，点击重试"
+                : "复制全部搜索结果索引给 Agent"}
+            title={copyStatus === "copied"
+              ? "已复制全部索引"
+              : copyStatus === "error"
+                ? "复制失败，点击重试"
+                : "复制全部索引给 Agent"}
+            className={cn(
+              "inline-flex h-8 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:px-2.5",
+              copyStatus === "copied" && "text-primary",
+              copyStatus === "error" && "text-destructive",
+            )}
+          >
+            {copyStatus === "copied"
+              ? <Check className="h-3.5 w-3.5" />
+              : <Copy className="h-3.5 w-3.5" />}
+            <span className="sr-only sm:not-sr-only">
+              {copyStatus === "copied" ? "已复制全部" : "复制全部索引"}
+            </span>
+          </button>
+        )}
         {response && response.hits.length > 1 && (
           <Select value={sort} onValueChange={onSortChange}>
             <SelectTrigger
@@ -231,6 +276,7 @@ function ResultCard({
   onSelect: () => void;
   onOpenContext: () => void;
 }) {
+  const [copyStatus, setCopyStatus] = useState<"idle" | "copied" | "error">("idle");
   const title = getSearchResultTitle(hit, query);
   const heading = title || getSearchResultContextLabel(hit);
   const excerpt = getSearchResultExcerpt(hit, query, title);
@@ -241,6 +287,12 @@ function ResultCard({
     : hit.matchCount > 1
       ? `${hit.matchCount} 处命中`
       : null;
+  const copyIndex = () => {
+    setCopyStatus("idle");
+    void copyText(searchHitIndexAsJson(hit))
+      .then(() => setCopyStatus("copied"))
+      .catch(() => setCopyStatus("error"));
+  };
 
   return (
     <article
@@ -258,7 +310,7 @@ function ResultCard({
         aria-expanded={selected}
         aria-label={`${selected ? "收起" : "展开"}第 ${rank} 条结果的详情：${heading}。${excerpt}`}
         className={cn(
-          "group block w-full rounded-xl px-2.5 py-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:px-3 sm:py-5",
+          "group block w-full rounded-xl px-2.5 py-4 pr-12 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset sm:px-3 sm:py-5 sm:pr-14",
           !selected && "hover:bg-card/70",
         )}
       >
@@ -304,6 +356,28 @@ function ResultCard({
             <HighlightedText text={excerpt} query={query} />
           </span>
         </span>
+      </button>
+      <button
+        type="button"
+        onClick={copyIndex}
+        aria-label={copyStatus === "copied"
+          ? `已复制第 ${rank} 条结果的索引`
+          : copyStatus === "error"
+            ? `复制第 ${rank} 条结果的索引失败，点击重试`
+            : `复制第 ${rank} 条结果的索引给 Agent`}
+        title={copyStatus === "copied"
+          ? "已复制索引"
+          : copyStatus === "error"
+            ? "复制失败，点击重试"
+            : "复制索引给 Agent"}
+        className={cn(
+          "absolute right-2 top-3 inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:right-3 sm:top-4",
+          copyStatus === "copied" && "text-primary",
+        )}
+      >
+        {copyStatus === "copied"
+          ? <Check className="h-4 w-4" />
+          : <Copy className="h-4 w-4" />}
       </button>
       {hit.sessionId && (
         <div

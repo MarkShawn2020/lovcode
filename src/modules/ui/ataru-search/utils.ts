@@ -27,6 +27,38 @@ export function projectName(path: string | null | undefined): string {
   return parts.at(-1) ?? "Unknown project";
 }
 
+/** Keep copied Agent references aligned with the SDK's stable search identity. */
+function searchHitIndexTarget(hit: SearchHit) {
+  return {
+    id: hit.id,
+    level: hit.level,
+    projectId: hit.projectId,
+    projectPath: hit.projectPath,
+    ...(hit.sessionId ? { sessionId: hit.sessionId } : {}),
+    ...(hit.runIndex != null ? { runIndex: hit.runIndex } : {}),
+    ...(hit.messageId ? { messageId: hit.messageId } : {}),
+    ...(hit.lineNumber != null ? { lineNumber: hit.lineNumber } : {}),
+  };
+}
+
+export function searchHitIndexAsJson(hit: SearchHit): string {
+  return JSON.stringify({
+    schema: "ataru-search-hit/v1",
+    operation: "inspect_search_hit",
+    target: searchHitIndexTarget(hit),
+  }, null, 2);
+}
+
+export function searchHitIndexesAsJson(hits: SearchHit[], query: string): string {
+  return JSON.stringify({
+    schema: "ataru-search-hits/v1",
+    operation: "inspect_search_hits",
+    query,
+    count: hits.length,
+    targets: hits.map(searchHitIndexTarget),
+  }, null, 2);
+}
+
 export function roleLabel(role: string | null | undefined): string {
   if (role === "user") return "你";
   if (role === "assistant") return "AI";
