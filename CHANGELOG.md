@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.41.6
+
+### Patch Changes
+
+- 搜索结果支持复制单条或当前排序下的全部稳定索引，便于 Agent 使用 Project、Session、Run 与 Turn 定位继续回读原始上下文。
+
 ## 0.41.5
 
 ### Patch Changes
